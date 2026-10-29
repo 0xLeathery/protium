@@ -18,6 +18,8 @@ BUILD_DIR=${BUILD_DIR:-$BUILD_ROOT/wine-aarch64}
 TOOLCHAIN_DIR=${TOOLCHAIN_DIR:-/Users/annon/projects/proton-macos-toolchain/llvm-mingw-20261020-ucrt-macos-universal}
 EVIDENCE_DIR=${EVIDENCE_DIR:-$BUILD_ROOT/evidence/wave1}
 BASE_BRANCH=${BASE_BRANCH:-proton_11.0}
+# Superproject commit whose committed changes item 6 judges (uncommitted state is ignored).
+SUPER_HEAD=${SUPER_HEAD:-HEAD}
 WINE_BASE=${WINE_BASE:-e60892cc2398b0a83c332a2078c7b85e47bdb42b}
 WINEBOOT_TIMEOUT=${WINEBOOT_TIMEOUT:-180}
 # Wine files this wave is allowed to change (each change must be Darwin/aarch64-Darwin scoped).
@@ -230,26 +232,26 @@ fi
 echo "== item 6: diff scope"
 dlog=$EVIDENCE_DIR/diffstat.log
 {
-    echo "\$ git diff --stat --ignore-submodules=all $BASE_BRANCH   (superproject)"
-    git -C "$PROTON_DIR" diff --stat --ignore-submodules=all "$BASE_BRANCH"
-    echo "\$ git status --porcelain --ignore-submodules=all   (superproject, uncommitted)"
-    git -C "$PROTON_DIR" status --porcelain --ignore-submodules=all
+    echo "\$ git diff --stat $BASE_BRANCH...$SUPER_HEAD   (superproject, committed changes incl. submodule gitlinks)"
+    git -C "$PROTON_DIR" diff --stat "$BASE_BRANCH...$SUPER_HEAD"
+    echo "\$ git diff --raw $BASE_BRANCH...$SUPER_HEAD -- wine   (gitlink must be unchanged)"
+    git -C "$PROTON_DIR" diff --raw "$BASE_BRANCH...$SUPER_HEAD" -- wine
     echo "\$ git -C wine diff --stat $WINE_BASE"
     git -C "$PROTON_DIR/wine" diff --stat "$WINE_BASE"
     echo "\$ git -C wine status --porcelain"
     git -C "$PROTON_DIR/wine" status --porcelain
 } >"$dlog" 2>&1
-bad=$( { git -C "$PROTON_DIR" diff --name-only --ignore-submodules=all "$BASE_BRANCH";
-         git -C "$PROTON_DIR" status --porcelain --ignore-submodules=all | cut -c4-; } | sort -u | grep -v '^macos/' )
+# Committed changes only; gitlink changes (wine or any other submodule) are listed by path and fail too.
+bad=$(git -C "$PROTON_DIR" diff --name-only "$BASE_BRANCH...$SUPER_HEAD" | grep -v '^macos/')
 wbad=""
 for f in $(git -C "$PROTON_DIR/wine" diff --name-only "$WINE_BASE"); do
     case " $WINE_ALLOWED_FILES " in *" $f "*) ;; *) wbad="$wbad $f" ;; esac
 done
 wdirty=$(git -C "$PROTON_DIR/wine" status --porcelain --untracked-files=all | grep -v '^ M\|^M ' | head -5)
 if [ -z "$bad" ] && [ -z "$wbad" ] && [ -z "$wdirty" ]; then
-    pass 6 "superproject changes only under macos/, wine changes only in: $(git -C "$PROTON_DIR/wine" diff --name-only "$WINE_BASE" | tr '\n' ' ') ($dlog)"
+    pass 6 "superproject commits ($BASE_BRANCH...$SUPER_HEAD) change only macos/, wine changes only in: $(git -C "$PROTON_DIR/wine" diff --name-only "$WINE_BASE" | tr '\n' ' ') ($dlog)"
 else
-    fail 6 "outside macos/: '${bad}' wine unexpected:${wbad:- none} wine untracked: '${wdirty}' ($dlog)"
+    fail 6 "committed outside macos/ ($BASE_BRANCH...$SUPER_HEAD): '$(echo $bad)' wine unexpected:${wbad:- none} wine untracked: '${wdirty}' ($dlog)"
 fi
 
 echo
