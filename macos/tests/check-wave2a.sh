@@ -345,9 +345,10 @@ check_virtual_log() {
     ' "$1"
 }
 
-# floor_errors LOG FLOOR: err:virtual lines naming an address below FLOOR (the host's real floor)
+# floor_errors LOG FLOOR: err:virtual lines naming an address below FLOOR (the host's real floor;
+# unix_prot values are protections, not addresses)
 floor_errors() {
-    perl -ne 'BEGIN { $f = hex(shift) } next unless /(?:^|:)err:virtual:/;
+    perl -ne 'BEGIN { $f = hex(shift) } next unless /(?:^|:)err:virtual:/; s/\bunix_prot 0x[0-9a-f]+//;
         for my $t (/\b0x([0-9a-fA-F]+)\b/g) { my $v = hex($t); if ($v && $v < $f) { print "$.: $_"; last } }' "$2" "$1"
 }
 # behind_usd LOG USD: views starting in the 16 MB right behind the 64K shared user data reservation
