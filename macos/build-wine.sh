@@ -155,5 +155,23 @@ cd "$BUILD_DIR"
 log "make -j$JOBS"
 make -j"$JOBS"
 
+########################################################################
+# 5. Sign the loader
+########################################################################
+# Windows ARM64 code keeps the TEB in x18, and the kernel only preserves x18 on threads that opt
+# into Apple's custom x18 ABI, which needs com.apple.security.custom-x18-abi-toggle on the
+# executable. Linking replaces the signature, so sign after every build, incremental ones too.
+# wineserver runs no Windows code and stays as the linker signed it.
+ENTITLEMENTS=$SCRIPT_DIR/wine-loader.entitlements
+[ -f "$ENTITLEMENTS" ] || die "missing $ENTITLEMENTS"
+launcher=$BUILD_DIR/wine
+[ -L "$launcher" ] && launcher=$BUILD_DIR/$(readlink "$launcher")
+for f in "$BUILD_DIR/loader/wine" "$launcher"; do
+    [ -f "$f" ] || die "no loader at $f"
+    log "signing $f (ad hoc, $(basename "$ENTITLEMENTS"))"
+    codesign --force --sign - --entitlements "$ENTITLEMENTS" "$f" || die "codesign failed for $f"
+    codesign --verify "$f" || die "signature of $f does not verify"
+done
+
 check_disk
 log "done: $BUILD_DIR/wine"
