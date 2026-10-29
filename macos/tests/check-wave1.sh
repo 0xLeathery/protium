@@ -23,8 +23,9 @@ SUPER_HEAD=${SUPER_HEAD:-HEAD}
 WINE_BASE=${WINE_BASE:-e60892cc2398b0a83c332a2078c7b85e47bdb42b}
 WINEBOOT_TIMEOUT=${WINEBOOT_TIMEOUT:-180}
 # Wine files this wave is allowed to change (each change must be Darwin/aarch64-Darwin scoped),
-# plus those of later waves (Wave 2a: shared user data above 4 GB, see check-wave2a.sh item 6).
-WINE_ALLOWED_FILES=${WINE_ALLOWED_FILES:-"configure.ac dlls/ntdll/unix/fsync.c dlls/ntdll/unix/loader.c dlls/ntdll/unix/sync.c dlls/win32u/opengl.c server/fsync.c server/inproc_sync.c dlls/ntdll/unix/system.c include/ddk/wdm.h dlls/ntdll/unix/virtual.c dlls/ntdll/thread.c dlls/kernelbase/sync.c dlls/kernel32/process.c dlls/kernel32/sync.c dlls/win32u/message.c"}
+# plus those of later waves (Wave 2a: shared user data above 4 GB, see check-wave2a.sh item 6;
+# Wave 2b: TEB in a TSD slot instead of x18, see check-wave2b.sh item 7).
+WINE_ALLOWED_FILES=${WINE_ALLOWED_FILES:-"configure.ac dlls/ntdll/unix/fsync.c dlls/ntdll/unix/loader.c dlls/ntdll/unix/sync.c dlls/win32u/opengl.c server/fsync.c server/inproc_sync.c dlls/ntdll/unix/system.c include/ddk/wdm.h dlls/ntdll/unix/virtual.c dlls/ntdll/thread.c dlls/kernelbase/sync.c dlls/kernel32/process.c dlls/kernel32/sync.c dlls/win32u/message.c include/winnt.h dlls/ntdll/signal_arm64.c dlls/ntdll/unix/signal_arm64.c"}
 
 CLEAN_BUILD=no
 for arg in "$@"; do
