@@ -1,9 +1,10 @@
 /*
  * Checks that NtCurrentTeb() stays correct in Windows ARM64 code on the native arm64 macOS Wine
- * build, where the kernel doesn't preserve x18 and Wine keeps the TEB in a TSD slot instead.
+ * build. The TEB is in x18, as on Windows; the macOS kernel only preserves x18 on threads that
+ * opted into Apple's custom x18 ABI.
  *
- * Built with the build's own winegcc for aarch64-windows against Wine's CRT, with the build's
- * -DWINE_TEB_TSD_SLOT=N so that NtCurrentTeb() reads the slot (see check-wave2b.sh).
+ * Built with the build's own winegcc for aarch64-windows against Wine's CRT (see
+ * check-wave3a.sh). Built with -DWINE_TEB_TSD_SLOT=N, it checks the Wave 2b TSD slot instead of x18.
  *
  * On the main thread, on threads created with CreateThread and on thread pool workers created by
  * Wine, while they spin, Sleep, yield, wait and make syscalls, and inside and after handled
@@ -11,7 +12,7 @@
  *  - NtCurrentTeb() with the TEB address the kernel side reports (NtQueryInformationThread),
  *  - Tib.Self with the TEB itself,
  *  - ClientId with the thread and process ids the kernel side reports and GetCurrentThreadId(),
- *  - the raw TSD slot (TPIDRRO_EL0) with the TEB.
+ *  - the raw x18 register (or, with WINE_TEB_TSD_SLOT, the raw TSD slot) with the TEB.
  * Prints "teb_test: PASS" and exits 0 if everything matched.
  */
 #include <stdarg.h>
@@ -47,6 +48,14 @@ static TEB *slot_teb( void )
                       : "=&r" (teb) : "i" (WINE_TEB_TSD_SLOT * 8) );
     return teb;
 }
+#else
+/* read x18 itself, not through the compiler's NtCurrentTeb() */
+static TEB *raw_x18( void )
+{
+    TEB *teb;
+    __asm__ volatile( "mov %0, x18" : "=r" (teb) );
+    return teb;
+}
 #endif
 
 static void check_teb( const char *where )
@@ -68,6 +77,8 @@ static void check_teb( const char *where )
         failure( where, "GetCurrentThreadId()", ULongToPtr( GetCurrentThreadId() ), info.ClientId.UniqueThread );
 #ifdef WINE_TEB_TSD_SLOT
     if (slot_teb() != teb) failure( where, "TSD slot", slot_teb(), teb );
+#else
+    if (raw_x18() != info.TebBaseAddress) failure( where, "raw x18", raw_x18(), info.TebBaseAddress );
 #endif
 }
 
