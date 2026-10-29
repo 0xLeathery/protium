@@ -41,7 +41,7 @@ RUN_TIMEOUT=${RUN_TIMEOUT:-120}
 TEB_TEST_RUNS=${TEB_TEST_RUNS:-20}
 PROBE_RUNS=${PROBE_RUNS:-10}
 # Wine files this wave may change.
-WAVE_FILES="configure.ac include/winnt.h dlls/ntdll/signal_arm64.c dlls/ntdll/unix/signal_arm64.c"
+WAVE_FILES="configure.ac include/winnt.h dlls/ntdll/signal_arm64.c dlls/ntdll/unix/signal_arm64.c include/minwindef.h dlls/ntdll/unix/unix_private.h dlls/ntdll/unix/file.c dlls/ntdll/unix/loader.c"
 # PE sources whose objects item 7 compares without the define: the PE file this wave changes, and
 # users of NtCurrentTeb() (include/winnt.h) in several modules. object:source
 PE_COMPARE="dlls/ntdll/aarch64-windows/signal_arm64.o:dlls/ntdll/signal_arm64.c
@@ -52,6 +52,9 @@ dlls/kernelbase/aarch64-windows/thread.o:dlls/kernelbase/thread.c
 dlls/kernelbase/aarch64-windows/process.o:dlls/kernelbase/process.c
 dlls/msvcrt/aarch64-windows/thread.o:dlls/msvcrt/thread.c
 dlls/user32/aarch64-windows/message.o:dlls/user32/message.c"
+
+# A new prefix would otherwise wait on the Mono and Gecko install dialogs.
+export WINEDLLOVERRIDES=${WINEDLLOVERRIDES:-mscoree,mshtml=}
 
 mkdir -p "$EVIDENCE_DIR"
 RESULTS=()
@@ -509,7 +512,7 @@ SAME_LINES="-Wno-builtin-macro-redefined -D__LINE__=0"
 for v in base new; do
     rev=$WINE_WAVE_BASE; [ $v = new ] && rev=HEAD
     rm -rf "$WORK/$v"; mkdir -p "$WORK/$v"
-    git -C "$WINE_DIR" archive "$rev" include dlls/ntdll dlls/kernelbase dlls/msvcrt dlls/user32 | tar -x -C "$WORK/$v"
+    git -C "$WINE_DIR" archive "$rev" include dlls/ntdll dlls/kernelbase dlls/msvcrt dlls/user32 dlls/win32u | tar -x -C "$WORK/$v"
 done
 echo "PE objects compiled with the build's commands minus -DWINE_TEB_TSD_SLOT (what Linux and every other target get), wave base $WINE_WAVE_BASE vs HEAD, whole include/ tree from each revision" >>"$clog"
 while IFS=: read -r obj src; do
@@ -551,8 +554,8 @@ else
 fi
 # Source level: with the macOS conditions undefined, every touched file is the wave base text
 # (runs of blank lines squeezed, cat -s: a removed block leaves its surrounding blank lines).
-for f in include/winnt.h dlls/ntdll/signal_arm64.c dlls/ntdll/unix/signal_arm64.c; do
-    case $f in */unix/*) syms="-U__APPLE__" ;; *) syms="-UWINE_TEB_TSD_SLOT" ;; esac
+for f in include/winnt.h dlls/ntdll/signal_arm64.c dlls/ntdll/unix/signal_arm64.c include/minwindef.h; do
+    case $f in */unix/*|include/minwindef.h) syms="-U__APPLE__" ;; *) syms="-UWINE_TEB_TSD_SLOT" ;; esac
     git -C "$WINE_DIR" show "$WINE_WAVE_BASE:$f" | unifdef $syms | cat -s >"$WORK/unifdef.base" 2>/dev/null
     git -C "$WINE_DIR" show "HEAD:$f" | unifdef $syms | cat -s >"$WORK/unifdef.new" 2>/dev/null
     if cmp -s "$WORK/unifdef.base" "$WORK/unifdef.new"; then
@@ -560,6 +563,62 @@ for f in include/winnt.h dlls/ntdll/signal_arm64.c dlls/ntdll/unix/signal_arm64.
     else
         ok=no; echo "unifdef $syms $f: DIFFERS from $WINE_WAVE_BASE" >>"$ulog"
         diff "$WORK/unifdef.base" "$WORK/unifdef.new" | head -20 >>"$ulog"
+    fi
+done
+# Unix side (include/minwindef.h: __stdcall is ms_abi only for aarch64 macOS Unix code).
+# Unix objects for targets without __APPLE__ or without __aarch64__: same code before and after.
+# Linux libc headers aren't available here, so the Linux check compiles a probe that only needs
+# Wine's headers (stdarg.h from the compiler); the macOS x86_64 check compiles real Unix files.
+mkdir -p "$WORK/stubs"; : >"$WORK/stubs/ctype.h"; : >"$WORK/stubs/string.h"
+cp "$WORK/stack_probe.c" "$WORK/cc_probe.c" 2>/dev/null || cat >"$WORK/cc_probe.c" <<'EOP'
+#include <stdarg.h>
+#include "windef.h"
+#include "winternl.h"
+extern void stack_probe_use( ULONG, ULONG, BOOLEAN, USHORT );
+NTSTATUS WINAPI stack_probe( HANDLE a, HANDLE b, void *c, ULONG_PTR d, SIZE_T e, void *f, void *g,
+                             ULONG h, ULONG alloc_type, ULONG protect, BOOLEAN x, USHORT y )
+{
+    stack_probe_use( alloc_type, protect, x, y );
+    return 0;
+}
+EOP
+for tgt in aarch64-linux-gnu x86_64-linux-gnu x86_64-apple-macos11 arm64-apple-macos11; do
+    for v in base new; do
+        clang --target=$tgt -O2 -c -nostdinc -isystem "$(clang -print-resource-dir)/include" -isystem "$WORK/stubs" \
+              -D__WINESRC__ -DWINE_UNIX_LIB -I"$BUILD_DIR/include" -I"$WORK/$v/include" "$WORK/cc_probe.c" \
+              -o "$WORK/cc_probe.$tgt.$v.o" >"$WORK/cc_probe.$tgt.$v.err" 2>&1
+        objdump -d -r "$WORK/cc_probe.$tgt.$v.o" 2>/dev/null | sed 1,2d >"$WORK/cc_probe.$tgt.$v.dis"
+    done
+    if [ ! -s "$WORK/cc_probe.$tgt.new.dis" ]; then
+        ok=no; echo "unix $tgt WINAPI probe: compile failed: $(head -3 "$WORK/cc_probe.$tgt.new.err" | tr '\n' ' ')" >>"$clog"
+    elif cmp -s "$WORK/cc_probe.$tgt.base.dis" "$WORK/cc_probe.$tgt.new.dis"; then
+        echo "unix $tgt WINAPI probe (10 args, ULONG/BOOLEAN/USHORT stack args): object code identical" >>"$clog"
+        [ $tgt = arm64-apple-macos11 ] && { ok=no; echo "  ... but aarch64 macOS should have changed" >>"$clog"; }
+    else
+        echo "unix $tgt WINAPI probe: object code differs (expected only for arm64-apple-macos11):" >>"$clog"
+        diff "$WORK/cc_probe.$tgt.base.dis" "$WORK/cc_probe.$tgt.new.dis" | head -30 >>"$clog"
+        [ $tgt = arm64-apple-macos11 ] || ok=no
+    fi
+done
+for site in "dlls/ntdll/unix/virtual.o:dlls/ntdll/unix/virtual.c" "dlls/ntdll/unix/file.o:dlls/ntdll/unix/file.c" "dlls/ntdll/unix/loader.o:dlls/ntdll/unix/loader.c" "dlls/win32u/message.o:dlls/win32u/message.c"; do
+    obj=${site%%:*}; src=${site#*:}
+    cmd=$(compile_cmd "$obj" "$src")
+    tag=$(echo "$obj" | tr / _)-x86_64-macos
+    for v in base new; do
+        tree=$WORK/$v
+        vcmd=${cmd/ $SRC_DIR\/$src / $tree/$src }
+        vcmd=${vcmd//-I$SRC_DIR\/include/-I$tree/include}
+        vcmd=${vcmd/-c -o $obj /-c -o $WORK/$tag.$v.o -I$tree/$(dirname "$src") }
+        (cd "$BUILD_DIR" && eval "$vcmd -target x86_64-apple-macos11 -g0 -fmacro-prefix-map=$tree=/wine $SAME_LINES") >"$WORK/$tag.$v.err" 2>&1
+        objdump -d -r -s "$WORK/$tag.$v.o" 2>/dev/null | sed 1,2d >"$WORK/$tag.$v.dis"
+    done
+    if [ -s "$WORK/$tag.new.dis" ] && cmp -s "$WORK/$tag.base.dis" "$WORK/$tag.new.dis"; then
+        echo "unix x86_64-apple-macos $src: object code identical ($(wc -l <"$WORK/$tag.new.dis" | tr -d ' ') lines)" >>"$clog"
+    elif [ ! -s "$WORK/$tag.new.dis" ]; then
+        echo "unix x86_64-apple-macos $src: could not compile with this host's config.h (not checked): $(head -2 "$WORK/$tag.new.err" | tr '\n' ' ')" >>"$clog"
+    else
+        ok=no; echo "unix x86_64-apple-macos $src: OBJECT CODE DIFFERS" >>"$clog"
+        diff "$WORK/$tag.base.dis" "$WORK/$tag.new.dis" | head -20 >>"$clog"
     fi
 done
 # configure.ac: the new define only for aarch64 Darwin hosts and only for aarch64 PE code
