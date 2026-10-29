@@ -447,7 +447,7 @@ if [ -n "$PE_SLOT_FLAG" ] && echo "$cmd" | grep -q -- "$PE_SLOT_FLAG"; then
     tree=$WORK/new; vcmd=${cmd/ $SRC_DIR\/$src / $tree/$src }; vcmd=${vcmd//-I$SRC_DIR\/include/-I$tree/include}
     vcmd=${vcmd/-c -o $obj /-c -o $WORK/with-define.o -I$tree/$(dirname "$src") }
     (cd "$BUILD_DIR" && eval "$vcmd -g0 $SAME_LINES") >>"$clog" 2>&1
-    n=$("$OBJDUMP" -d "$WORK/with-define.o" | grep -c 'tpidrro_el0')
+    n=$("$OBJDUMP" -d "$WORK/with-define.o" | grep -ci 'tpidrro_el0')
     echo "aarch64-windows with $PE_SLOT_FLAG $src: $n tpidrro_el0 reads (must be > 0)" >>"$clog"
     [ "$n" -gt 0 ] || ok=no
 else
