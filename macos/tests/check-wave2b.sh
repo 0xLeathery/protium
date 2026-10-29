@@ -14,6 +14,8 @@
 #   4  wine teb_test.exe passes all checks, 20 runs
 #   5  INFO: wineboot -u in a fresh prefix: exit status, first failure, x18-related or not
 #   6  regression: check-wave1.sh items 1-4, 6 and check-wave2a.sh items 1-4, 6
+#   8  syscall stack arguments: the Unix side reads them from 8-byte slots, as the ARM64 PE
+#      callers (AAPCS64) pass them, not packed as Apple's arm64 ABI (DarwinPCS) would
 #   7  other targets unchanged: PE objects without the define identical to the wave base for
 #      aarch64-windows and x86_64-windows; Unix changes only under __APPLE__; diff scope
 # The build (macos/build-wine.sh, incremental) and the test programs are built first ("build").
@@ -55,7 +57,7 @@ mkdir -p "$EVIDENCE_DIR"
 RESULTS=()
 FAILED=0
 # CHECK_ITEMS limits the run to some items ("build" rebuilds Wine and the test programs).
-CHECK_ITEMS=${CHECK_ITEMS:-"build 1 2 3 4 5 6 7"}
+CHECK_ITEMS=${CHECK_ITEMS:-"build 8 1 2 3 4 5 6 7"}
 want() { case " $CHECK_ITEMS " in *" $1 "*) return 0 ;; esac; return 1; }
 pass() { RESULTS+=("PASS  item $1: $2"); echo "PASS  item $1: $2"; }
 fail() { RESULTS+=("FAIL  item $1: $2"); echo "FAIL  item $1: $2"; FAILED=1; }
@@ -132,6 +134,100 @@ if want build; then
         if build_program $p; then pass build "$p.exe built ($TESTS_OUT/$p.build.log)"; else fail build "$p.exe did not build ($TESTS_OUT/$p.build.log)"; fi
     done
 fi
+
+########################################################################
+# Item 8: syscall stack argument layout
+########################################################################
+# PE code calls syscalls with the Windows ARM64 (AAPCS64) convention: arguments 9 and up go in
+# 8-byte stack slots whatever their size. Apple's arm64 ABI packs stack arguments at their natural
+# alignment, so a Unix-side syscall built with it reads e.g. two ULONGs from one slot. The
+# dispatcher copies the slots verbatim, so the Unix syscall functions must use the slot layout.
+if want 8; then
+echo "== item 8: syscall stack argument layout"
+alog=$EVIDENCE_DIR/item8-stack-args.log
+ok=yes
+: >"$alog"
+# (a) header level: a WINAPI function compiled with the build's own Unix command for ntdll
+cat >"$WORK/stack_probe.c" <<'EOP'
+#include <stdarg.h>
+#include "ntstatus.h"
+#define WIN32_NO_STATUS
+#include "windef.h"
+#include "winternl.h"
+extern void stack_probe_use( ULONG, ULONG, BOOLEAN, USHORT );
+NTSTATUS WINAPI stack_probe( HANDLE a, HANDLE b, void *c, ULONG_PTR d, SIZE_T e, void *f, void *g,
+                             ULONG h, ULONG alloc_type, ULONG protect, BOOLEAN x, USHORT y )
+{
+    stack_probe_use( alloc_type, protect, x, y );
+    return 0;
+}
+EOP
+cmd=$(compile_cmd dlls/ntdll/unix/virtual.o dlls/ntdll/unix/virtual.c)
+if [ -n "$cmd" ]; then
+    pcmd=${cmd/ $SRC_DIR\/dlls\/ntdll\/unix\/virtual.c / $WORK/stack_probe.c }
+    pcmd=${pcmd/-c -o dlls\/ntdll\/unix\/virtual.o /-c -o $WORK/stack_probe.o }
+    (cd "$BUILD_DIR" && eval "$pcmd") >>"$alog" 2>&1 || { ok=no; echo "stack probe: compile failed" >>"$alog"; }
+    objdump -d --no-show-raw-insn "$WORK/stack_probe.o" >"$WORK/stack_probe.dis" 2>&1
+    { echo "--- (a) WINAPI stack_probe(8 register args, ULONG alloc_type, ULONG protect, BOOLEAN x, USHORT y), build's Unix command"
+      echo "    AAPCS64 slots: alloc_type +0x10, protect +0x18, x +0x20, y +0x28 from the caller's sp"
+      sed 1,4d "$WORK/stack_probe.dis"; } >>"$alog"
+else
+    ok=no; echo "no compile command for dlls/ntdll/unix/virtual.o" >>"$alog"
+fi
+# (b) every 64-bit syscall of ntdll and win32u with stack arguments, in the built .so files
+SA_SCAN=$WORK/stack_scan.pl
+cat >"$SA_SCAN" <<'EOP'
+# stdin: objdump -d of a Mach-O; args: syscall names. For each, every access to the caller's frame
+# ([x29, #off] with off >= 0x10 after the standard prologue) must touch 8-byte slots only.
+use strict; use warnings;
+my %want = map { ("_$_" => 1) } @ARGV;
+$want{$ENV{SA_EXTRA_SYMBOL}} = 1 if $ENV{SA_EXTRA_SYMBOL}; my ($fn, %acc, %seen);
+while (<STDIN>) {
+    if (/^[0-9a-f]+ <(.*)>:/) { $fn = $want{$1} ? $1 : undef; $seen{$fn} = 1 if $fn; next; }
+    next unless $fn && /^\s*[0-9a-f]+:\s+(\S+)\s+(.*)$/;
+    my ($op, $ops) = ($1, $2);
+    next unless $op =~ /^(ld|st)/ && $ops =~ /\[x29, #0x([0-9a-f]+)\]/;
+    my $off = hex($1); next if $off < 0x10;
+    my @r = ($ops =~ /\b([wx])\d+\b/g);
+    my $sz = ($op =~ /b$/) ? 1 : ($op =~ /h$/) ? 2 : ($op =~ /sw$/ || ($r[0] // "x") eq "w") ? 4 : 8;
+    my @offs = ($op =~ /^(ldp|stp)/) ? ($off, $off + $sz) : ($off);
+    for my $o (@offs) { push @{$acc{$fn}}, sprintf("%s %s at 0x%x%s", $op, $ops, $o, $o % 8 ? " PACKED" : ""); }
+}
+for my $n (sort keys %want) {
+    if (!$seen{$n}) { print "MISSING $n\n"; next; }
+    my @a = @{$acc{$n} // []};
+    my $bad = grep { /PACKED/ } @a;
+    printf "%s %s: %s\n", (@a ? ($bad ? "BAD" : "OK") : "NOFRAMEACCESS"), $n, join("; ", @a);
+}
+EOP
+for lib in ntdll:dlls/ntdll/ntsyscalls.h:dlls/ntdll/ntdll.so win32u:dlls/win32u/win32syscalls.h:dlls/win32u/win32u.so; do
+    IFS=: read -r name hdr so <<<"$lib"
+    names=$(sed -n '/^#ifdef _WIN64/,/^#else/p' "$SRC_DIR/$hdr" \
+            | sed -n 's/.*SYSCALL_ENTRY( *0x[0-9a-f]*, *\([A-Za-z0-9_]*\), *\([0-9]*\) *).*/\1 \2/p' | awk '$2 > 64 {print $1}')
+    objdump -d --no-show-raw-insn "$BUILD_DIR/$so" 2>/dev/null | perl "$SA_SCAN" $names >"$WORK/item8-$name.txt"
+    { echo "--- (b) $name: 64-bit syscalls with more than 64 bytes of arguments (stack arguments): $(echo $names | wc -w | tr -d ' ')"
+      cat "$WORK/item8-$name.txt"; } >>"$alog"
+done
+probe_offs=$(SA_EXTRA_SYMBOL=ltmp0 perl "$SA_SCAN" stack_probe <"$WORK/stack_probe.dis" 2>/dev/null \
+             | grep -o -E 'at 0x[0-9a-f]+' | sed 's/at //' | sort -u | paste -sd, -)
+probe_offs=${probe_offs:-none}
+# the probe must load from 8-byte slots only (the frame offset of the first slot depends on the prologue)
+for o in $(echo "$probe_offs" | tr , ' '); do [ "$o" = none ] || [ $((o % 8)) = 0 ] || ok=no; done
+[ "$probe_offs" = none ] && ok=no
+nbad=$(cat "$WORK"/item8-*.txt | grep -c '^BAD ')
+nok=$(cat "$WORK"/item8-*.txt | grep -c '^OK ')
+nnoacc=$(cat "$WORK"/item8-*.txt | grep -c '^NOFRAMEACCESS ')
+nmiss=$(cat "$WORK"/item8-*.txt | grep -c '^MISSING ')
+grep -q '^OK _NtMapViewOfSection:' "$WORK/item8-ntdll.txt" || ok=no
+[ "$nbad" = 0 ] || ok=no
+echo "--- summary: probe frame offsets $probe_offs; syscalls OK $nok, BAD (packed) $nbad, no caller-frame access $nnoacc, missing $nmiss" >>"$alog"
+mv=$(grep '_NtMapViewOfSection:' "$WORK/item8-ntdll.txt" | cut -c1-160)
+if [ $ok = yes ]; then
+    pass 8 "stack arguments in 8-byte slots: probe loads at $probe_offs; $nok syscalls OK, 0 packed ($mv) ($alog)"
+else
+    fail 8 "probe loads at $probe_offs; $nbad syscalls read packed stack arguments ($mv) ($alog)"
+fi
+fi  # item 8
 
 ########################################################################
 # Item 1: slot mechanism
