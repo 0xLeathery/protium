@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Lets threads opt into Apple's custom x18 ABI (os_set_custom_x18_abi_enabled), so that the
+	     kernel preserves x18, which holds the TEB in Windows ARM64 code. -->
+	<key>com.apple.security.custom-x18-abi-toggle</key>
+	<true/>
+</dict>
+</plist>
