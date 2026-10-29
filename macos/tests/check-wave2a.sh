@@ -51,6 +51,9 @@ dlls/ntoskrnl.exe/instr.c|wine_user_shared_data = \(BYTE \*\)0x7ffe0000;|inside 
 mkdir -p "$EVIDENCE_DIR"
 RESULTS=()
 FAILED=0
+# CHECK_ITEMS limits the run to some items (the build in item 2 is skipped unless listed).
+CHECK_ITEMS=${CHECK_ITEMS:-"1 2 3 4 5 6"}
+want() { case " $CHECK_ITEMS " in *" $1 "*) return 0 ;; esac; return 1; }
 pass() { RESULTS+=("PASS  item $1: $2"); echo "PASS  item $1: $2"; }
 fail() { RESULTS+=("FAIL  item $1: $2"); echo "FAIL  item $1: $2"; FAILED=1; }
 info() { RESULTS+=("INFO  item $1: $2"); echo "INFO  item $1: $2"; }
@@ -59,6 +62,7 @@ run_timeout() { local t=$1; shift; perl -e 'alarm shift; exec @ARGV or die "exec
 WORK=$EVIDENCE_DIR/work
 rm -rf "$WORK"; mkdir -p "$WORK"
 MINGW_BIN=$TOOLCHAIN_DIR/bin
+OBJDUMP=$MINGW_BIN/llvm-objdump
 WINE=$BUILD_DIR/wine
 SERVER=$BUILD_DIR/server/wineserver
 
@@ -75,6 +79,7 @@ configured_addr() {
 ########################################################################
 # Item 2 first: the other items need a build.
 ########################################################################
+if want 2; then
 echo "== item 2: macos/build-wine.sh (incremental)"
 blog=$EVIDENCE_DIR/build-incremental.log
 df -h "$HOME" | tail -1 >"$EVIDENCE_DIR/disk-before.txt"
@@ -89,12 +94,14 @@ if [ $bstatus = 0 ]; then
 else
     fail 2 "build-wine.sh exited $bstatus ($blog)"
 fi
+fi  # item 2
 
 USD=$(configured_addr)
 
 ########################################################################
 # Item 1: no aarch64 definition hard-codes 0x7ffe0000; per-target value; Linux codegen unchanged
 ########################################################################
+if want 1; then
 echo "== item 1: shared user data address definitions"
 slog=$EVIDENCE_DIR/item1-static.log
 ok=yes
@@ -150,7 +157,6 @@ SAME_LINES="-Wno-builtin-macro-redefined -D__LINE__=0"
 mkdir -p "$BASE_TREE/include/ddk" "$NEW_TREE/include/ddk"
 git -C "$WINE_DIR" show "$WINE_WAVE_BASE:include/ddk/wdm.h" >"$BASE_TREE/include/ddk/wdm.h"
 cp "$WINE_DIR/include/ddk/wdm.h" "$NEW_TREE/include/ddk/wdm.h"
-OBJDUMP=$MINGW_BIN/llvm-objdump
 for site in $DEF_SITES; do
     obj=${site%%:*}; src=${site#*:}
     case $obj in */aarch64-windows/*) ;; *) continue ;; esac
@@ -225,6 +231,7 @@ if [ $ok = yes ]; then
 else
     fail 1 "see $slog, $plog, $clog"
 fi
+fi  # item 1
 
 ########################################################################
 # Syscall-level probe used by item 3: logs every mmap / mach_vm_map / mach_vm_allocate whose
@@ -242,6 +249,7 @@ cat >"$PROBE_SRC" <<'EOF'
 #include <sys/mman.h>
 #include <mach/mach.h>
 #include <mach/mach_vm.h>
+#include <mach-o/dyld.h>
 
 #define FOUR_GB 0x100000000ULL
 static int log_fd = -1;
@@ -278,6 +286,8 @@ __attribute__((constructor)) static void init( void )
     const char *w = getenv( "LOWMEM_PROBE_WATCH" );
     if (w) watch = strtoull( w, NULL, 16 );
     out( "probe loaded, watching %#llx\n", (unsigned long long)watch );
+    /* the process's address floor: __PAGEZERO ends at the slid main executable header */
+    out( "floor %p\n", (const void *)_dyld_get_image_header( 0 ) );
 }
 
 static void *probe_mmap( void *addr, size_t len, int prot, int flags, int fd, off_t off )
@@ -334,6 +344,21 @@ check_virtual_log() {
     ' "$1"
 }
 
+# floor_errors LOG FLOOR: err:virtual lines naming an address below FLOOR (the host's real floor)
+floor_errors() {
+    perl -ne 'BEGIN { $f = hex(shift) } next unless /(?:^|:)err:virtual:/;
+        for my $t (/\b0x([0-9a-fA-F]+)\b/g) { my $v = hex($t); if ($v && $v < $f) { print "$.: $_"; last } }' "$2" "$1"
+}
+# behind_usd LOG USD: views starting in the 16 MB right behind the 64K shared user data reservation
+# (a bottom-up allocation that skipped the whole range between the floor and the shared user data)
+behind_usd() {
+    perl -ne 'BEGIN { $u = hex(shift) } print "$.: $_" if /View: 0x([0-9a-f]+) - / && hex($1) >= $u + 0x10000 && hex($1) < $u + 0x10000 + 0x1000000' "$2" "$1"
+}
+# low_vallocs LOG FLOOR: anonymous views starting between FLOOR and the exe image base 0x140000000
+low_vallocs() {
+    perl -ne 'BEGIN { $f = hex(shift) } print "$.: $_" if /View: 0x([0-9a-f]+) - .*\(valloc\)/ && hex($1) >= $f && hex($1) < 0x140000000' "$2" "$1"
+}
+
 # classify_addr LOG ADDR: the "(image)" view of LOG containing ADDR, if any
 classify_addr() {
     perl -e '
@@ -355,6 +380,7 @@ classify_faults() {
 ########################################################################
 # Item 3: +virtual run under the probe: nothing below 4 GB, USD at the configured address
 ########################################################################
+if want 3; then
 echo "== item 3: no memory below 4 GB, shared user data above it"
 vlog=$EVIDENCE_DIR/item3-virtual.log
 plog3=$EVIDENCE_DIR/item3-probe.log
@@ -375,6 +401,7 @@ else
     WINEPREFIX=$PREFIX run_timeout 30 "$SERVER" -w >/dev/null 2>&1
     rm -rf "$PREFIX"
     ok=yes
+    FLOOR=$(sed -n 's/.* floor \(0x[0-9a-f]*\)$/\1/p' "$plog3" | sort | tail -1)
     {
         echo "configured shared user data address: ${USD:-<none>}"
         if [ -n "$USD" ]; then
@@ -398,7 +425,15 @@ else
         check_virtual_log "$vlog"
         echo "--- +virtual lines at the shared user data address"
         [ -n "$USD" ] && grep -n -i "$(printf '%x' $((USD)))" "$vlog" | head -20
-        echo "--- errors"
+        echo "--- process floors (slid main executable header, from the probe); highest: ${FLOOR:-?}"
+        grep ' floor ' "$plog3"
+        echo "--- err:virtual lines below the highest floor (must be none)"
+        floor_errors "$vlog" "${FLOOR:-0x100000000}"
+        echo "--- views starting right behind the shared user data reservation (must be none)"
+        [ -n "$USD" ] && behind_usd "$vlog" "$USD"
+        echo "--- anonymous views between the floor and 0x140000000 (bottom-up allocations; must be some)"
+        low_vallocs "$vlog" "${FLOOR:-0x100000000}" | head -10
+        echo "--- errors ($(grep -c 'err:virtual' "$vlog") err:virtual lines)"
         grep -n -E 'err:virtual|failed to map the shared user data|failed to remap the process USD' "$vlog" | head -20
     } >"$alog" 2>&1
     grep -q 'probe loaded' "$plog3" || ok=no
@@ -412,16 +447,24 @@ else
         grep -Eq " USD mmap\($usdhex, .*FIXED, fd [0-9]+\) -> $usdhex" "$plog3" || ok=no
     fi
     grep -q 'failed to map the shared user data\|failed to remap the process USD' "$vlog" && ok=no
+    # The address space must start at the host's real floor: no mapping errors below it, and
+    # bottom-up allocations just above it rather than behind the shared user data.
+    [ -n "$FLOOR" ] || ok=no
+    [ -n "$(floor_errors "$vlog" "${FLOOR:-0x100000000}")" ] && ok=no
+    [ -n "$USD" ] && [ -n "$(behind_usd "$vlog" "$USD")" ] && ok=no
+    [ -n "$(low_vallocs "$vlog" "${FLOOR:-0x100000000}")" ] || ok=no
     if [ $ok = yes ]; then
-        pass 3 "no mapping below 4 GB (probe + +virtual), shared user data reserved, allocated and mapped at $USD ($alog)"
+        pass 3 "no mapping below 4 GB (probe + +virtual), no err:virtual below the floor ($FLOOR), bottom-up allocations above the floor, shared user data reserved, allocated and mapped at $USD ($alog)"
     else
         fail 3 "see $alog ($vlog, $plog3)"
     fi
 fi
+fi  # item 3
 
 ########################################################################
 # Item 4: wineboot -u past virtual_alloc_first_teb, to the next failure
 ########################################################################
+if want 4; then
 echo "== item 4: wineboot -u"
 wlog=$EVIDENCE_DIR/item4-wineboot.log
 wsum=$EVIDENCE_DIR/item4-summary.txt
@@ -496,10 +539,12 @@ else
         info 4 "first fault under lldb: ${stop:-?} pc=${pc:-?} x18=${x18:-?} ${sym:-} ($llog)"
     fi
 fi
+fi  # item 4
 
 ########################################################################
 # Item 5: Wave 1 regression (items 1-4 and 6)
 ########################################################################
+if want 5; then
 echo "== item 5: Wave 1 regression"
 W1DIR=$EVIDENCE_DIR/wave1-regression
 rm -rf "$W1DIR"; mkdir -p "$W1DIR"
@@ -516,10 +561,12 @@ if [ $w1ok = yes ]; then
 else
     fail 5 "check-wave1.sh regressions ($W1DIR/check-summary.txt)"
 fi
+fi  # item 5
 
 ########################################################################
 # Item 6: diff scope
 ########################################################################
+if want 6; then
 echo "== item 6: diff scope"
 dlog=$EVIDENCE_DIR/item6-diff.log
 {
@@ -545,6 +592,7 @@ if [ -z "$wbad" ] && [ -z "$wuntracked" ] && [ -z "$sbad" ]; then
 else
     fail 6 "wine unexpected:${wbad:- none} untracked: '${wuntracked}' superproject outside macos/: '$(echo $sbad)' ($dlog)"
 fi
+fi  # item 6
 
 echo
 echo "== summary"
