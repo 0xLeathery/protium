@@ -453,11 +453,12 @@ if [ -n "$PE_SLOT_FLAG" ] && echo "$cmd" | grep -q -- "$PE_SLOT_FLAG"; then
 else
     ok=no; echo "build command for $obj lacks the slot define" >>"$clog"
 fi
-# Source level: with the macOS conditions undefined, every touched file is the wave base text.
+# Source level: with the macOS conditions undefined, every touched file is the wave base text
+# (runs of blank lines squeezed, cat -s: a removed block leaves its surrounding blank lines).
 for f in include/winnt.h dlls/ntdll/signal_arm64.c dlls/ntdll/unix/signal_arm64.c; do
     case $f in */unix/*) syms="-U__APPLE__" ;; *) syms="-UWINE_TEB_TSD_SLOT" ;; esac
-    git -C "$WINE_DIR" show "$WINE_WAVE_BASE:$f" | unifdef $syms >"$WORK/unifdef.base" 2>/dev/null
-    git -C "$WINE_DIR" show "HEAD:$f" | unifdef $syms >"$WORK/unifdef.new" 2>/dev/null
+    git -C "$WINE_DIR" show "$WINE_WAVE_BASE:$f" | unifdef $syms | cat -s >"$WORK/unifdef.base" 2>/dev/null
+    git -C "$WINE_DIR" show "HEAD:$f" | unifdef $syms | cat -s >"$WORK/unifdef.new" 2>/dev/null
     if cmp -s "$WORK/unifdef.base" "$WORK/unifdef.new"; then
         echo "unifdef $syms $f: identical to $WINE_WAVE_BASE" >>"$ulog"
     else
