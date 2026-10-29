@@ -7,9 +7,15 @@
 #
 #   macos/tests/check-wave2b.sh
 #
+# Wave 3a reverted the slot: the custom x18 ABI keeps x18, so the TEB is in x18 again. Without the
+# slot define, item 1 is retired (INFO) and item 2 is inverted: the PE modules must read x18 and
+# must not load the TEB from the slot. check-wave3a.sh checks the x18 TEB in full.
+#
 # Items (pass/fail unless marked INFO):
 #   1  slot mechanism: configured slot, standalone probe 10 runs, slot set on every Wine thread
+#      (INFO, retired, without the slot define)
 #   2  no instruction in any built aarch64-windows PE module (or the test programs) reads x18
+#      (without the slot define: they read x18, and no TSD slot TEB loads are left)
 #   3  wine hello.exe prints its line and exits 0 (the go/no-go milestone)
 #   4  wine teb_test.exe passes all checks, 20 runs
 #   5  INFO: wineboot -u in a fresh prefix: exit status, first failure, x18-related or not
@@ -40,8 +46,9 @@ WINEBOOT_TIMEOUT=${WINEBOOT_TIMEOUT:-180}
 RUN_TIMEOUT=${RUN_TIMEOUT:-120}
 TEB_TEST_RUNS=${TEB_TEST_RUNS:-20}
 PROBE_RUNS=${PROBE_RUNS:-10}
-# Wine files this wave may change.
-WAVE_FILES="configure.ac include/winnt.h dlls/ntdll/signal_arm64.c dlls/ntdll/unix/signal_arm64.c include/minwindef.h dlls/ntdll/unix/unix_private.h dlls/ntdll/unix/file.c dlls/ntdll/unix/loader.c"
+# Wine files this wave may change, plus those of Wave 3a (x18 opt-in, W^X page flipping, see
+# check-wave3a.sh item 9).
+WAVE_FILES="configure.ac include/winnt.h dlls/ntdll/signal_arm64.c dlls/ntdll/unix/signal_arm64.c include/minwindef.h dlls/ntdll/unix/unix_private.h dlls/ntdll/unix/file.c dlls/ntdll/unix/loader.c dlls/ntdll/unix/virtual.c"
 # PE sources whose objects item 7 compares without the define: the PE file this wave changes, and
 # users of NtCurrentTeb() (include/winnt.h) in several modules. object:source
 PE_COMPARE="dlls/ntdll/aarch64-windows/signal_arm64.o:dlls/ntdll/signal_arm64.c
@@ -65,6 +72,8 @@ want() { case " $CHECK_ITEMS " in *" $1 "*) return 0 ;; esac; return 1; }
 pass() { RESULTS+=("PASS  item $1: $2"); echo "PASS  item $1: $2"; }
 fail() { RESULTS+=("FAIL  item $1: $2"); echo "FAIL  item $1: $2"; FAILED=1; }
 info() { RESULTS+=("INFO  item $1: $2"); echo "INFO  item $1: $2"; }
+# set once the build is configured: Wave 3a removed the slot define
+SLOT_RETIRED=no
 run_timeout() { local t=$1; shift; perl -e 'alarm shift; exec @ARGV or die "exec: $!"' "$t" "$@"; }
 
 WORK=$EVIDENCE_DIR/work
@@ -114,6 +123,7 @@ fi  # build
 PE_SLOT_FLAG=$(slot_flag aarch64_EXTRACFLAGS)
 UNIX_SLOT_FLAG=$(slot_flag EXTRACFLAGS)
 SLOT=${PE_SLOT_FLAG#-DWINE_TEB_TSD_SLOT=}
+[ -z "$PE_SLOT_FLAG" ] && [ -z "$UNIX_SLOT_FLAG" ] && [ -f "$BUILD_DIR/Makefile" ] && SLOT_RETIRED=yes
 
 # Test programs: the build's own winegcc for aarch64-windows, against Wine's CRT (winecrt0 +
 # ucrtbase), with the build's slot define so that NtCurrentTeb() in them reads the slot too.
@@ -235,7 +245,9 @@ fi  # item 8
 ########################################################################
 # Item 1: slot mechanism
 ########################################################################
-if want 1; then
+if want 1 && [ $SLOT_RETIRED = yes ]; then
+    info 1 "retired: configure gives no WINE_TEB_TSD_SLOT define (Wave 3a: the TEB is in x18 again, see check-wave3a.sh items 2 and 4)"
+elif want 1; then
 echo "== item 1: TSD slot mechanism"
 slog=$EVIDENCE_DIR/item1-slot.log
 ok=yes
@@ -366,7 +378,17 @@ named() { awk -F'\t' -v m="$1" '$1 ~ "/aarch64-windows/"m"$" {print $2" (reads "
     echo "--- modules with x18 references"
     awk -F'\t' '$2 > 0' "$xdir/per-module.tsv"
 } >"$xsum" 2>&1
-if [ "$total_r" = 0 ] && [ "$nmod" -gt 600 ] && [ -f "$TESTS_OUT/teb_test.exe" ] && [ -f "$TESTS_OUT/hello.exe" ]; then
+if [ $SLOT_RETIRED = yes ]; then
+    # inverted: the TEB is in x18, so the modules read it, and no slot loads are left
+    nslot=$(while IFS= read -r f; do "$OBJDUMP" -d "$f" 2>/dev/null | grep -i -A2 'mrs.*tpidrro_el0' | grep -c 'ldr.*#0x30\]'; done <"$xdir/modules.txt" | awk '{n += $1} END {print n + 0}')
+    echo "--- inverted (no slot define): TSD slot TEB loads (mrs TPIDRRO_EL0; ...; ldr [..,#0x30]): $nslot" >>"$xsum"
+    ntdll_r=$(awk -F'\t' '$1 ~ "/aarch64-windows/ntdll.dll$" {print $3}' "$xdir/per-module.tsv")
+    if [ "$total_r" -gt 0 ] && [ "${ntdll_r:-0}" -gt 0 ] && [ "$nslot" = 0 ] && [ "$nmod" -gt 600 ] && [ -f "$TESTS_OUT/teb_test.exe" ]; then
+        pass 2 "inverted for Wave 3a: $nmod PE modules + test programs read x18 ($total_r reads, ntdll.dll $ntdll_r) and load no TEB from the slot ($xsum)"
+    else
+        fail 2 "inverted for Wave 3a: $total_r x18 reads (ntdll.dll ${ntdll_r:-0}), $nslot slot loads in $nmod modules ($xsum)"
+    fi
+elif [ "$total_r" = 0 ] && [ "$nmod" -gt 600 ] && [ -f "$TESTS_OUT/teb_test.exe" ] && [ -f "$TESTS_OUT/hello.exe" ]; then
     pass 2 "$nmod PE modules + test programs: no instruction reads x18 ($total_w writes only; $xsum)"
 else
     fail 2 "$total_r instructions read x18 in $nmod modules ($xsum, $xdir/x18-instructions.txt)"
@@ -543,7 +565,9 @@ done <<<"$PE_COMPARE"
 # The same with the define: the aarch64 objects do change (sanity check that the comparison sees it)
 obj=dlls/ntdll/aarch64-windows/signal_arm64.o; src=dlls/ntdll/signal_arm64.c
 cmd=$(compile_cmd "$obj" "$src")
-if [ -n "$PE_SLOT_FLAG" ] && echo "$cmd" | grep -q -- "$PE_SLOT_FLAG"; then
+if [ $SLOT_RETIRED = yes ]; then
+    echo "aarch64-windows $src with the slot define: not checked, configure no longer gives it (Wave 3a)" >>"$clog"
+elif [ -n "$PE_SLOT_FLAG" ] && echo "$cmd" | grep -q -- "$PE_SLOT_FLAG"; then
     tree=$WORK/new; vcmd=${cmd/ $SRC_DIR\/$src / $tree/$src }; vcmd=${vcmd//-I$SRC_DIR\/include/-I$tree/include}
     vcmd=${vcmd/-c -o $obj /-c -o $WORK/with-define.o -I$tree/$(dirname "$src") }
     (cd "$BUILD_DIR" && eval "$vcmd -g0 $SAME_LINES") >>"$clog" 2>&1
