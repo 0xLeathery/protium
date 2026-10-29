@@ -399,8 +399,9 @@ else
     echo "hello.exe not built" >"$hout"
 fi
 cleanup_prefix "$PREFIX"
-if [ "$hstatus" = 0 ] && grep -qx 'hello from Windows ARM64 code on macOS' "$hout.stdout" && \
-   [ "$dstatus" = 0 ] && grep -qx 'hello from Windows ARM64 code on macOS' "$hout.debug-run"; then
+# (the CRT writes text-mode stdout: \r\n line ends)
+if [ "$hstatus" = 0 ] && tr -d '\r' <"$hout.stdout" | grep -qx 'hello from Windows ARM64 code on macOS' && \
+   [ "$dstatus" = 0 ] && tr -d '\r' <"$hout.debug-run" | grep -qx 'hello from Windows ARM64 code on macOS'; then
     pass 3 "wine hello.exe printed its line and exited 0 (debug run in a fresh prefix exit $dstatus; $hout, $hlog)"
 else
     fail 3 "hello.exe exit=$hstatus (debug run exit=$dstatus) ($hout, $hlog)"
