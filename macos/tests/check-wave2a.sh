@@ -145,6 +145,8 @@ done
 clog=$EVIDENCE_DIR/item1-linux-equivalent.log
 : >"$clog"
 BASE_TREE=$WORK/base; NEW_TREE=$WORK/new
+# Object code comparisons pin __LINE__: assert() embeds line numbers, which any edit above it shifts.
+SAME_LINES="-Wno-builtin-macro-redefined -D__LINE__=0"
 mkdir -p "$BASE_TREE/include/ddk" "$NEW_TREE/include/ddk"
 git -C "$WINE_DIR" show "$WINE_WAVE_BASE:include/ddk/wdm.h" >"$BASE_TREE/include/ddk/wdm.h"
 cp "$WINE_DIR/include/ddk/wdm.h" "$NEW_TREE/include/ddk/wdm.h"
@@ -170,7 +172,7 @@ for site in $DEF_SITES; do
             if [ $v = base ]; then git -C "$WINE_DIR" show "$WINE_WAVE_BASE:$src" >"$tree/$src"; else cp "$WINE_DIR/$src" "$tree/$src"; fi
             vcmd=${tcmd/ $SRC_DIR\/$src / $tree/$src }
             vcmd=${vcmd/-c -o $obj /-c -o $WORK/$tag.$v.o -I$tree/include -I$SRC_DIR/$(dirname "$src") }
-            (cd "$BUILD_DIR" && eval "$vcmd -g0 -fmacro-prefix-map=$tree=/wine") >>"$clog" 2>&1 \
+            (cd "$BUILD_DIR" && eval "$vcmd -g0 -fmacro-prefix-map=$tree=/wine $SAME_LINES") >>"$clog" 2>&1 \
                 || { ok=no; echo "$tag $v: compile failed" >>"$clog"; }
             "$OBJDUMP" -d -r -s "$WORK/$tag.$v.o" | sed 1,2d >"$WORK/$tag.$v.dis" 2>&1
         done
@@ -206,7 +208,7 @@ for site in "dlls/ntdll/unix/virtual.o:dlls/ntdll/unix/virtual.c" "dlls/win32u/m
         if [ $v = base ]; then git -C "$WINE_DIR" show "$WINE_WAVE_BASE:$src" >"$tree/$src"; else cp "$WINE_DIR/$src" "$tree/$src"; fi
         vcmd=${cmd/ $SRC_DIR\/$src / $tree/$src }
         vcmd=${vcmd/-c -o $obj /-c -o $WORK/$tag.$v.o -I$tree/include -I$SRC_DIR/$(dirname "$src") }
-        (cd "$BUILD_DIR" && eval "$vcmd -target x86_64-apple-macos11 -g0 -fmacro-prefix-map=$tree=/wine") >"$WORK/$tag.$v.err" 2>&1
+        (cd "$BUILD_DIR" && eval "$vcmd -target x86_64-apple-macos11 -g0 -fmacro-prefix-map=$tree=/wine $SAME_LINES") >"$WORK/$tag.$v.err" 2>&1
         objdump -d -r -s "$WORK/$tag.$v.o" 2>/dev/null | sed 1,2d >"$WORK/$tag.$v.dis"
     done
     if [ -s "$WORK/$tag.new.dis" ] && cmp -s "$WORK/$tag.base.dis" "$WORK/$tag.new.dis"; then
@@ -327,9 +329,27 @@ check_virtual_log() {
         next if /:virtual:(NtQueryVirtualMemory|NtProtectVirtualMemory|NtReadVirtualMemory|NtFreeVirtualMemory|virtual_handle_fault|get_vprot_range|virtual_check_buffer)/;
         my $l = $_;
         $l =~ s/\blimit 0x[0-9a-f]+-0x[0-9a-f]+//gi;
-        $l =~ s/\b(size|mask|top_down|unix_prot|status|align|zero_bits)[ =]+0x[0-9a-f]+//gi;
+        $l =~ s/\b(size|mask|top_down|unix_prot|status|align|zero_bits|handle|process|access|alloc_type|off|offset|protect|type|flags)[ =]+0x[0-9a-f]+//gi;
         for my $t ($l =~ /\b0x([0-9a-fA-F]+)\b/g) { my $v = hex($t); if ($v && $v < 0x100000000) { print "$.: $_"; last } }
     ' "$1"
+}
+
+# classify_addr LOG ADDR: the "(image)" view of LOG containing ADDR, if any
+classify_addr() {
+    perl -e '
+        my ($log, $addr) = @ARGV; my $a = hex($addr); my @v;
+        open my $f, "<", $log or exit;
+        while (<$f>) { push @v, [hex($1), hex($2), $1, $2] if /View: 0x([0-9a-f]+) - 0x([0-9a-f]+) .*\((?:builtin )?image\)/ }
+        for (@v) { if ($a >= $_->[0] && $a <= $_->[1]) { print "in PE image view 0x$_->[2]-0x$_->[3]\n"; exit } }
+    ' "$1" "$2"
+}
+# classify_faults LOG: each exception Wine reports, with the PE image view its address is in
+classify_faults() {
+    grep -E 'virtual_setup_exception|seh:.*(code|addr)=' "$1" | while IFS= read -r line; do
+        a=$(echo "$line" | sed -n 's/.* addr[= ]\(0x[0-9a-f]*\).*/\1/p')
+        w=$(classify_addr "$1" "${a:-0}")
+        echo "$line  -> ${w:-not in a PE image}"
+    done
 }
 
 ########################################################################
@@ -410,7 +430,6 @@ if [ ! -x "$WINE" ] || [ ! -x "$SERVER" ]; then
     fail 4 "wine/wineserver not built"
 else
     rm -rf "$PREFIX"; mkdir -p "$PREFIX"
-    marker=$WORK/item4-start; : >"$marker"
     echo "\$ WINEPREFIX=$PREFIX WINEDEBUG=+seh,+loaddll,+process,+virtual $WINE wineboot -u   (timeout ${WINEBOOT_TIMEOUT}s)" >"$wlog"
     WINEPREFIX=$PREFIX WINEDEBUG=+seh,+loaddll,+process,+virtual run_timeout "$WINEBOOT_TIMEOUT" "$WINE" wineboot -u >>"$wlog" 2>&1
     wstatus=$?
@@ -418,56 +437,63 @@ else
     WINEPREFIX=$PREFIX run_timeout 30 "$SERVER" -k >/dev/null 2>&1
     WINEPREFIX=$PREFIX run_timeout 30 "$SERVER" -w >/dev/null 2>&1
     rm -rf "$PREFIX"
-    perl -e 'select undef,undef,undef,3'   # let ReportCrash write its report
-    crash=""
-    for f in $(ls -t "$HOME"/Library/Logs/DiagnosticReports/*.ips 2>/dev/null); do
-        [ "$f" -nt "$marker" ] || break
-        case $(head -c 300 "$f") in *'"app_name":"wine'*|*'"procName":"wine'*|*wine*) crash=$f; break ;; esac
-    done
-    [ -n "$crash" ] && cp "$crash" "$EVIDENCE_DIR/item4-crash.ips"
+    # PE code reached: an exception (or loaddll trace) whose address lies in a mapped PE image view
+    pe_faults=$(classify_faults "$wlog")
     {
         echo "exit=$wstatus (142 = timed out)"
         echo "--- shared user data / first TEB"
-        grep -n -E 'failed to map the shared user data|virtual_alloc_first_teb|failed to remap the process USD' "$wlog"
-        echo "--- builtin images mapped (ntdll.dll is mapped after virtual_alloc_first_teb)"
-        grep -n -E '\(builtin image\)|created .* for ' "$wlog" | head -20
-        echo "--- first seh / exception / error lines"
-        grep -n -m 30 -E 'seh:|exception|EXCEPTION|fault|Unhandled|err:|wine: ' "$wlog"
-        echo "--- loaddll"
-        grep -n 'loaddll' "$wlog" | head -20
-        echo "--- last 40 lines"
-        tail -40 "$wlog"
-        echo "--- crash report: ${crash:-<none newer than the run>}"
-        if [ -n "$crash" ]; then
-            python3 -I - "$crash" <<'EOF'
-import json, sys
-text = open(sys.argv[1]).read()
-body = json.loads(text[text.index('\n') + 1:])
-exc = body.get('exception', {})
-print('process:', body.get('procName'), 'exception:', exc.get('type'), exc.get('signal'), exc.get('subtype'))
-images = body.get('usedImages', [])
-for t in body.get('threads', []):
-    if not t.get('triggered'):
-        continue
-    st = t.get('threadState', {})
-    regs = st.get('x', [])
-    pc = st.get('pc', {}).get('value')
-    far = st.get('far', {}).get('value')
-    print('pc=%#x far=%s x18=%s lr=%s sp=%s' % (pc or 0, hex(far) if far is not None else '?',
-          hex(regs[18]['value']) if len(regs) > 18 else '?',
-          hex(st.get('lr', {}).get('value', 0)), hex(st.get('sp', {}).get('value', 0))))
-    owner = [i for i in images if pc and i.get('base', 0) <= pc < i.get('base', 0) + i.get('size', 0)]
-    print('pc in image:', owner[0].get('name') if owner else '<no Mach-O image: PE code or anonymous memory>')
-    for f in t.get('frames', [])[:12]:
-        im = images[f['imageIndex']] if 'imageIndex' in f and f['imageIndex'] < len(images) else {}
-        print('  frame', im.get('name', '?'), hex(f.get('imageOffset', 0)), f.get('symbol', ''))
-EOF
-        fi
+        grep -n -E 'failed to map the shared user data|virtual_alloc_first_teb|failed to remap the process USD|View: '"${USD:-none}"' ' "$wlog"
+        echo "--- PE images mapped (only after virtual_alloc_first_teb)"
+        grep -n -E 'View: .*\((builtin )?image\)' "$wlog" | head -20
+        echo "--- exceptions, by containing image view"
+        classify_faults "$wlog"
+        echo "--- seh / loaddll / error lines"
+        grep -n -m 40 -E 'seh:|loaddll:|exception|Unhandled|err:|wine: ' "$wlog"
+        echo "--- last 30 lines"
+        tail -30 "$wlog"
     } >"$wsum" 2>&1
-    if ! grep -q 'failed to map the shared user data' "$wlog" && grep -Eq '\(builtin image\)' "$wlog"; then
-        pass 4 "past virtual_alloc_first_teb: builtin PE images mapped; wineboot exit=$wstatus, next failure in $wsum ($wlog)"
+    if ! grep -q 'failed to map the shared user data' "$wlog" && \
+       { echo "$pe_faults" | grep -q 'in PE image' || grep -q ':trace:loaddll:' "$wlog"; }; then
+        pass 4 "past virtual_alloc_first_teb into PE code; wineboot exit=$wstatus; next failure: $(echo "$pe_faults" | grep -m1 'in PE image' | cut -c1-120) ($wsum, $wlog)"
     else
-        fail 4 "did not get past virtual_alloc_first_teb (exit=$wstatus; $wsum, $wlog)"
+        fail 4 "did not reach PE code (exit=$wstatus; $wsum, $wlog)"
+    fi
+
+    # INFO: the first fault of the real front end under lldb (Wine's own handler hides it):
+    # pc, x18 and the faulting instruction, matched against ntdll.dll.
+    llog=$EVIDENCE_DIR/item4-lldb-first-fault.log
+    if command -v lldb >/dev/null; then
+        rm -rf "$PREFIX"; mkdir -p "$PREFIX"
+        run_timeout "$WINEBOOT_TIMEOUT" lldb --batch \
+            -o "process launch --environment WINEPREFIX=$PREFIX --environment WINEDEBUG=+virtual -- wineboot -u" \
+            -o "continue" -o "continue" \
+            -k "register read pc x18 sp lr" -k "memory read -s4 -fx -c1 \$pc" -k "process kill" \
+            -- "$WINE" >"$llog" 2>&1
+        WINEPREFIX=$PREFIX run_timeout 30 "$SERVER" -k >/dev/null 2>&1
+        WINEPREFIX=$PREFIX run_timeout 30 "$SERVER" -w >/dev/null 2>&1
+        rm -rf "$PREFIX"
+        stop=$(grep -m1 'stop reason = EXC_' "$llog" | sed 's/.*stop reason = //')
+        pc=$(sed -n 's/^ *pc = \(0x[0-9a-f]*\).*/\1/p' "$llog" | head -1)
+        x18=$(sed -n 's/^ *x18 = \(0x[0-9a-f]*\).*/\1/p' "$llog" | head -1)
+        insn=$(sed -n 's/^0x[0-9a-f]*: \(0x[0-9a-f]*\).*/\1/p' "$llog" | head -1)
+        where=$(classify_addr "$llog" "$pc")
+        sym=""
+        if [ -n "$pc" ] && [ -n "$where" ]; then
+            vstart=$(echo "$where" | sed -n 's/.*view \(0x[0-9a-f]*\)-.*/\1/p')
+            ntdll=$BUILD_DIR/dlls/ntdll/aarch64-windows/ntdll.dll
+            ibase=0x$("$OBJDUMP" -p "$ntdll" | sed -n 's/^ImageBase *//p')
+            addr=$((ibase + pc - vstart))
+            fbytes=$("$OBJDUMP" -d --start-address=$addr --stop-address=$((addr + 4)) "$ntdll" | sed -n 's/^ *[0-9a-f]*: \([0-9a-f]\{8\}\) .*/\1/p' | head -1)
+            [ "0x$fbytes" = "$insn" ] && sym="ntdll.dll $(printf '%#x' $addr) $("$MINGW_BIN/llvm-symbolizer" --obj="$ntdll" $addr | tr '\n' ' ')"
+        fi
+        {
+            echo "--- first fault of $WINE wineboot -u under lldb"
+            echo "stop: ${stop:-<none>}"
+            echo "pc=${pc:-?} x18=${x18:-?} instruction=${insn:-?}"
+            echo "pc ${where:-not in a mapped PE image view}"
+            echo "symbol: ${sym:-<instruction bytes did not match ntdll.dll>}"
+        } | tee -a "$wsum" >"$WORK/item4-lldb.txt"
+        info 4 "first fault under lldb: ${stop:-?} pc=${pc:-?} x18=${x18:-?} ${sym:-} ($llog)"
     fi
 fi
 
