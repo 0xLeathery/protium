@@ -27,6 +27,7 @@
 static LONG checks, failures, handler_calls, pool_done;
 static volatile ULONG_PTR bad_address = 0x10;
 static HANDLE wait_event, pool_event;
+static DWORD handler_tls;  /* per-thread count of handler calls (no compiler TLS: it would read x18) */
 
 static void failure( const char *where, const char *what, const void *got, const void *want )
 {
@@ -75,6 +76,7 @@ static LONG CALLBACK handler( EXCEPTION_POINTERS *ptrs )
     EXCEPTION_RECORD *rec = ptrs->ExceptionRecord;
 
     InterlockedIncrement( &handler_calls );
+    TlsSetValue( handler_tls, (char *)TlsGetValue( handler_tls ) + 1 );
     check_teb( "exception handler" );
     if (rec->ExceptionCode == 0xe0000001) return EXCEPTION_CONTINUE_EXECUTION;
     if (rec->ExceptionCode == EXCEPTION_ACCESS_VIOLATION &&
@@ -88,14 +90,15 @@ static LONG CALLBACK handler( EXCEPTION_POINTERS *ptrs )
 
 static void exceptions( const char *where )
 {
-    LONG before = handler_calls;
+    ULONG_PTR before = (ULONG_PTR)TlsGetValue( handler_tls );
 
     RaiseException( 0xe0000001, 0, 0, NULL );
     check_teb( where );
     *(volatile int *)bad_address = 1;  /* hardware fault: through the Unix signal handler */
     check_teb( where );
-    if (handler_calls != before + 2)
-        failure( where, "exception handler calls", ULongToPtr( handler_calls - before ), ULongToPtr( 2 ) );
+    if ((ULONG_PTR)TlsGetValue( handler_tls ) != before + 2)
+        failure( where, "exception handler calls on this thread",
+                 (void *)((ULONG_PTR)TlsGetValue( handler_tls ) - before), ULongToPtr( 2 ) );
 }
 
 static void work( const char *where, unsigned int index )
@@ -150,6 +153,7 @@ int main( void )
 #endif
     fflush( stdout );
 
+    handler_tls = TlsAlloc();
     wait_event = CreateEventW( NULL, TRUE, FALSE, NULL );
     pool_event = CreateEventW( NULL, TRUE, FALSE, NULL );
     AddVectoredExceptionHandler( 1, handler );
