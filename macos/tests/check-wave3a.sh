@@ -18,7 +18,9 @@
 #   5  negative control: the loader (loader/wine and the launcher, which loads ntdll.so itself)
 #      re-signed without the entitlement stops with the error that names the entitlement and runs
 #      no PE code; both are signed with the entitlement again after
-#   6  wine wx_test.exe passes (PAGE_EXECUTE_READWRITE, mixed host page, 8 threads, exec heap)
+#   6  wine wx_test.exe passes, parts a-k (PAGE_EXECUTE_READWRITE, mixed host page, 8 threads, exec
+#      heap, stores into their own page, hot patching, server replies and WriteProcessMemory into
+#      executed pages, concurrent displaced stores, a refused store-exclusive)
 #   7  wineboot -u in a fresh prefix, WINEBOOT_RUNS runs: exit 0, winedevice.exe never faults
 #   8  regression: check-wave1.sh, check-wave2a.sh and check-wave2b.sh pass
 #   9  other targets unchanged: every change of this wave is under __APPLE__ (unifdef), Unix
@@ -51,7 +53,7 @@ WINEBOOT_RUNS=${WINEBOOT_RUNS:-25}
 X18_ENTITLEMENT=com.apple.security.custom-x18-abi-toggle
 # Wine files this wave may change: the reverted Wave 2b TSD slot files, and the x18 opt-in and
 # W^X page flipping.
-WAVE_FILES="configure.ac include/winnt.h dlls/ntdll/signal_arm64.c dlls/ntdll/unix/signal_arm64.c dlls/ntdll/unix/virtual.c"
+WAVE_FILES="configure.ac include/winnt.h dlls/ntdll/signal_arm64.c dlls/ntdll/unix/signal_arm64.c dlls/ntdll/unix/virtual.c dlls/ntdll/unix/server.c dlls/ntdll/unix/unix_private.h"
 # PE sources whose objects item 9 compares with the wave base (without the old slot define)
 PE_COMPARE="dlls/ntdll/aarch64-windows/signal_arm64.o:dlls/ntdll/signal_arm64.c
 dlls/ntdll/aarch64-windows/thread.o:dlls/ntdll/thread.c
@@ -365,12 +367,12 @@ for i in $(seq 1 "$WX_RUNS"); do
     rc=$?
     echo "exit=$rc" >>"$wdir/run$i.out"
     [ "$rc" = 0 ] && grep -q '^wx_test: PASS' "$wdir/run$i.out" && \
-        [ "$(grep -c -E '^[abcd]: ' "$wdir/run$i.out")" = 4 ] && wpass=$((wpass + 1))
-    { echo "run $i: exit=$rc"; grep -E '^[abcd]: |^wx_test: |^FAIL' "$wdir/run$i.out" | head -20; } >>"$wdir/summary.txt"
+        [ "$(grep -c -E '^[a-k]: ' "$wdir/run$i.out")" = 11 ] && wpass=$((wpass + 1))
+    { echo "run $i: exit=$rc"; grep -E '^[a-k]: |^wx_test: |^FAIL' "$wdir/run$i.out" | head -20; } >>"$wdir/summary.txt"
 done
 cleanup_prefix "$PREFIX"
 if [ "$wpass" = "$WX_RUNS" ]; then
-    pass 6 "wx_test.exe parts a-d passed $wpass/$WX_RUNS runs ($wdir/summary.txt)"
+    pass 6 "wx_test.exe parts a-k passed $wpass/$WX_RUNS runs ($wdir/summary.txt)"
 else
     fail 6 "wx_test.exe passed $wpass/$WX_RUNS runs ($wdir/summary.txt)"
 fi
@@ -454,10 +456,10 @@ dlog=$EVIDENCE_DIR/item9-diff.log
 ok=yes
 # The new code: the diff against the upstream base, each hunk with the preprocessor lines that guard it
 {
-    echo "\$ git -C wine diff $WINE_BASE HEAD -- dlls/ntdll/unix/virtual.c dlls/ntdll/unix/signal_arm64.c: every added line with its enclosing #if stack"
+    echo "\$ git -C wine diff $WINE_BASE HEAD -- dlls/ntdll/unix/virtual.c dlls/ntdll/unix/signal_arm64.c dlls/ntdll/unix/server.c: every added line with its enclosing #if stack"
     echo "  (the other files are back to the upstream text or, configure.ac, scoped to darwin*-aarch64 by Wave 2a; see item9-unifdef.log)"
     git -C "$WINE_DIR" diff --stat "$WINE_BASE" HEAD -- dlls/ntdll/unix/virtual.c dlls/ntdll/unix/signal_arm64.c include/winnt.h dlls/ntdll/signal_arm64.c
-    for f in dlls/ntdll/unix/virtual.c dlls/ntdll/unix/signal_arm64.c; do
+    for f in dlls/ntdll/unix/virtual.c dlls/ntdll/unix/signal_arm64.c dlls/ntdll/unix/server.c; do
         git -C "$WINE_DIR" show "HEAD:$f" >"$WORK/guard.c"
         # each line added since the upstream base, prefixed with the stack of #if conditions it is in
         git -C "$WINE_DIR" diff -U0 "$WINE_BASE" HEAD -- "$f" | sed -n 's/^@@ -[0-9,]* +\([0-9]*\),\{0,1\}\([0-9]*\) @@.*/\1 \2/p' >"$WORK/hunks"
@@ -489,7 +491,7 @@ echo "--- added lines: $nadd, outside a __APPLE__/WX_EXCLUSIVE_HOST guard (other
 # Source level: with the macOS conditions undefined, every touched file is the wave base text, and
 # the PE files are the wave base text without the old slot define (WX_EXCLUSIVE_HOST is defined
 # only under __APPLE__ && __aarch64__).
-for f in include/winnt.h dlls/ntdll/signal_arm64.c dlls/ntdll/unix/signal_arm64.c dlls/ntdll/unix/virtual.c; do
+for f in include/winnt.h dlls/ntdll/signal_arm64.c dlls/ntdll/unix/signal_arm64.c dlls/ntdll/unix/virtual.c dlls/ntdll/unix/server.c dlls/ntdll/unix/unix_private.h; do
     git -C "$WINE_DIR" show "$WINE_WAVE_BASE:$f" | unifdef -U__APPLE__ -UWX_EXCLUSIVE_HOST -UWINE_TEB_TSD_SLOT | cat -s >"$WORK/unifdef.base" 2>/dev/null
     git -C "$WINE_DIR" show "HEAD:$f" | unifdef -U__APPLE__ -UWX_EXCLUSIVE_HOST -UWINE_TEB_TSD_SLOT | cat -s >"$WORK/unifdef.new" 2>/dev/null
     if cmp -s "$WORK/unifdef.base" "$WORK/unifdef.new"; then
@@ -576,7 +578,7 @@ sbad=$(git -C "$PROTON_DIR" diff --name-only "$SUPER_WAVE_BASE" HEAD | grep -v '
 [ -n "$wbad" ] && ok=no
 [ -n "$sbad" ] && ok=no
 if [ $ok = yes ]; then
-    pass 9 "$nadd lines added since $WINE_BASE in unix/virtual.c and unix/signal_arm64.c all under __APPLE__/WX_EXCLUSIVE_HOST; unifdef'd sources and x86_64-macOS/PE objects identical to $WINE_WAVE_BASE; winnt.h and PE signal_arm64.c back to $WINE_BASE; wine changes only in $(git -C "$WINE_DIR" diff --name-only "$WINE_WAVE_BASE" HEAD | tr '\n' ' ')($glog, $ulog, $clog, $dlog)"
+    pass 9 "$nadd lines added since $WINE_BASE in unix/virtual.c, unix/signal_arm64.c and unix/server.c all under __APPLE__/WX_EXCLUSIVE_HOST; unifdef'd sources and x86_64-macOS/PE objects identical to $WINE_WAVE_BASE; winnt.h and PE signal_arm64.c back to $WINE_BASE; wine changes only in $(git -C "$WINE_DIR" diff --name-only "$WINE_WAVE_BASE" HEAD | tr '\n' ' ')($glog, $ulog, $clog, $dlog)"
 else
     fail 9 "unguarded lines: $nung; wine unexpected:${wbad:- none}; superproject: '$(echo $sbad)' ($glog, $ulog, $clog, $dlog)"
 fi
