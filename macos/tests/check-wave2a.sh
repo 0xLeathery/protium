@@ -33,8 +33,8 @@ WINE_WAVE_BASE=${WINE_WAVE_BASE:-4dd560606138bd6cfcdd5c140efa3134ea7d70bb}
 SUPER_WAVE_BASE=${SUPER_WAVE_BASE:-81346fed2c54ee8eada400b03c168e6e5c8f1c9f}
 WINEBOOT_TIMEOUT=${WINEBOOT_TIMEOUT:-120}
 # Wine files this wave may change, plus those of later waves (Wave 2b: TEB in a TSD slot instead
-# of x18, see check-wave2b.sh item 7).
-WAVE_FILES="configure.ac include/ddk/wdm.h dlls/ntdll/unix/virtual.c dlls/ntdll/thread.c dlls/kernelbase/sync.c dlls/kernel32/process.c dlls/kernel32/sync.c dlls/win32u/message.c include/winnt.h dlls/ntdll/signal_arm64.c dlls/ntdll/unix/signal_arm64.c include/minwindef.h dlls/ntdll/unix/unix_private.h dlls/ntdll/unix/file.c dlls/ntdll/unix/loader.c"
+# of x18, see check-wave2b.sh item 7; Wave 3a: x18 opt-in and W^X page flipping, see check-wave3a.sh item 9).
+WAVE_FILES="configure.ac include/ddk/wdm.h dlls/ntdll/unix/virtual.c dlls/ntdll/thread.c dlls/kernelbase/sync.c dlls/kernel32/process.c dlls/kernel32/sync.c dlls/win32u/message.c include/winnt.h dlls/ntdll/signal_arm64.c dlls/ntdll/unix/signal_arm64.c include/minwindef.h dlls/ntdll/unix/unix_private.h dlls/ntdll/unix/file.c dlls/ntdll/unix/loader.c dlls/ntdll/unix/server.c"
 WAVE1_FILES="configure.ac dlls/ntdll/unix/fsync.c dlls/ntdll/unix/loader.c dlls/ntdll/unix/sync.c dlls/win32u/opengl.c server/fsync.c server/inproc_sync.c dlls/ntdll/unix/system.c"
 # Definition sites of the shared user data address compiled for aarch64: object -> source
 DEF_SITES="dlls/ntdll/aarch64-windows/thread.o:dlls/ntdll/thread.c
