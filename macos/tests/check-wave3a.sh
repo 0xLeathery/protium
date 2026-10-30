@@ -484,7 +484,9 @@ ok=yes
 } >"$glog" 2>&1
 nadd=$(grep -c -E '^(guarded|UNGUARDED|wave2a-define) ' "$glog")
 # a preprocessor line or blank line that opens or closes a guard is allowed outside it
-nung=$(grep '^UNGUARDED ' "$glog" | grep -v -E '\] (#\s*(if|ifdef|endif|else)|\s*$)' | wc -l | tr -d ' ')
+# (a lone brace can be the old one that diff pairs with a new block; the unifdef check below
+# catches any real change outside the guards)
+nung=$(grep '^UNGUARDED ' "$glog" | grep -v -E '\] (#\s*(if|ifdef|endif|else)|\s*[{}]?\s*$)' | wc -l | tr -d ' ')
 [ "$nung" = 0 ] && [ "$nadd" -gt 0 ] || ok=no
 grep -q -E '^#define WX_EXCLUSIVE_HOST' <(git -C "$WINE_DIR" show HEAD:dlls/ntdll/unix/virtual.c) || ok=no
 echo "--- added lines: $nadd, outside a __APPLE__/WX_EXCLUSIVE_HOST guard (other than the guard lines): $nung" >>"$glog"
