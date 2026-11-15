@@ -66,6 +66,11 @@
 #      times for some seconds.
 # The build and the test programs come first ("build").
 #
+# Items 1, 6, 8 and 10 need the screen unlocked. While it is locked the window server reports
+# every window scaled down and moved (a 640x360 window at 160,160 as 577x325 at 219,193), and
+# the audio output takes the first 100 ms and then stalls. They fail then, without being run,
+# and say why.
+#
 # NOT YET CHECKED, so this check passing does not make Wave 4 done: that Direct3D frames are on
 # the screen (for someone to look at) and follow a resized window, and a game. The summary lists them as TODO and the exit status is
 # 3 while they are open and nothing failed (1 when an item failed, 0 only when all of it
@@ -128,6 +133,12 @@ run_timeout() {
              exit((($? & 127) == 9) ? 142 : ($? & 127) ? 128 + ($? & 127) : $? >> 8)' "$t" "$@"
 }
 nap() { perl -e 'select(undef, undef, undef, shift)' "$1"; }
+# needs_unlocked ITEM: fail the item, and return 1, when the screen is locked
+needs_unlocked() {
+    ioreg -n Root -d1 2>/dev/null | grep -q '"CGSSessionScreenIsLocked"=Yes' || return 0
+    fail "$1" "not checked: the screen is locked. The window server then reports every window scaled down and moved, and the audio output stalls; unlock the screen and run this item again"
+    return 1
+}
 
 MINGW_BIN=$TOOLCHAIN_DIR/bin
 READOBJ=$MINGW_BIN/llvm-readobj
@@ -256,7 +267,7 @@ fi  # build
 ########################################################################
 # Item 1: a window through winemac.drv
 ########################################################################
-if want 1; then
+if want 1 && needs_unlocked 1; then
 echo "== item 1: a window through winemac.drv, aarch64 and x86_64"
 wdir=$EVIDENCE_DIR/item1-window
 rm -rf "$wdir"; mkdir -p "$wdir"
@@ -422,7 +433,7 @@ fi  # item 5
 ########################################################################
 # Item 6: Direct3D 11 in a window
 ########################################################################
-if want 6; then
+if want 6 && needs_unlocked 6; then
 echo "== item 6: Direct3D 11 swap chain in a window, x86_64, $D3D_FRAMES frames"
 sdir=$EVIDENCE_DIR/item6-d3d11-window
 rm -rf "$sdir"; mkdir -p "$sdir"
@@ -561,7 +572,7 @@ fi  # item 7
 ########################################################################
 # Item 8: audio output
 ########################################################################
-if want 8; then
+if want 8 && needs_unlocked 8; then
 echo "== item 8: audio output, x86_64 x $AUDIO_RUNS"
 adir=$EVIDENCE_DIR/item8-audio
 rm -rf "$adir"; mkdir -p "$adir"
@@ -625,7 +636,7 @@ fi  # item 9
 ########################################################################
 # Item 10: Direct3D 12 in a window
 ########################################################################
-if want 10; then
+if want 10 && needs_unlocked 10; then
 echo "== item 10: Direct3D 12 swap chain in a window, x86_64, $D3D_FRAMES frames"
 wdir=$EVIDENCE_DIR/item10-d3d12-window
 rm -rf "$wdir"; mkdir -p "$wdir"
