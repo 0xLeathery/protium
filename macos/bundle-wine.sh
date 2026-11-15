@@ -34,6 +34,9 @@
 #   FEX_DIST        output of build-fex.sh (default $BUILD_ROOT/fex-dist); its ARM64EC module is
 #                   installed with Wine's own modules when it is there. Without it an x86_64
 #                   program stops with "could not load libarm64ecfex.dll".
+#   DXMT_DIST       output of build-dxmt.sh (default $BUILD_ROOT/dxmt-dist); when it is there,
+#                   its dxgi, d3d10core and d3d11 take the place of Wine's own, which have no
+#                   usable backend on this build, and its winemetal modules are added
 #   HOST_DYLIBS     Homebrew libraries that Wine opens by name at run time (default
 #                   libfreetype.6.dylib, without which Wine has no TrueType fonts). They are
 #                   copied with the Homebrew libraries they need into lib/external.
@@ -49,6 +52,7 @@ BUILD_DIR=${BUILD_DIR:-$BUILD_ROOT/wine-aarch64}
 LOADER_PROFILE=${LOADER_PROFILE:-}
 BUNDLE_ID=${BUNDLE_ID:-}
 FEX_DIST=${FEX_DIST:-$BUILD_ROOT/fex-dist}
+DXMT_DIST=${DXMT_DIST:-$BUILD_ROOT/dxmt-dist}
 HOST_DYLIBS=${HOST_DYLIBS:-libfreetype.6.dylib}
 VULKAN_DIST=${VULKAN_DIST:-$BUILD_ROOT/vulkan-dist}
 MIN_FREE_GB=${MIN_FREE_GB:-10}
@@ -160,6 +164,19 @@ if [ -f "$FEX_DIST/lib/wine/aarch64-windows/libarm64ecfex.dll" ] && [ -f "$FEX_D
     log "installed FEX's ARM64EC module from $FEX_DIST"
 else
     log "no FEX module in $FEX_DIST (macos/build-fex.sh builds it): x86_64 programs will not run"
+fi
+
+# DXMT, Direct3D 10 and 11 on Metal. Its DLLs are Wine builtins of the same names as Wine's own
+# dxgi, d3d10core and d3d11 and replace them; Wine's d3d10 and d3d10_1 stay and sit on top of
+# DXMT's d3d10core.
+if [ -f "$DXMT_DIST/lib/wine/aarch64-windows/d3d11.dll" ] && [ -f "$DXMT_DIST/lib/wine/$UNIX_DIR/winemetal.so" ]; then
+    for dll in dxgi d3d10core d3d11 winemetal; do
+        cp "$DXMT_DIST/lib/wine/aarch64-windows/$dll.dll" "$pedir/$dll.dll"
+    done
+    cp "$DXMT_DIST/lib/wine/$UNIX_DIR/winemetal.so" "$unixdir/winemetal.so"
+    log "installed DXMT $(cat "$DXMT_DIST/DESCRIBE" 2>/dev/null) from $DXMT_DIST in place of Wine's dxgi, d3d10core and d3d11"
+else
+    log "no DXMT in $DXMT_DIST (macos/build-dxmt.sh builds it): Direct3D 10 and 11 stay Wine's own"
 fi
 
 ########################################################################
