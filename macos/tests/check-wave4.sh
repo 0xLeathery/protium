@@ -33,13 +33,21 @@
 #      hardware device of feature level 11_0 or more from DXMT (winemetal.dll is in the
 #      process), compiles two HLSL shaders, draws into a texture and reads back the colour it
 #      drew, D3D_RUNS runs. No window is involved.
+#   6  Direct3D 11 in a window: d3d11_window_test_x64.exe, an x86_64 program, gets a swap chain
+#      on its own 640x360 window from DXMT, through the macdrv_functions table that winemac.drv
+#      exports, and every Present() of D3D_FRAMES frames succeeds with the back buffer the
+#      colour it was cleared to; the window server has the window meanwhile. This shows the
+#      path up to the hand-over of each frame, not that the frame is on the screen: nothing
+#      here may read the screen.
+#   7  other targets unchanged: every line of this wave in Wine is under __APPLE__ && __aarch64__
+#      (with either undefined the files are the wave base text); diff scope
 # The build and the test programs come first ("build").
 #
-# NOT YET CHECKED, so this check passing does not make Wave 4 done: a Direct3D swap chain in a
-# window (DXMT needs winemac.drv to export macdrv_functions for it, which this Wine does not), a
-# Vulkan driver (KosmicKrisp), vkd3d-proton, and a game. The summary lists them as TODO and the
-# exit status is 3 while they are open and nothing failed (1 when an item failed, 0 only when
-# all of it passed).
+# NOT YET CHECKED, so this check passing does not make Wave 4 done: that Direct3D frames are on
+# the screen (for someone to look at) and follow a resized window, a Vulkan driver
+# (KosmicKrisp), vkd3d-proton, and a game. The summary lists them as TODO and the exit status is
+# 3 while they are open and nothing failed (1 when an item failed, 0 only when all of it
+# passed).
 # Logs go to $EVIDENCE_DIR.
 
 set -u
@@ -55,6 +63,13 @@ WINEBOOT_TIMEOUT=${WINEBOOT_TIMEOUT:-300}
 RUN_TIMEOUT=${RUN_TIMEOUT:-120}
 WINDOW_HOLD_MS=${WINDOW_HOLD_MS:-3000}
 D3D_RUNS=${D3D_RUNS:-5}
+D3D_FRAMES=${D3D_FRAMES:-180}
+WINE_DIR=$PROTON_DIR/wine
+# wine and superproject commits this wave starts from (the tips after Wave 3b's last change)
+WINE_WAVE_BASE=${WINE_WAVE_BASE:-367c1ae9b0468f5d8b60b32be12cefe91eba0ffb}
+SUPER_WAVE_BASE=${SUPER_WAVE_BASE:-acfe76e00fbbbf49b10ef781d58e2bfdabb76ec5}
+# Wine files this wave may change: winemac.drv's table for DXMT.
+WAVE_FILES="dlls/winemac.drv/macdrv.h dlls/winemac.drv/window.c"
 UNIX_DIR=aarch64-unix
 export MIN_FREE_GB=${MIN_FREE_GB:-10}
 # A new prefix would otherwise wait on the Mono and Gecko install dialogs.
@@ -65,7 +80,7 @@ RESULTS=()
 FAILED=0
 TODO=0
 # CHECK_ITEMS limits the run to some items ("build" rebuilds Wine, the bundle and the test programs).
-CHECK_ITEMS=${CHECK_ITEMS:-"build 1 2 3 4 5"}
+CHECK_ITEMS=${CHECK_ITEMS:-"build 1 2 3 4 5 6 7"}
 want() { case " $CHECK_ITEMS " in *" $1 "*) return 0 ;; esac; return 1; }
 pass() { RESULTS+=("PASS  item $1: $2"); echo "PASS  item $1: $2"; }
 fail() { RESULTS+=("FAIL  item $1: $2"); echo "FAIL  item $1: $2"; FAILED=1; }
@@ -82,6 +97,8 @@ WINE=$INSTALL_DIR/bin/wine
 SERVER=$INSTALL_DIR/bin/wineserver
 TESTS_OUT=$EVIDENCE_DIR/programs
 mkdir -p "$TESTS_OUT"
+WORK=$EVIDENCE_DIR/work
+mkdir -p "$WORK"
 
 cleanup_prefix() {
     WINEPREFIX=$1 run_timeout 30 "$SERVER" -k >/dev/null 2>&1
@@ -150,6 +167,16 @@ rm -f "$TESTS_OUT/d3d11_test_x64.exe"
     "$READOBJ" --file-headers "$TESTS_OUT/d3d11_test_x64.exe" | grep -E 'Format|Machine'
 } >"$dlog" 2>&1
 if [ -f "$TESTS_OUT/d3d11_test_x64.exe" ] && grep -q '^Format: COFF-x86-64$' "$dlog"; then pass build "d3d11_test_x64.exe built, COFF-x86-64 ($dlog)"; else fail build "d3d11_test_x64.exe did not build as COFF-x86-64 ($dlog)"; fi
+dwlog=$TESTS_OUT/d3d11_window_test_x64.build.log
+rm -f "$TESTS_OUT/d3d11_window_test_x64.exe"
+{
+    echo "\$ x86_64-w64-mingw32-clang d3d11_window_test.c -ld3d11 -ldxguid -luuid -luser32"
+    "$MINGW_BIN/x86_64-w64-mingw32-clang" -O2 -Wall -o "$TESTS_OUT/d3d11_window_test_x64.exe" "$SCRIPT_DIR/d3d11_window_test.c" \
+        -ld3d11 -ldxguid -luuid -luser32
+    echo "exit=$?"
+    "$READOBJ" --file-headers "$TESTS_OUT/d3d11_window_test_x64.exe" | grep -E 'Format|Machine'
+} >"$dwlog" 2>&1
+if [ -f "$TESTS_OUT/d3d11_window_test_x64.exe" ] && grep -q '^Format: COFF-x86-64$' "$dwlog"; then pass build "d3d11_window_test_x64.exe built, COFF-x86-64 ($dwlog)"; else fail build "d3d11_window_test_x64.exe did not build as COFF-x86-64 ($dwlog)"; fi
 llog=$TESTS_OUT/list_windows.build.log
 rm -f "$TESTS_OUT/list_windows"
 clang -O1 -Wall -Werror -o "$TESTS_OUT/list_windows" "$SCRIPT_DIR/list_windows.c" -framework CoreGraphics -framework CoreFoundation >"$llog" 2>&1
@@ -315,7 +342,146 @@ else
 fi
 fi  # item 5
 
-todo "a Direct3D swap chain in a window, a Vulkan driver (KosmicKrisp), vkd3d-proton and a game have no items yet; Wave 4 is not done"
+########################################################################
+# Item 6: Direct3D 11 in a window
+########################################################################
+if want 6; then
+echo "== item 6: Direct3D 11 swap chain in a window, x86_64, $D3D_FRAMES frames"
+sdir=$EVIDENCE_DIR/item6-d3d11-window
+rm -rf "$sdir"; mkdir -p "$sdir"
+PREFIX=$BUILD_ROOT/wave4-prefix-d3d11-window
+rm -rf "$PREFIX"; mkdir -p "$PREFIX"
+# set the prefix up first and wait for that session to end, so that the timed run is alone
+WINEPREFIX=$PREFIX run_timeout "$WINEBOOT_TIMEOUT" "$WINE" "$TESTS_OUT/d3d11_window_test_x64.exe" 2 >"$sdir/setup.stdout" 2>"$sdir/setup.stderr"
+echo "prefix setup: exit=$? $(tr -d '\r' <"$sdir/setup.stdout")" >>"$sdir/summary.txt"
+WINEPREFIX=$PREFIX run_timeout 60 "$SERVER" -w >/dev/null 2>&1
+SWAP_LINE="d3d11 window: dxmt 1, swap chain 0, 640x360, presented $D3D_FRAMES/$D3D_FRAMES, back buffer [0-9a-f]{6}"
+D3D_WINDOW=$(printf '\t640x360\t160,160\t[0-9-]+\t%s\t[01]$' "$BUNDLE_LOADER")
+WINEPREFIX=$PREFIX run_timeout "$RUN_TIMEOUT" "$WINE" "$TESTS_OUT/d3d11_window_test_x64.exe" "$D3D_FRAMES" >"$sdir/run.stdout" 2>"$sdir/run.stderr" &
+spid=$!
+# the frames take a few seconds at the display's rate; ask the window server while they run
+nopen=0
+for i in $(seq 1 40); do
+    nap 0.25
+    nopen=$("$TESTS_OUT/list_windows" "$INSTALL_DIR" 2>/dev/null | tee "$sdir/mac-open.txt" | grep -c -E "$D3D_WINDOW")
+    [ "$nopen" -ge 1 ] && break
+    kill -0 $spid 2>/dev/null || break
+done
+wait $spid
+rc=$?
+WINEPREFIX=$PREFIX run_timeout 60 "$SERVER" -w >/dev/null 2>&1
+out=$(tr -d '\r' <"$sdir/run.stdout" | head -1)
+line=no; echo "$out" | grep -Eqx "$SWAP_LINE" && line=yes
+nview=$(grep -a -c 'Failed to create metal view' "$sdir/run.stderr")
+echo "run: exit=$rc line=$line ($out); the window server had the window while it ran: $nopen; DXMT's 'Failed to create metal view': $nview" >>"$sdir/summary.txt"
+cleanup_prefix "$PREFIX"
+if [ "$rc" = 0 ] && [ $line = yes ] && [ "$nopen" -ge 1 ] && [ "$nview" = 0 ]; then
+    pass 6 "d3d11_window_test_x64.exe got a swap chain on its window from DXMT and presented every frame: '$out' ($sdir/summary.txt)"
+else
+    fail 6 "exit $rc, line $line: '$out'; window listed $nopen; 'Failed to create metal view' $nview ($sdir/summary.txt)"
+fi
+fi  # item 6
+
+########################################################################
+# Item 7: other targets unchanged
+########################################################################
+if want 7; then
+echo "== item 7: other targets unchanged"
+glog=$EVIDENCE_DIR/item7-guards.log
+ulog=$EVIDENCE_DIR/item7-unifdef.log
+dlog=$EVIDENCE_DIR/item7-diff.log
+: >"$ulog"
+ok=yes
+# every line added since the wave base, with the stack of #if conditions it is in
+{
+    echo "\$ git -C wine diff $WINE_WAVE_BASE HEAD -- $WAVE_FILES: every added line with its enclosing #if stack"
+    for f in $WAVE_FILES; do
+        git -C "$WINE_DIR" show "HEAD:$f" >"$WORK/guard.c"
+        git -C "$WINE_DIR" diff -U0 "$WINE_WAVE_BASE" HEAD -- "$f" | sed -n 's/^@@ -[0-9,]* +\([0-9]*\),\{0,1\}\([0-9]*\) @@.*/\1 \2/p' >"$WORK/hunks"
+        perl -e '
+            my ($file, $hunks) = @ARGV; open my $fh, "<", $file or die; my @lines = <$fh>;
+            open my $hh, "<", $hunks or die; my %added;
+            while (<$hh>) { my ($s, $n) = split; $n = 1 if $n eq ""; $added{$_} = 1 for $s .. $s + $n - 1; }
+            my @stack; my $i = 0;
+            for my $l (@lines) {
+                $i++;
+                # The conditions the line is in. The #if, #else and #endif lines themselves and empty
+                # lines are not judged here: diff pairs a new #endif or an empty line with an old one
+                # as it likes, and the unifdef comparison below is what shows that the conditionals
+                # leave the other targets their old text.
+                my $directive = 0;
+                if ($l =~ /^\s*#\s*(if|ifdef|ifndef)\b(.*)/) { push @stack, "$1$2"; $directive = 1; }
+                elsif ($l =~ /^\s*#\s*(elif)\b(.*)/) { $stack[-1] = "$1$2 (after $stack[-1])"; $directive = 1; }
+                elsif ($l =~ /^\s*#\s*else\b/) { $stack[-1] = "else of $stack[-1]"; $directive = 1; }
+                elsif ($l =~ /^\s*#\s*endif\b/) { pop @stack; $directive = 1; }
+                next unless $added{$i};
+                next if $directive || $l =~ /^\s*$/;
+                my @in = @stack;
+                my @g = grep { /^if defined\(__APPLE__\) && defined\(__aarch64__\)\s*$|^ifdef WX_EXCLUSIVE_HOST\s*$/ } @in;
+                printf "%s %s:%d [%s] %s", (@g ? "guarded" : "UNGUARDED"), $ARGV[2], $i, join(" > ", map { s/\s+/ /gr } @in), $l;
+            }' "$WORK/guard.c" "$WORK/hunks" "$f"
+    done
+} >"$glog" 2>&1
+nadd=$(grep -c -E '^(guarded|UNGUARDED) ' "$glog")
+nung=$(grep -c '^UNGUARDED ' "$glog")
+[ "$nung" = 0 ] && [ "$nadd" -gt 0 ] || ok=no
+echo "--- added lines other than conditionals and empty lines: $nadd, outside a defined(__APPLE__) && defined(__aarch64__) or WX_EXCLUSIVE_HOST guard: $nung" >>"$glog"
+# WX_EXCLUSIVE_HOST counts as that guard because it is only ever defined inside it
+nwxbad=0
+for f in $WAVE_FILES; do
+    bad=$(git -C "$WINE_DIR" show "HEAD:$f" | perl -ne '
+        if (/^\s*#\s*(if|ifdef|ifndef)\b(.*)/) { push @stack, "$1$2"; }
+        elsif (/^\s*#\s*(elif|else)\b/) { $stack[-1] = "other branch of $stack[-1]"; }
+        elsif (/^\s*#\s*endif\b/) { pop @stack; }
+        elsif (/^\s*#\s*(define|undef)\s+WX_EXCLUSIVE_HOST\b/) {
+            $n++ unless grep { /^if defined\(__APPLE__\) && defined\(__aarch64__\)\s*$/ } @stack;
+        }
+        END { print $n + 0 }')
+    [ "$bad" = 0 ] || { nwxbad=$((nwxbad + bad)); echo "$f: WX_EXCLUSIVE_HOST defined or undefined outside the guard, $bad times" >>"$glog"; }
+done
+[ "$nwxbad" = 0 ] || ok=no
+# Source level: for every other system (__APPLE__ undefined) and for x86_64 macOS (__aarch64__
+# undefined) each file is the wave base text.
+for f in $WAVE_FILES; do
+    for flags in "-U__APPLE__ -UWX_EXCLUSIVE_HOST" "-D__APPLE__ -U__aarch64__ -UWX_EXCLUSIVE_HOST"; do
+        git -C "$WINE_DIR" show "$WINE_WAVE_BASE:$f" | unifdef $flags | cat -s >"$WORK/unifdef.base" 2>/dev/null
+        git -C "$WINE_DIR" show "HEAD:$f" | unifdef $flags | cat -s >"$WORK/unifdef.new" 2>/dev/null
+        if [ -s "$WORK/unifdef.new" ] && cmp -s "$WORK/unifdef.base" "$WORK/unifdef.new"; then
+            echo "unifdef $flags $f: identical to $WINE_WAVE_BASE" >>"$ulog"
+        else
+            ok=no; echo "unifdef $flags $f: DIFFERS from $WINE_WAVE_BASE" >>"$ulog"
+            diff "$WORK/unifdef.base" "$WORK/unifdef.new" | head -20 >>"$ulog"
+        fi
+    done
+done
+{
+    echo "\$ git -C wine diff --stat $WINE_WAVE_BASE HEAD"
+    git -C "$WINE_DIR" diff --stat "$WINE_WAVE_BASE" HEAD
+    echo "\$ git -C wine log --format='%h %s' $WINE_WAVE_BASE..HEAD"
+    git -C "$WINE_DIR" log --format='%h %s' "$WINE_WAVE_BASE..HEAD"
+    echo "\$ git -C wine status --porcelain"
+    git -C "$WINE_DIR" status --porcelain
+    echo "\$ git diff --stat $SUPER_WAVE_BASE HEAD   (superproject)"
+    git -C "$PROTON_DIR" diff --stat "$SUPER_WAVE_BASE" HEAD
+    echo "\$ git diff --raw $SUPER_WAVE_BASE HEAD -- wine   (submodule pointer must be unchanged)"
+    git -C "$PROTON_DIR" diff --raw "$SUPER_WAVE_BASE" HEAD -- wine
+} >"$dlog" 2>&1
+wbad=""
+for f in $(git -C "$WINE_DIR" diff --name-only "$WINE_WAVE_BASE" HEAD); do
+    case " $WAVE_FILES " in *" $f "*) ;; *) wbad="$wbad $f" ;; esac
+done
+wdirty=$(git -C "$WINE_DIR" status --porcelain --untracked-files=all | head -5)
+sbad=$(git -C "$PROTON_DIR" diff --name-only "$SUPER_WAVE_BASE" HEAD | grep -v '^macos/')
+[ -n "$(git -C "$PROTON_DIR" diff --raw "$SUPER_WAVE_BASE" HEAD -- wine)" ] && sbad="$sbad wine(pointer)"
+[ -z "$wbad" ] && [ -z "$wdirty" ] && [ -z "$sbad" ] || ok=no
+if [ $ok = yes ]; then
+    pass 7 "$nadd lines added since $WINE_WAVE_BASE in $(echo $WAVE_FILES), all under defined(__APPLE__) && defined(__aarch64__) or WX_EXCLUSIVE_HOST, which is only defined under it; the files are the wave base text with __APPLE__ or __aarch64__ undefined; superproject changes only in macos/ ($glog, $ulog, $dlog)"
+else
+    fail 7 "unguarded lines: $nung of $nadd; WX_EXCLUSIVE_HOST defined outside the guard: $nwxbad; wine unexpected:${wbad:- none}; wine uncommitted: '$wdirty'; superproject: '$(echo $sbad)' ($glog, $ulog, $dlog)"
+fi
+fi  # item 7
+
+todo "that Direct3D frames are on the screen and follow a resized window, a Vulkan driver (KosmicKrisp), vkd3d-proton and a game have no items yet; Wave 4 is not done"
 
 echo
 echo "== summary"
