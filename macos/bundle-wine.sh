@@ -42,6 +42,9 @@
 #                   copied with the Homebrew libraries they need into lib/external.
 #   VULKAN_DIST     output of build-vulkan.sh (default $BUILD_ROOT/vulkan-dist); its loader is
 #                   installed the same way when it is there
+#   MESA_DIST       output of build-mesa.sh (default $BUILD_ROOT/mesa-dist); when it and the
+#                   loader are there, its Vulkan driver, KosmicKrisp, is installed, with its
+#                   manifest in share/vulkan/icd.d, the directory ntdll names to the loader
 #   MIN_FREE_GB     abort if less free disk space than this (default 10)
 
 set -euo pipefail
@@ -55,6 +58,9 @@ FEX_DIST=${FEX_DIST:-$BUILD_ROOT/fex-dist}
 DXMT_DIST=${DXMT_DIST:-$BUILD_ROOT/dxmt-dist}
 HOST_DYLIBS=${HOST_DYLIBS:-libfreetype.6.dylib}
 VULKAN_DIST=${VULKAN_DIST:-$BUILD_ROOT/vulkan-dist}
+MESA_DIST=${MESA_DIST:-$BUILD_ROOT/mesa-dist}
+VULKAN_DRIVER=libvulkan_kosmickrisp.dylib
+VULKAN_ICD_JSON=kosmickrisp_mesa_icd.aarch64.json
 MIN_FREE_GB=${MIN_FREE_GB:-10}
 ENTITLEMENTS=$SCRIPT_DIR/wine-loader.entitlements
 UNIX_DIR=aarch64-unix
@@ -220,6 +226,26 @@ done
 if [ -f "$VULKAN_DIST/lib/libvulkan.1.dylib" ]; then
     copy_host_dylib "$VULKAN_DIST/lib/libvulkan.1.dylib"
     ln -sf "../../external/libvulkan.1.dylib" "$unixdir/libvulkan.1.dylib"
+fi
+# KosmicKrisp, the Vulkan driver. The loader finds a driver by its manifest, and ntdll.so names
+# share/vulkan/icd.d of the install to the loader as the only place to look (VK_DRIVER_FILES),
+# so the manifest goes there. It names the driver in lib/external by a path relative to itself.
+# The loader would also look in the Resources of the main bundle by itself, but only a process
+# started by the path of the loader in wine.app has that bundle, not one started as bin/wine.
+if [ -f "$VULKAN_DIST/lib/libvulkan.1.dylib" ] && [ -f "$MESA_DIST/lib/$VULKAN_DRIVER" ] && [ -f "$MESA_DIST/share/vulkan/icd.d/$VULKAN_ICD_JSON" ]; then
+    copy_host_dylib "$MESA_DIST/lib/$VULKAN_DRIVER"
+    icd_dir=$INSTALL_DIR/share/vulkan/icd.d
+    icd_path=../../../lib/external/$VULKAN_DRIVER
+    mkdir -p "$icd_dir"
+    sed "s|\"library_path\": *\"[^\"]*\"|\"library_path\": \"$icd_path\"|" "$MESA_DIST/share/vulkan/icd.d/$VULKAN_ICD_JSON" >"$icd_dir/$VULKAN_ICD_JSON"
+    grep -qF "\"$icd_path\"" "$icd_dir/$VULKAN_ICD_JSON" || die "$VULKAN_ICD_JSON has no library_path to rewrite"
+    [ "$(cd "$icd_dir" && realpath "$icd_path" 2>/dev/null)" = "$(realpath "$extdir/$VULKAN_DRIVER")" ] \
+        || die "$icd_path does not lead from $icd_dir to $extdir/$VULKAN_DRIVER"
+    grep -qaF VK_DRIVER_FILES "$unixdir/ntdll.so" \
+        || die "ntdll.so does not name VK_DRIVER_FILES: this Wine does not point the Vulkan loader at share/vulkan/icd.d"
+    log "installed the Vulkan driver KosmicKrisp (Mesa $(cat "$MESA_DIST/DESCRIBE" 2>/dev/null)) with its manifest in share/vulkan/icd.d"
+else
+    log "no Vulkan driver in $MESA_DIST (macos/build-mesa.sh builds it), or no loader: Vulkan has no device"
 fi
 log "host libraries in lib/external: $(ls "$extdir" | tr '\n' ' ')"
 
