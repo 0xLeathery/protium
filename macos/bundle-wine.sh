@@ -34,6 +34,13 @@
 #   FEX_DIST        output of build-fex.sh (default $BUILD_ROOT/fex-dist); its ARM64EC module is
 #                   installed with Wine's own modules when it is there. Without it an x86_64
 #                   program stops with "could not load libarm64ecfex.dll".
+#   WOW64           whether the 32-bit side goes in: Wine's i386 DLLs, when the build has them
+#                   (WINE_ARCHS with i386), and FEX's libwow64fex. "auto" (the default) is yes
+#                   with LOADER_PROFILE and no without: a 32-bit process lives below 4 GB,
+#                   where macOS maps nothing without the cross-architecture entitlement, and
+#                   with the DLLs there every new prefix starts a 32-bit process that aborts
+#                   (an assertion in ntdll's build_wow64_parameters, and a crash report each
+#                   time). "yes" and "no" force it.
 #   DXMT_DIST       output of build-dxmt.sh (default $BUILD_ROOT/dxmt-dist); when it is there,
 #                   its dxgi, d3d10core and d3d11 take the place of Wine's own, which have no
 #                   usable backend on this build, and its winemetal modules are added
@@ -61,6 +68,7 @@ FEX_DIST=${FEX_DIST:-$BUILD_ROOT/fex-dist}
 DXMT_DIST=${DXMT_DIST:-$BUILD_ROOT/dxmt-dist}
 VKD3D_DIST=${VKD3D_DIST:-$BUILD_ROOT/vkd3d-proton-dist}
 HOST_DYLIBS=${HOST_DYLIBS:-libfreetype.6.dylib}
+WOW64=${WOW64:-auto}
 VULKAN_DIST=${VULKAN_DIST:-$BUILD_ROOT/vulkan-dist}
 MESA_DIST=${MESA_DIST:-$BUILD_ROOT/mesa-dist}
 VULKAN_DRIVER=libvulkan_kosmickrisp.dylib
@@ -167,11 +175,35 @@ make -C "$BUILD_DIR" install-lib >"$install_log" 2>&1 || die "make install-lib f
 [ -f "$unixdir/wine" ] && [ ! -L "$unixdir/wine" ] || die "make install-lib left no loader at $unixdir/wine"
 [ -f "$unixdir/ntdll.so" ] || die "make install-lib left no $unixdir/ntdll.so"
 
+# The 32-bit side: only where a 32-bit process can exist (see WOW64 above)
+case "$WOW64" in
+    auto) wow64=no; [ -z "$LOADER_PROFILE" ] || wow64=yes ;;
+    yes|no) wow64=$WOW64 ;;
+    *) die "WOW64 is '$WOW64' (auto, yes or no)" ;;
+esac
+i386dir=$INSTALL_DIR/lib/wine/i386-windows
+if [ -d "$i386dir" ]; then
+    if [ $wow64 = yes ]; then
+        log "32-bit side: $(ls "$i386dir" | wc -l | tr -d ' ') files in lib/wine/i386-windows"
+    else
+        rm -rf "$i386dir"
+        log "32-bit side left out (no LOADER_PROFILE: nothing can be mapped below 4 GB, where a 32-bit process lives)"
+    fi
+elif [ $wow64 = yes ]; then
+    log "no 32-bit side in this build (WINE_ARCHS without i386)"
+fi
+
 # FEX's ARM64EC module, where Proton's Makefile.in installs it
 if [ -f "$FEX_DIST/lib/wine/aarch64-windows/libarm64ecfex.dll" ] && [ -f "$FEX_DIST/lib/wine/$UNIX_DIR/libarm64ecfex.so" ]; then
     cp "$FEX_DIST/lib/wine/aarch64-windows/libarm64ecfex.dll" "$pedir/libarm64ecfex.dll"
     cp "$FEX_DIST/lib/wine/$UNIX_DIR/libarm64ecfex.so" "$unixdir/libarm64ecfex.so"
     log "installed FEX's ARM64EC module from $FEX_DIST"
+    # and its module for 32-bit code, which wow64.dll loads in a WoW64 process
+    if [ $wow64 = yes ] && [ -d "$i386dir" ] && [ -f "$FEX_DIST/lib/wine/aarch64-windows/libwow64fex.dll" ] && [ -f "$FEX_DIST/lib/wine/$UNIX_DIR/libwow64fex.so" ]; then
+        cp "$FEX_DIST/lib/wine/aarch64-windows/libwow64fex.dll" "$pedir/libwow64fex.dll"
+        cp "$FEX_DIST/lib/wine/$UNIX_DIR/libwow64fex.so" "$unixdir/libwow64fex.so"
+        log "installed FEX's WoW64 module from $FEX_DIST"
+    fi
 else
     log "no FEX module in $FEX_DIST (macos/build-fex.sh builds it): x86_64 programs will not run"
 fi
