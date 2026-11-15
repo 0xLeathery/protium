@@ -47,8 +47,8 @@ RUN_TIMEOUT=${RUN_TIMEOUT:-120}
 TEB_TEST_RUNS=${TEB_TEST_RUNS:-20}
 PROBE_RUNS=${PROBE_RUNS:-10}
 # Wine files this wave may change, plus those of Wave 3a (x18 opt-in, W^X page flipping, see
-# check-wave3a.sh item 9) and Wave 3b (the loader in an app bundle, see check-wave3b.sh item 6).
-WAVE_FILES="configure.ac include/winnt.h dlls/ntdll/signal_arm64.c dlls/ntdll/unix/signal_arm64.c include/minwindef.h dlls/ntdll/unix/unix_private.h dlls/ntdll/unix/file.c dlls/ntdll/unix/loader.c dlls/ntdll/unix/virtual.c dlls/ntdll/unix/server.c loader/main.c"
+# check-wave3a.sh item 9) and Wave 3b (the loader in an app bundle and the ARM64 ID registers, see check-wave3b.sh item 6).
+WAVE_FILES="configure.ac include/winnt.h dlls/ntdll/signal_arm64.c dlls/ntdll/unix/signal_arm64.c include/minwindef.h dlls/ntdll/unix/unix_private.h dlls/ntdll/unix/file.c dlls/ntdll/unix/loader.c dlls/ntdll/unix/virtual.c dlls/ntdll/unix/server.c loader/main.c dlls/ntdll/unix/system.c"
 # PE sources whose objects item 7 compares without the define: the PE file this wave changes, and
 # users of NtCurrentTeb() (include/winnt.h) in several modules. object:source
 PE_COMPARE="dlls/ntdll/aarch64-windows/signal_arm64.o:dlls/ntdll/signal_arm64.c
