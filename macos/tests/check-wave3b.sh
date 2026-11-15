@@ -47,9 +47,11 @@
 # come first ("build").
 #
 # NOT YET CHECKED, so this check passing does not make Wave 3b done: 4K pages, memory below 4 GB
-# (shared user data back at 0x7ffe0000) and hardware TSO. They need the profile. The summary
-# lists them as TODO and the exit status is 3 while they are open and nothing failed (1 when an
-# item failed, 0 only when all of it passed).
+# (shared user data back at 0x7ffe0000) and hardware TSO. They need the profile. The loader's
+# code for the first two is in Wine (it execs itself with 4K pages and reserves the low 4GB when
+# it can map there) but has never run: without the profile it goes on as before, which is what
+# items 2 to 4 see. The summary lists all three as TODO and the exit status is 3 while they are
+# open and nothing failed (1 when an item failed, 0 only when all of it passed).
 # Logs go to $EVIDENCE_DIR.
 
 set -u
@@ -595,7 +597,7 @@ else
 fi
 fi  # item 8
 
-todo "4K pages, memory below 4 GB and hardware TSO have no items yet (they need LOADER_PROFILE); Wave 3b is not done"
+todo "4K pages, memory below 4 GB and hardware TSO have no items yet (they need LOADER_PROFILE; the loader's code for the first two is written and has never run); Wave 3b is not done"
 
 echo
 echo "== summary"
