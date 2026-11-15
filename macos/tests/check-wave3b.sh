@@ -22,7 +22,8 @@
 #      ARM64EC module is installed with Wine's modules
 #   2  the loader finds ntdll.so started through bin/wine, through the link next to ntdll.so and
 #      by its path in the bundle (wine --version)
-#   3  bin/wine hello.exe prints its line and exits 0, HELLO_RUNS runs (the first in a fresh prefix)
+#   3  bin/wine hello.exe prints its line and exits 0, HELLO_RUNS runs (the first in a fresh
+#      prefix), and no allocation is tried past the end of the host address space
 #   4  bin/wine wineboot -u in a fresh prefix, WINEBOOT_RUNS runs: exit 0, no fault, and every
 #      process Wine starts is started by the loader's path inside wine.app, none through the link
 #      (a process started through the link has no bundle)
@@ -68,9 +69,9 @@ FEX_RUNS=${FEX_RUNS:-5}
 UNIX_DIR=aarch64-unix
 X18_ENTITLEMENT=com.apple.security.custom-x18-abi-toggle
 CROSS_ARCH_ENTITLEMENT=com.apple.developer.cross-architecture-support
-# Wine files this wave may change: the loader in an app bundle, and the ARM64 ID registers that
-# FEX takes the CPU features of x86 code from.
-WAVE_FILES="loader/main.c dlls/ntdll/unix/loader.c dlls/ntdll/unix/system.c"
+# Wine files this wave may change: the loader in an app bundle, the ARM64 ID registers that FEX
+# takes the CPU features of x86 code from, and the end of the host address space.
+WAVE_FILES="loader/main.c dlls/ntdll/unix/loader.c dlls/ntdll/unix/system.c dlls/ntdll/unix/virtual.c"
 # The build scripts stop below 20 GB free by default; 10 GB is the limit agreed for this work.
 export MIN_FREE_GB=${MIN_FREE_GB:-10}
 # A new prefix would otherwise wait on the Mono and Gecko install dialogs.
@@ -288,10 +289,13 @@ for i in $(seq 1 "$HELLO_RUNS"); do
     echo "run $i: exit=$rc line=$line" >>"$hdir/summary.txt"
 done
 cleanup_prefix "$PREFIX"
-if [ "$hpass" = "$HELLO_RUNS" ]; then
-    pass 3 "hello.exe printed its line and exited 0 in $hpass/$HELLO_RUNS runs through bin/wine, the first in a fresh prefix ($hdir/summary.txt)"
+# an allocation past the end of the host address space fails with this message
+nmap=$(cat "$hdir"/run*.stderr | grep -c 'try_map_free_area mmap() error')
+echo "try_map_free_area mmap() errors in all runs: $nmap" >>"$hdir/summary.txt"
+if [ "$hpass" = "$HELLO_RUNS" ] && [ "$nmap" = 0 ]; then
+    pass 3 "hello.exe printed its line and exited 0 in $hpass/$HELLO_RUNS runs through bin/wine, the first in a fresh prefix; no failed mapping ($hdir/summary.txt)"
 else
-    fail 3 "hello.exe passed $hpass/$HELLO_RUNS runs through bin/wine ($hdir/summary.txt)"
+    fail 3 "hello.exe passed $hpass/$HELLO_RUNS runs through bin/wine, failed mappings: $nmap ($hdir/summary.txt)"
 fi
 fi  # item 3
 
