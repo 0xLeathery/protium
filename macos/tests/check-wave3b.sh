@@ -32,7 +32,9 @@
 #      (with either undefined the files are the wave base text); diff scope
 #   7  through FEX: bin/wine runs hello.exe built as ARM64EC and hello_x64.exe, an x86_64
 #      program built with the mingw compiler and its CRT; both print their line and exit 0,
-#      FEX_RUNS runs, and libarm64ecfex.dll is loaded as a builtin
+#      FEX_RUNS runs, and libarm64ecfex.dll is loaded as a builtin. cpuid_x64.exe is told that
+#      the CPU has SSE4.2, PCLMULQDQ, AES and SHA, which every Apple Silicon CPU has the ARM
+#      counterparts of, and Wine no longer says that the ID registers are a stub
 # The build (macos/build-wine.sh, macos/build-fex.sh, macos/bundle-wine.sh) and the test programs
 # come first ("build").
 #
@@ -66,8 +68,9 @@ FEX_RUNS=${FEX_RUNS:-5}
 UNIX_DIR=aarch64-unix
 X18_ENTITLEMENT=com.apple.security.custom-x18-abi-toggle
 CROSS_ARCH_ENTITLEMENT=com.apple.developer.cross-architecture-support
-# Wine files this wave may change: the loader in an app bundle.
-WAVE_FILES="loader/main.c dlls/ntdll/unix/loader.c"
+# Wine files this wave may change: the loader in an app bundle, and the ARM64 ID registers that
+# FEX takes the CPU features of x86 code from.
+WAVE_FILES="loader/main.c dlls/ntdll/unix/loader.c dlls/ntdll/unix/system.c"
 # The build scripts stop below 20 GB free by default; 10 GB is the limit agreed for this work.
 export MIN_FREE_GB=${MIN_FREE_GB:-10}
 # A new prefix would otherwise wait on the Mono and Gecko install dialogs.
@@ -172,6 +175,15 @@ rm -f "$TESTS_OUT/hello_x64.exe"
     "$OBJDUMP" -p "$TESTS_OUT/hello_x64.exe" | grep 'DLL Name'
 } >"$xlog" 2>&1
 if [ -f "$TESTS_OUT/hello_x64.exe" ] && grep -q '^Format: COFF-x86-64$' "$xlog"; then pass build "hello_x64.exe built, COFF-x86-64 ($xlog)"; else fail build "hello_x64.exe did not build as COFF-x86-64 ($xlog)"; fi
+ilog=$TESTS_OUT/cpuid_x64.build.log
+rm -f "$TESTS_OUT/cpuid_x64.exe"
+{
+    echo "\$ x86_64-w64-mingw32-clang cpuid_x64.c"
+    "$MINGW_BIN/x86_64-w64-mingw32-clang" -O2 -Wall -o "$TESTS_OUT/cpuid_x64.exe" "$SCRIPT_DIR/cpuid_x64.c"
+    echo "exit=$?"
+    "$READOBJ" --file-headers "$TESTS_OUT/cpuid_x64.exe" | grep -E 'Format|Machine'
+} >"$ilog" 2>&1
+if [ -f "$TESTS_OUT/cpuid_x64.exe" ] && grep -q '^Format: COFF-x86-64$' "$ilog"; then pass build "cpuid_x64.exe built, COFF-x86-64 ($ilog)"; else fail build "cpuid_x64.exe did not build as COFF-x86-64 ($ilog)"; fi
 plog=$TESTS_OUT/proc_exec_path.build.log
 rm -f "$TESTS_OUT/proc_exec_path"
 clang -O1 -Wall -Werror -o "$TESTS_OUT/proc_exec_path" "$SCRIPT_DIR/proc_exec_path.c" >"$plog" 2>&1
@@ -468,6 +480,17 @@ for i in $(seq 1 "$FEX_RUNS"); do
         echo "run $i $p.exe: exit=$rc line=$line" >>"$fdir/summary.txt"
     done
 done
+# the CPU features x86 code is told, which FEX derives from the ARM64 ID registers Wine reports
+WINEPREFIX=$PREFIX run_timeout "$RUN_TIMEOUT" "$WINE" "$TESTS_OUT/cpuid_x64.exe" >"$fdir/cpuid_x64.stdout" 2>"$fdir/cpuid_x64.stderr"
+crc=$?
+cpuid=$(tr -d '\r' <"$fdir/cpuid_x64.stdout" | grep '^cpuid: ' | head -1)
+nstub=$(grep -c 'get_core_id_regs_arm64 stub' "$fdir/cpuid_x64.stderr")
+cpuok=yes
+[ "$crc" = 0 ] && [ "$nstub" = 0 ] || cpuok=no
+for f in sse4.2 pclmulqdq aes sha; do
+    case " $cpuid " in *" $f=1 "*) ;; *) cpuok=no ;; esac
+done
+echo "cpuid_x64.exe: exit=$crc, ID register stub messages: $nstub, ${cpuid:-no cpuid line}" >>"$fdir/summary.txt"
 cleanup_prefix "$PREFIX"
 # FEX's module is the builtin from the install tree, in both kinds of process
 fexload=0
@@ -475,10 +498,10 @@ for p in hello_ec hello_x64; do
     grep -q -E 'Loaded L"C:\\\\windows\\\\system32\\\\libarm64ecfex\.dll" at [0-9A-F]+: builtin' "$fdir/$p.run1.stderr" && fexload=$((fexload + 1))
 done
 echo "libarm64ecfex.dll loaded as a builtin in the first run of: $fexload/2 programs" >>"$fdir/summary.txt"
-if [ "$ecpass" = "$FEX_RUNS" ] && [ "$xpass" = "$FEX_RUNS" ] && [ "$fexload" = 2 ]; then
-    pass 7 "hello_ec.exe (ARM64EC) $ecpass/$FEX_RUNS and hello_x64.exe (x86_64) $xpass/$FEX_RUNS printed their line and exited 0 through bin/wine; libarm64ecfex.dll loaded as a builtin in both ($fdir/summary.txt)"
+if [ "$ecpass" = "$FEX_RUNS" ] && [ "$xpass" = "$FEX_RUNS" ] && [ "$fexload" = 2 ] && [ $cpuok = yes ]; then
+    pass 7 "hello_ec.exe (ARM64EC) $ecpass/$FEX_RUNS and hello_x64.exe (x86_64) $xpass/$FEX_RUNS printed their line and exited 0 through bin/wine; libarm64ecfex.dll loaded as a builtin in both; x86 code is told '$cpuid' ($fdir/summary.txt)"
 else
-    fail 7 "hello_ec.exe passed $ecpass/$FEX_RUNS, hello_x64.exe $xpass/$FEX_RUNS, libarm64ecfex.dll builtin in $fexload/2 ($fdir/summary.txt)"
+    fail 7 "hello_ec.exe passed $ecpass/$FEX_RUNS, hello_x64.exe $xpass/$FEX_RUNS, libarm64ecfex.dll builtin in $fexload/2, cpuid ok=$cpuok: '${cpuid:-no cpuid line}', stub messages $nstub ($fdir/summary.txt)"
 fi
 fi  # item 7
 
