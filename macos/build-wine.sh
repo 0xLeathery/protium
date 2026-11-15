@@ -22,6 +22,8 @@
 #                           builds this way: in GNU mode the compiler defines __x86_64__ for it
 #                           and Wine's headers then pick their x86 inline assembly.
 #                  A build directory keeps the mode it was first built with.
+#   VULKAN_DIST    output of macos/build-vulkan.sh; when set, Wine is built with Vulkan and finds
+#                  the loader's name there (default: none, Wine is built without Vulkan)
 #   JOBS           make parallelism (default 12)
 #   MIN_FREE_GB    abort if less free disk space than this (default 20)
 
@@ -36,6 +38,7 @@ BUILD_DIR=${BUILD_DIR:-$BUILD_ROOT/wine-aarch64}
 TOOLCHAIN_DIR=${TOOLCHAIN_DIR:-/Users/annon/projects/proton-macos-toolchain/llvm-mingw-20261020-ucrt-macos-universal}
 WINE_ARCHS=${WINE_ARCHS:-aarch64}
 PE_MODE=${PE_MODE:-mingw}
+VULKAN_DIST=${VULKAN_DIST:-}
 JOBS=${JOBS:-12}
 MIN_FREE_GB=${MIN_FREE_GB:-20}
 
@@ -143,6 +146,14 @@ else
     done
 fi
 
+# configure links -lvulkan to learn the loader's file name, which Wine opens at run time
+if [ -n "$VULKAN_DIST" ]; then
+    [ -f "$VULKAN_DIST/lib/libvulkan.1.dylib" ] || die "no Vulkan loader in $VULKAN_DIST (run macos/build-vulkan.sh)"
+    vulkan_args=(--with-vulkan "LDFLAGS=-L$VULKAN_DIST/lib")
+else
+    vulkan_args=(--without-vulkan)
+fi
+
 CONFIGURE_ARGS=(
     --prefix="$BUILD_ROOT/install-aarch64"
     --enable-archs="$WINE_ARCHS"
@@ -158,7 +169,7 @@ CONFIGURE_ARGS=(
     --without-gettext --without-gettextpo --without-gphoto --without-gnutls --without-gssapi
     --without-hwloc --without-inotify --without-krb5 --without-netapi --without-pcap
     --without-pcsclite --without-piper --without-sane --without-sdl --without-udev --without-usb
-    --without-v4l2 --without-vosk --without-vulkan
+    --without-v4l2 --without-vosk "${vulkan_args[@]}"
     # Proton modules that need Linux-only libraries absent here (libdrm for amd_ags_x64, ffmpeg for winedmo)
     --disable-amd_ags_x64 --disable-winedmo
     BISON="$BISON_BIN/bison"
