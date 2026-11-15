@@ -29,12 +29,17 @@
 #      Wine does not say that it has no Vulkan. There is no Vulkan driver yet: creating an
 #      instance gives VK_ERROR_INCOMPATIBLE_DRIVER, and the item wants the host loader's own
 #      "Found no drivers" then, which shows that it is the one that answered
+#   5  Direct3D 11 through DXMT, off screen: d3d11_test_x64.exe, an x86_64 program, gets a
+#      hardware device of feature level 11_0 or more from DXMT (winemetal.dll is in the
+#      process), compiles two HLSL shaders, draws into a texture and reads back the colour it
+#      drew, D3D_RUNS runs. No window is involved.
 # The build and the test programs come first ("build").
 #
-# NOT YET CHECKED, so this check passing does not make Wave 4 done: a Vulkan driver
-# (KosmicKrisp), DXMT, vkd3d-proton, and a game. The summary lists them as TODO and the exit
-# status is 3 while they are open and nothing failed (1 when an item failed, 0 only when all of
-# it passed).
+# NOT YET CHECKED, so this check passing does not make Wave 4 done: a Direct3D swap chain in a
+# window (DXMT needs winemac.drv to export macdrv_functions for it, which this Wine does not), a
+# Vulkan driver (KosmicKrisp), vkd3d-proton, and a game. The summary lists them as TODO and the
+# exit status is 3 while they are open and nothing failed (1 when an item failed, 0 only when
+# all of it passed).
 # Logs go to $EVIDENCE_DIR.
 
 set -u
@@ -49,6 +54,7 @@ EVIDENCE_DIR=${EVIDENCE_DIR:-$BUILD_ROOT/evidence/wave4}
 WINEBOOT_TIMEOUT=${WINEBOOT_TIMEOUT:-300}
 RUN_TIMEOUT=${RUN_TIMEOUT:-120}
 WINDOW_HOLD_MS=${WINDOW_HOLD_MS:-3000}
+D3D_RUNS=${D3D_RUNS:-5}
 UNIX_DIR=aarch64-unix
 export MIN_FREE_GB=${MIN_FREE_GB:-10}
 # A new prefix would otherwise wait on the Mono and Gecko install dialogs.
@@ -59,7 +65,7 @@ RESULTS=()
 FAILED=0
 TODO=0
 # CHECK_ITEMS limits the run to some items ("build" rebuilds Wine, the bundle and the test programs).
-CHECK_ITEMS=${CHECK_ITEMS:-"build 1 2 3 4"}
+CHECK_ITEMS=${CHECK_ITEMS:-"build 1 2 3 4 5"}
 want() { case " $CHECK_ITEMS " in *" $1 "*) return 0 ;; esac; return 1; }
 pass() { RESULTS+=("PASS  item $1: $2"); echo "PASS  item $1: $2"; }
 fail() { RESULTS+=("FAIL  item $1: $2"); echo "FAIL  item $1: $2"; FAILED=1; }
@@ -133,6 +139,17 @@ for p in window_test font_test vulkan_test; do
         fail build "$p.exe did not build for both architectures ($TESTS_OUT/$p.build.log)"
     fi
 done
+# d3d11_test_x64.exe: x86_64 only, with the mingw compiler and its Direct3D import libraries
+dlog=$TESTS_OUT/d3d11_test_x64.build.log
+rm -f "$TESTS_OUT/d3d11_test_x64.exe"
+{
+    echo "\$ x86_64-w64-mingw32-clang d3d11_test.c -ld3d11 -ld3dcompiler_47 -ldxguid -luuid"
+    "$MINGW_BIN/x86_64-w64-mingw32-clang" -O2 -Wall -o "$TESTS_OUT/d3d11_test_x64.exe" "$SCRIPT_DIR/d3d11_test.c" \
+        -ld3d11 -ld3dcompiler_47 -ldxguid -luuid
+    echo "exit=$?"
+    "$READOBJ" --file-headers "$TESTS_OUT/d3d11_test_x64.exe" | grep -E 'Format|Machine'
+} >"$dlog" 2>&1
+if [ -f "$TESTS_OUT/d3d11_test_x64.exe" ] && grep -q '^Format: COFF-x86-64$' "$dlog"; then pass build "d3d11_test_x64.exe built, COFF-x86-64 ($dlog)"; else fail build "d3d11_test_x64.exe did not build as COFF-x86-64 ($dlog)"; fi
 llog=$TESTS_OUT/list_windows.build.log
 rm -f "$TESTS_OUT/list_windows"
 clang -O1 -Wall -Werror -o "$TESTS_OUT/list_windows" "$SCRIPT_DIR/list_windows.c" -framework CoreGraphics -framework CoreFoundation >"$llog" 2>&1
@@ -268,7 +285,37 @@ else
 fi
 fi  # item 4
 
-todo "a Vulkan driver (KosmicKrisp), DXMT, vkd3d-proton and a game have no items yet; Wave 4 is not done"
+########################################################################
+# Item 5: Direct3D 11 through DXMT, off screen
+########################################################################
+if want 5; then
+echo "== item 5: Direct3D 11 through DXMT, off screen, x86_64 x $D3D_RUNS"
+ddir=$EVIDENCE_DIR/item5-d3d11
+rm -rf "$ddir"; mkdir -p "$ddir"
+PREFIX=$BUILD_ROOT/wave4-prefix-d3d11
+rm -rf "$PREFIX"; mkdir -p "$PREFIX"
+hold_server "$PREFIX"
+D3D_LINE='d3d11: dxmt 1, adapter "[^"]+", feature level [bc][01]00, pixel [0-9a-f]{8}, expected 4080bfff'
+dpass=0; t=$WINEBOOT_TIMEOUT   # the first run sets the prefix up
+for i in $(seq 1 "$D3D_RUNS"); do
+    WINEPREFIX=$PREFIX run_timeout "$t" "$WINE" "$TESTS_OUT/d3d11_test_x64.exe" >"$ddir/run$i.stdout" 2>"$ddir/run$i.stderr"
+    rc=$?
+    t=$RUN_TIMEOUT
+    out=$(tr -d '\r' <"$ddir/run$i.stdout" | head -1)
+    line=no; echo "$out" | grep -Eqx "$D3D_LINE" && line=yes
+    [ "$rc" = 0 ] && [ $line = yes ] && dpass=$((dpass + 1))
+    echo "run $i: exit=$rc line=$line ($out)" >>"$ddir/summary.txt"
+done
+cleanup_prefix "$PREFIX"
+{ echo "DXMT in the install tree:"; ls -l "$INSTALL_DIR/lib/wine/aarch64-windows/d3d11.dll" "$INSTALL_DIR/lib/wine/aarch64-windows/winemetal.dll" "$INSTALL_DIR/lib/wine/$UNIX_DIR/winemetal.so" 2>&1; } >>"$ddir/summary.txt"
+if [ "$dpass" = "$D3D_RUNS" ]; then
+    pass 5 "d3d11_test_x64.exe drew into a texture with DXMT and read its colour back in $dpass/$D3D_RUNS runs: '$out' ($ddir/summary.txt)"
+else
+    fail 5 "d3d11_test_x64.exe passed $dpass/$D3D_RUNS runs: '$out' ($ddir/summary.txt)"
+fi
+fi  # item 5
+
+todo "a Direct3D swap chain in a window, a Vulkan driver (KosmicKrisp), vkd3d-proton and a game have no items yet; Wave 4 is not done"
 
 echo
 echo "== summary"
