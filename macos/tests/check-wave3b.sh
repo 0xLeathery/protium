@@ -53,12 +53,12 @@
 #      larger x86_64 program runs into this (the first was the Godot editor).
 #  10  a 32-bit program: hello_x86.exe, built for i686, runs in a WoW64 process through FEX's
 #      libwow64fex.dll and prints its line, FEX_RUNS runs, when there is a profile. Without one
-#      the item is a TODO and nothing is run: a 32-bit process lives below 4 GB, where macOS
-#      maps nothing without the entitlement (the program's image at 0x400000 gets "Cannot
-#      allocate memory" and ntdll aborts on an assertion). What can be had before that day is
-#      checked by the build step: Wine's i386 DLLs and FEX's WoW64 module build. The item also
-#      wants the 32-bit side left out of an install without a profile, where it would only
-#      make every new prefix start a process that aborts.
+#      the item is a TODO: a 32-bit process lives below 4 GB, where macOS maps nothing without
+#      the entitlement. What can be had before that day is checked: the build step wants
+#      Wine's i386 DLLs and FEX's WoW64 module, and the item runs the program from the build
+#      tree, which has the 32-bit side, and wants ntdll to refuse it by saying what is missing
+#      and not to end on the assertion in build_wow64_parameters(), which left a crash report
+#      for every 32-bit program that anything tried to start.
 # The build (macos/build-wine.sh, macos/build-fex.sh, macos/bundle-wine.sh) and the test programs
 # come first ("build").
 #
@@ -751,10 +751,22 @@ xdir=$EVIDENCE_DIR/item10-x86
 rm -rf "$xdir"; mkdir -p "$xdir"
 I386_DIR=$INSTALL_DIR/lib/wine/i386-windows
 if [ -z "$LOADER_PROFILE" ]; then
-    if [ -d "$I386_DIR" ]; then
-        fail 10 "the install has lib/wine/i386-windows without a profile: every new prefix then starts a 32-bit process that aborts (bundle-wine.sh leaves it out unless WOW64=yes)"
+    # from the build tree, where the 32-bit side is whether or not the install has it
+    PREFIX=$BUILD_ROOT/wave3b-prefix-x86
+    rm -rf "$PREFIX"; mkdir -p "$PREFIX"
+    WINEPREFIX=$PREFIX run_timeout 30 "$BUILD_DIR/server/wineserver" -p10 >/dev/null 2>&1
+    WINEPREFIX=$PREFIX run_timeout "$WINEBOOT_TIMEOUT" "$BUILD_DIR/wine" "$TESTS_OUT/hello_x86.exe" >"$xdir/refused.stdout" 2>"$xdir/refused.stderr"
+    rc=$?
+    WINEPREFIX=$PREFIX run_timeout 60 "$BUILD_DIR/server/wineserver" -k >/dev/null 2>&1
+    WINEPREFIX=$PREFIX run_timeout 60 "$BUILD_DIR/server/wineserver" -w >/dev/null 2>&1
+    rm -rf "$PREFIX"
+    nrefused=$(grep -a -c 'wine: a 32-bit program needs memory below 4GB' "$xdir/refused.stderr")
+    nassert=$(grep -a -c 'Assertion failed' "$xdir/refused.stderr")
+    echo "without a profile, from the build tree: exit=$rc, refused with the reason $nrefused times, assertions $nassert" >>"$xdir/summary.txt"
+    if [ "$rc" != 0 ] && [ "$nrefused" -ge 1 ] && [ "$nassert" = 0 ]; then
+        todo "item 10: hello_x86.exe cannot run: a 32-bit process lives below 4 GB, which needs LOADER_PROFILE. Its side is built, and ntdll refuses the program by saying so ($nrefused times, no assertion) ($xdir/summary.txt)"
     else
-        todo "item 10: hello_x86.exe was not run: a 32-bit process lives below 4 GB, which needs LOADER_PROFILE. Its side is built and left out of this install"
+        fail 10 "without a profile hello_x86.exe should be refused with the reason: exit $rc, refused $nrefused times, assertions $nassert ($xdir/summary.txt)"
     fi
 else
     PREFIX=$BUILD_ROOT/wave3b-prefix-x86

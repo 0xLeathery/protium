@@ -37,10 +37,10 @@
 #   WOW64           whether the 32-bit side goes in: Wine's i386 DLLs, when the build has them
 #                   (WINE_ARCHS with i386), and FEX's libwow64fex. "auto" (the default) is yes
 #                   with LOADER_PROFILE and no without: a 32-bit process lives below 4 GB,
-#                   where macOS maps nothing without the cross-architecture entitlement, and
-#                   with the DLLs there every new prefix starts a 32-bit process that aborts
-#                   (an assertion in ntdll's build_wow64_parameters, and a crash report each
-#                   time). "yes" and "no" force it.
+#                   where macOS maps nothing without the cross-architecture entitlement, so
+#                   without it the DLLs are 200 MB that nothing can run, and every new prefix
+#                   would start a 32-bit rundll32 only for ntdll to refuse it. "yes" and "no"
+#                   force it.
 #   DXMT_DIST       output of build-dxmt.sh (default $BUILD_ROOT/dxmt-dist); when it is there,
 #                   its dxgi, d3d10core and d3d11 take the place of Wine's own, which have no
 #                   usable backend on this build, and its winemetal modules are added
