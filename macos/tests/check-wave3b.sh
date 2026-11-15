@@ -29,8 +29,9 @@
 #      (a process started through the link has no bundle)
 #   5  regression: check-wave3a.sh passes on the aarch64 mingw build (it runs check-wave1.sh, 2a
 #      and 2b itself), and its runtime items (3 4 6 7) pass on this wave's build
-#   6  other targets unchanged: every line of this wave in Wine is under __APPLE__ && __aarch64__
-#      (with either undefined the files are the wave base text); diff scope
+#   6  other targets unchanged: every line of this wave in Wine is under __APPLE__ && __aarch64__,
+#      or under WX_EXCLUSIVE_HOST, which is only defined there (with either undefined the files
+#      are the wave base text); diff scope
 #   7  through FEX: bin/wine runs hello.exe built as ARM64EC and hello_x64.exe, an x86_64
 #      program built with the mingw compiler and its CRT; both print their line and exit 0,
 #      FEX_RUNS runs, and libarm64ecfex.dll is loaded as a builtin. cpuid_x64.exe is told that
@@ -404,7 +405,7 @@ ok=yes
                 next unless $added{$i};
                 next if $directive || $l =~ /^\s*$/;
                 my @in = @stack;
-                my @g = grep { /^if defined\(__APPLE__\) && defined\(__aarch64__\)\s*$/ } @in;
+                my @g = grep { /^if defined\(__APPLE__\) && defined\(__aarch64__\)\s*$|^ifdef WX_EXCLUSIVE_HOST\s*$/ } @in;
                 printf "%s %s:%d [%s] %s", (@g ? "guarded" : "UNGUARDED"), $ARGV[2], $i, join(" > ", map { s/\s+/ /gr } @in), $l;
             }' "$WORK/guard.c" "$WORK/hunks" "$f"
     done
@@ -412,11 +413,25 @@ ok=yes
 nadd=$(grep -c -E '^(guarded|UNGUARDED) ' "$glog")
 nung=$(grep -c '^UNGUARDED ' "$glog")
 [ "$nung" = 0 ] && [ "$nadd" -gt 0 ] || ok=no
-echo "--- added lines other than conditionals and empty lines: $nadd, outside a defined(__APPLE__) && defined(__aarch64__) guard: $nung" >>"$glog"
+echo "--- added lines other than conditionals and empty lines: $nadd, outside a defined(__APPLE__) && defined(__aarch64__) or WX_EXCLUSIVE_HOST guard: $nung" >>"$glog"
+# WX_EXCLUSIVE_HOST counts as that guard because it is only ever defined inside it
+nwxbad=0
+for f in $WAVE_FILES; do
+    bad=$(git -C "$WINE_DIR" show "HEAD:$f" | perl -ne '
+        if (/^\s*#\s*(if|ifdef|ifndef)\b(.*)/) { push @stack, "$1$2"; }
+        elsif (/^\s*#\s*(elif|else)\b/) { $stack[-1] = "other branch of $stack[-1]"; }
+        elsif (/^\s*#\s*endif\b/) { pop @stack; }
+        elsif (/^\s*#\s*(define|undef)\s+WX_EXCLUSIVE_HOST\b/) {
+            $n++ unless grep { /^if defined\(__APPLE__\) && defined\(__aarch64__\)\s*$/ } @stack;
+        }
+        END { print $n + 0 }')
+    [ "$bad" = 0 ] || { nwxbad=$((nwxbad + bad)); echo "$f: WX_EXCLUSIVE_HOST defined or undefined outside the guard, $bad times" >>"$glog"; }
+done
+[ "$nwxbad" = 0 ] || ok=no
 # Source level: for every other system (__APPLE__ undefined) and for x86_64 macOS (__aarch64__
 # undefined) each file is the wave base text.
 for f in $WAVE_FILES; do
-    for flags in "-U__APPLE__" "-D__APPLE__ -U__aarch64__"; do
+    for flags in "-U__APPLE__ -UWX_EXCLUSIVE_HOST" "-D__APPLE__ -U__aarch64__ -UWX_EXCLUSIVE_HOST"; do
         git -C "$WINE_DIR" show "$WINE_WAVE_BASE:$f" | unifdef $flags | cat -s >"$WORK/unifdef.base" 2>/dev/null
         git -C "$WINE_DIR" show "HEAD:$f" | unifdef $flags | cat -s >"$WORK/unifdef.new" 2>/dev/null
         if [ -s "$WORK/unifdef.new" ] && cmp -s "$WORK/unifdef.base" "$WORK/unifdef.new"; then
@@ -448,9 +463,9 @@ sbad=$(git -C "$PROTON_DIR" diff --name-only "$SUPER_WAVE_BASE" HEAD | grep -v '
 [ -n "$(git -C "$PROTON_DIR" diff --raw "$SUPER_WAVE_BASE" HEAD -- wine)" ] && sbad="$sbad wine(pointer)"
 [ -z "$wbad" ] && [ -z "$wdirty" ] && [ -z "$sbad" ] || ok=no
 if [ $ok = yes ]; then
-    pass 6 "$nadd lines added since $WINE_WAVE_BASE in $(echo $WAVE_FILES), all under defined(__APPLE__) && defined(__aarch64__); the files are the wave base text with __APPLE__ or __aarch64__ undefined; superproject changes only in macos/ ($glog, $ulog, $dlog)"
+    pass 6 "$nadd lines added since $WINE_WAVE_BASE in $(echo $WAVE_FILES), all under defined(__APPLE__) && defined(__aarch64__) or WX_EXCLUSIVE_HOST, which is only defined under it; the files are the wave base text with __APPLE__ or __aarch64__ undefined; superproject changes only in macos/ ($glog, $ulog, $dlog)"
 else
-    fail 6 "unguarded lines: $nung of $nadd; wine unexpected:${wbad:- none}; wine uncommitted: '$wdirty'; superproject: '$(echo $sbad)' ($glog, $ulog, $dlog)"
+    fail 6 "unguarded lines: $nung of $nadd; WX_EXCLUSIVE_HOST defined outside the guard: $nwxbad; wine unexpected:${wbad:- none}; wine uncommitted: '$wdirty'; superproject: '$(echo $sbad)' ($glog, $ulog, $dlog)"
 fi
 fi  # item 6
 
