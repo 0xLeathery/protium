@@ -376,13 +376,18 @@ ok=yes
             my @stack; my $i = 0;
             for my $l (@lines) {
                 $i++;
-                # the conditions the line is in; the #if and #endif lines of a guard count as inside it
-                my @in = @stack;
-                if ($l =~ /^\s*#\s*(if|ifdef|ifndef)\b(.*)/) { push @stack, "$1$2"; @in = @stack; }
-                elsif ($l =~ /^\s*#\s*(elif)\b(.*)/) { $stack[-1] = "$1$2 (after $stack[-1])"; @in = @stack; }
-                elsif ($l =~ /^\s*#\s*else\b/) { $stack[-1] = "else of $stack[-1]"; @in = @stack; }
-                elsif ($l =~ /^\s*#\s*endif\b/) { pop @stack; }
+                # The conditions the line is in. The #if, #else and #endif lines themselves and empty
+                # lines are not judged here: diff pairs a new #endif or an empty line with an old one
+                # as it likes, and the unifdef comparison below is what shows that the conditionals
+                # leave the other targets their old text.
+                my $directive = 0;
+                if ($l =~ /^\s*#\s*(if|ifdef|ifndef)\b(.*)/) { push @stack, "$1$2"; $directive = 1; }
+                elsif ($l =~ /^\s*#\s*(elif)\b(.*)/) { $stack[-1] = "$1$2 (after $stack[-1])"; $directive = 1; }
+                elsif ($l =~ /^\s*#\s*else\b/) { $stack[-1] = "else of $stack[-1]"; $directive = 1; }
+                elsif ($l =~ /^\s*#\s*endif\b/) { pop @stack; $directive = 1; }
                 next unless $added{$i};
+                next if $directive || $l =~ /^\s*$/;
+                my @in = @stack;
                 my @g = grep { /^if defined\(__APPLE__\) && defined\(__aarch64__\)\s*$/ } @in;
                 printf "%s %s:%d [%s] %s", (@g ? "guarded" : "UNGUARDED"), $ARGV[2], $i, join(" > ", map { s/\s+/ /gr } @in), $l;
             }' "$WORK/guard.c" "$WORK/hunks" "$f"
@@ -391,7 +396,7 @@ ok=yes
 nadd=$(grep -c -E '^(guarded|UNGUARDED) ' "$glog")
 nung=$(grep -c '^UNGUARDED ' "$glog")
 [ "$nung" = 0 ] && [ "$nadd" -gt 0 ] || ok=no
-echo "--- added lines: $nadd, outside a defined(__APPLE__) && defined(__aarch64__) guard: $nung" >>"$glog"
+echo "--- added lines other than conditionals and empty lines: $nadd, outside a defined(__APPLE__) && defined(__aarch64__) guard: $nung" >>"$glog"
 # Source level: for every other system (__APPLE__ undefined) and for x86_64 macOS (__aarch64__
 # undefined) each file is the wave base text.
 for f in $WAVE_FILES; do
