@@ -37,6 +37,8 @@
 #   HOST_DYLIBS     Homebrew libraries that Wine opens by name at run time (default
 #                   libfreetype.6.dylib, without which Wine has no TrueType fonts). They are
 #                   copied with the Homebrew libraries they need into lib/external.
+#   VULKAN_DIST     output of build-vulkan.sh (default $BUILD_ROOT/vulkan-dist); its loader is
+#                   installed the same way when it is there
 #   MIN_FREE_GB     abort if less free disk space than this (default 10)
 
 set -euo pipefail
@@ -48,6 +50,7 @@ LOADER_PROFILE=${LOADER_PROFILE:-}
 BUNDLE_ID=${BUNDLE_ID:-}
 FEX_DIST=${FEX_DIST:-$BUILD_ROOT/fex-dist}
 HOST_DYLIBS=${HOST_DYLIBS:-libfreetype.6.dylib}
+VULKAN_DIST=${VULKAN_DIST:-$BUILD_ROOT/vulkan-dist}
 MIN_FREE_GB=${MIN_FREE_GB:-10}
 ENTITLEMENTS=$SCRIPT_DIR/wine-loader.entitlements
 UNIX_DIR=aarch64-unix
@@ -196,6 +199,11 @@ for lib in $HOST_DYLIBS; do
     copy_host_dylib "$brew_prefix/lib/$lib"
     ln -sf "../../external/$lib" "$unixdir/$lib"
 done
+# the Vulkan loader, which win32u.so opens when Wine was built with Vulkan
+if [ -f "$VULKAN_DIST/lib/libvulkan.1.dylib" ]; then
+    copy_host_dylib "$VULKAN_DIST/lib/libvulkan.1.dylib"
+    ln -sf "../../external/libvulkan.1.dylib" "$unixdir/libvulkan.1.dylib"
+fi
 log "host libraries in lib/external: $(ls "$extdir" | tr '\n' ' ')"
 
 ########################################################################
