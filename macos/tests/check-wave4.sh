@@ -41,6 +41,9 @@
 #      here may read the screen.
 #   7  other targets unchanged: every line of this wave in Wine is under __APPLE__ && __aarch64__
 #      (with either undefined the files are the wave base text); diff scope
+#   8  audio output: audio_test_x64.exe, an x86_64 program, finds an output device, opens it
+#      at 48 kHz 16 bit stereo through winmm and Wine's CoreAudio driver, and the device plays
+#      300 ms of silence to the end, AUDIO_RUNS runs. Nothing is heard.
 # The build and the test programs come first ("build").
 #
 # NOT YET CHECKED, so this check passing does not make Wave 4 done: that Direct3D frames are on
@@ -64,6 +67,7 @@ RUN_TIMEOUT=${RUN_TIMEOUT:-120}
 WINDOW_HOLD_MS=${WINDOW_HOLD_MS:-3000}
 D3D_RUNS=${D3D_RUNS:-5}
 D3D_FRAMES=${D3D_FRAMES:-180}
+AUDIO_RUNS=${AUDIO_RUNS:-3}
 WINE_DIR=$PROTON_DIR/wine
 # wine and superproject commits this wave starts from (the tips after Wave 3b's last change)
 WINE_WAVE_BASE=${WINE_WAVE_BASE:-367c1ae9b0468f5d8b60b32be12cefe91eba0ffb}
@@ -80,7 +84,7 @@ RESULTS=()
 FAILED=0
 TODO=0
 # CHECK_ITEMS limits the run to some items ("build" rebuilds Wine, the bundle and the test programs).
-CHECK_ITEMS=${CHECK_ITEMS:-"build 1 2 3 4 5 6 7"}
+CHECK_ITEMS=${CHECK_ITEMS:-"build 1 2 3 4 5 6 7 8"}
 want() { case " $CHECK_ITEMS " in *" $1 "*) return 0 ;; esac; return 1; }
 pass() { RESULTS+=("PASS  item $1: $2"); echo "PASS  item $1: $2"; }
 fail() { RESULTS+=("FAIL  item $1: $2"); echo "FAIL  item $1: $2"; FAILED=1; }
@@ -177,6 +181,15 @@ rm -f "$TESTS_OUT/d3d11_window_test_x64.exe"
     "$READOBJ" --file-headers "$TESTS_OUT/d3d11_window_test_x64.exe" | grep -E 'Format|Machine'
 } >"$dwlog" 2>&1
 if [ -f "$TESTS_OUT/d3d11_window_test_x64.exe" ] && grep -q '^Format: COFF-x86-64$' "$dwlog"; then pass build "d3d11_window_test_x64.exe built, COFF-x86-64 ($dwlog)"; else fail build "d3d11_window_test_x64.exe did not build as COFF-x86-64 ($dwlog)"; fi
+alog=$TESTS_OUT/audio_test_x64.build.log
+rm -f "$TESTS_OUT/audio_test_x64.exe"
+{
+    echo "\$ x86_64-w64-mingw32-clang audio_test.c -lwinmm"
+    "$MINGW_BIN/x86_64-w64-mingw32-clang" -O2 -Wall -o "$TESTS_OUT/audio_test_x64.exe" "$SCRIPT_DIR/audio_test.c" -lwinmm
+    echo "exit=$?"
+    "$READOBJ" --file-headers "$TESTS_OUT/audio_test_x64.exe" | grep -E 'Format|Machine'
+} >"$alog" 2>&1
+if [ -f "$TESTS_OUT/audio_test_x64.exe" ] && grep -q '^Format: COFF-x86-64$' "$alog"; then pass build "audio_test_x64.exe built, COFF-x86-64 ($alog)"; else fail build "audio_test_x64.exe did not build as COFF-x86-64 ($alog)"; fi
 llog=$TESTS_OUT/list_windows.build.log
 rm -f "$TESTS_OUT/list_windows"
 clang -O1 -Wall -Werror -o "$TESTS_OUT/list_windows" "$SCRIPT_DIR/list_windows.c" -framework CoreGraphics -framework CoreFoundation >"$llog" 2>&1
@@ -480,6 +493,35 @@ else
     fail 7 "unguarded lines: $nung of $nadd; WX_EXCLUSIVE_HOST defined outside the guard: $nwxbad; wine unexpected:${wbad:- none}; wine uncommitted: '$wdirty'; superproject: '$(echo $sbad)' ($glog, $ulog, $dlog)"
 fi
 fi  # item 7
+
+########################################################################
+# Item 8: audio output
+########################################################################
+if want 8; then
+echo "== item 8: audio output, x86_64 x $AUDIO_RUNS"
+adir=$EVIDENCE_DIR/item8-audio
+rm -rf "$adir"; mkdir -p "$adir"
+PREFIX=$BUILD_ROOT/wave4-prefix-audio
+rm -rf "$PREFIX"; mkdir -p "$PREFIX"
+hold_server "$PREFIX"
+AUDIO_LINE='audio: devices [1-9][0-9]*, first "[^"]+", open 0, write 0, done 1, position [0-9]+/14400'
+apass=0; t=$WINEBOOT_TIMEOUT   # the first run sets the prefix up
+for i in $(seq 1 "$AUDIO_RUNS"); do
+    WINEPREFIX=$PREFIX run_timeout "$t" "$WINE" "$TESTS_OUT/audio_test_x64.exe" >"$adir/run$i.stdout" 2>"$adir/run$i.stderr"
+    rc=$?
+    t=$RUN_TIMEOUT
+    out=$(tr -d '\r' <"$adir/run$i.stdout" | head -1)
+    line=no; echo "$out" | grep -Eqx "$AUDIO_LINE" && line=yes
+    [ "$rc" = 0 ] && [ $line = yes ] && apass=$((apass + 1))
+    echo "run $i: exit=$rc line=$line ($out)" >>"$adir/summary.txt"
+done
+cleanup_prefix "$PREFIX"
+if [ "$apass" = "$AUDIO_RUNS" ]; then
+    pass 8 "audio_test_x64.exe played 300 ms of silence to the end on the default output in $apass/$AUDIO_RUNS runs: '$out' ($adir/summary.txt)"
+else
+    fail 8 "audio_test_x64.exe passed $apass/$AUDIO_RUNS runs: '$out' ($adir/summary.txt)"
+fi
+fi  # item 8
 
 todo "that Direct3D frames are on the screen and follow a resized window, a Vulkan driver (KosmicKrisp), vkd3d-proton and a game have no items yet; Wave 4 is not done"
 
