@@ -102,7 +102,17 @@ want() { case " $CHECK_ITEMS " in *" $1 "*) return 0 ;; esac; return 1; }
 pass() { RESULTS+=("PASS  item $1: $2"); echo "PASS  item $1: $2"; }
 fail() { RESULTS+=("FAIL  item $1: $2"); echo "FAIL  item $1: $2"; FAILED=1; }
 todo() { RESULTS+=("TODO  $1"); echo "TODO  $1"; TODO=1; }
-run_timeout() { local t=$1; shift; perl -e 'alarm shift; exec @ARGV or die "exec: $!"' "$t" "$@"; }
+# run_timeout SECONDS cmd...: the command's exit status, or 142 when it ran out of time. The
+# command runs as a child that is killed with SIGKILL then: an alarm in the command's own
+# process is not enough, an x86_64 program that spins in an exception loop under FEX lived on
+# for minutes past one.
+run_timeout() {
+    local t=$1; shift
+    perl -e 'my $t = shift; my $pid = fork; die "fork: $!" unless defined $pid;
+             if (!$pid) { exec @ARGV or die "exec: $!" }
+             $SIG{ALRM} = sub { kill "KILL", $pid }; alarm $t; waitpid $pid, 0;
+             exit((($? & 127) == 9) ? 142 : ($? & 127) ? 128 + ($? & 127) : $? >> 8)' "$t" "$@"
+}
 
 WORK=$EVIDENCE_DIR/work
 mkdir -p "$WORK"
