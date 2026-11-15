@@ -43,6 +43,14 @@
 #      program of 4000 functions, prints the checksum of a native build of its source through
 #      FEX, FEX says that it uses per-thread W^X memory, and the run takes at most
 #      JIT_MAX_FLIPS page flips (over 8000 with FEX's code in flipped pages)
+#   9  callbacks from native code into x86 code: callback_x64.exe, an x86_64 program, has the C
+#      runtime's qsort(), which is native code, call its comparison function, which is x86
+#      code. With 1000 elements (some 12000 callbacks) it has to sort them. With
+#      CALLBACK_ELEMENTS elements (millions of callbacks) it has to as well when there is a
+#      profile. Without one it does not finish, and the item is a TODO then, not a pass: FEX
+#      catches the end of its call-return stack with a 4K guard page, which a host with 16K
+#      pages cannot give it, so the program gets an access violation it did not cause. Any
+#      larger x86_64 program runs into this (the first was the Godot editor).
 # The build (macos/build-wine.sh, macos/build-fex.sh, macos/bundle-wine.sh) and the test programs
 # come first ("build").
 #
@@ -79,6 +87,8 @@ RUN_TIMEOUT=${RUN_TIMEOUT:-120}
 HELLO_RUNS=${HELLO_RUNS:-5}
 WINEBOOT_RUNS=${WINEBOOT_RUNS:-3}
 FEX_RUNS=${FEX_RUNS:-5}
+CALLBACK_ELEMENTS=${CALLBACK_ELEMENTS:-200000}
+CALLBACK_TIMEOUT=${CALLBACK_TIMEOUT:-30}
 JIT_MAX_FLIPS=${JIT_MAX_FLIPS:-200}
 UNIX_DIR=aarch64-unix
 X18_ENTITLEMENT=com.apple.security.custom-x18-abi-toggle
@@ -97,7 +107,7 @@ RESULTS=()
 FAILED=0
 TODO=0
 # CHECK_ITEMS limits the run to some items ("build" rebuilds Wine, the bundle and the test programs).
-CHECK_ITEMS=${CHECK_ITEMS:-"build 1 2 3 4 5 6 7 8"}
+CHECK_ITEMS=${CHECK_ITEMS:-"build 1 2 3 4 5 6 7 8 9"}
 want() { case " $CHECK_ITEMS " in *" $1 "*) return 0 ;; esac; return 1; }
 pass() { RESULTS+=("PASS  item $1: $2"); echo "PASS  item $1: $2"; }
 fail() { RESULTS+=("FAIL  item $1: $2"); echo "FAIL  item $1: $2"; FAILED=1; }
@@ -248,6 +258,15 @@ rm -f "$TESTS_OUT/hello_x64.exe"
     "$OBJDUMP" -p "$TESTS_OUT/hello_x64.exe" | grep 'DLL Name'
 } >"$xlog" 2>&1
 if [ -f "$TESTS_OUT/hello_x64.exe" ] && grep -q '^Format: COFF-x86-64$' "$xlog"; then pass build "hello_x64.exe built, COFF-x86-64 ($xlog)"; else fail build "hello_x64.exe did not build as COFF-x86-64 ($xlog)"; fi
+clog=$TESTS_OUT/callback_x64.build.log
+rm -f "$TESTS_OUT/callback_x64.exe"
+{
+    echo "\$ x86_64-w64-mingw32-clang callback_x64.c"
+    "$MINGW_BIN/x86_64-w64-mingw32-clang" -O2 -Wall -o "$TESTS_OUT/callback_x64.exe" "$SCRIPT_DIR/callback_x64.c"
+    echo "exit=$?"
+    "$READOBJ" --file-headers "$TESTS_OUT/callback_x64.exe" | grep -E 'Format|Machine'
+} >"$clog" 2>&1
+if [ -f "$TESTS_OUT/callback_x64.exe" ] && grep -q '^Format: COFF-x86-64$' "$clog"; then pass build "callback_x64.exe built, COFF-x86-64 ($clog)"; else fail build "callback_x64.exe did not build as COFF-x86-64 ($clog)"; fi
 ilog=$TESTS_OUT/cpuid_x64.build.log
 rm -f "$TESTS_OUT/cpuid_x64.exe"
 {
@@ -660,6 +679,38 @@ else
     fail 8 "jit_view_test ok=$viewok (exit $vrc, $navs faults, $nmsg messages, $nlost lost); jit_x64.exe exit $jrc, checksum '${got}' expected '${expected}', FEX JIT memory lines $fexjit, JIT faults $jfault, page flips $nflip of at most $JIT_MAX_FLIPS ($jdir/summary.txt)"
 fi
 fi  # item 8
+
+########################################################################
+# Item 9: callbacks from native code into x86 code
+########################################################################
+if want 9; then
+echo "== item 9: callbacks from native code into x86 code, 1000 and $CALLBACK_ELEMENTS elements"
+cdir=$EVIDENCE_DIR/item9-callback
+rm -rf "$cdir"; mkdir -p "$cdir"
+PREFIX=$BUILD_ROOT/wave3b-prefix-callback
+rm -rf "$PREFIX"; mkdir -p "$PREFIX"
+hold_server "$PREFIX"
+# callback_run NAME ELEMENTS TIMEOUT: sets crc and cline
+callback_run() {
+    WINEPREFIX=$PREFIX run_timeout "$3" "$WINE" "$TESTS_OUT/callback_x64.exe" "$2" >"$cdir/$1.stdout" 2>"$cdir/$1.stderr"
+    crc=$?
+    cline=$(tr -d '\r' <"$cdir/$1.stdout" | head -1)
+    echo "$1: callback_x64.exe $2: exit=$crc (142 = stopped after $3 s) '$cline'" >>"$cdir/summary.txt"
+}
+callback_run small 1000 "$WINEBOOT_TIMEOUT"   # the first run sets the prefix up
+src=$crc; sline=$cline
+callback_run large "$CALLBACK_ELEMENTS" "$CALLBACK_TIMEOUT"
+cleanup_prefix "$PREFIX"
+smallok=no; [ "$src" = 0 ] && echo "$sline" | grep -Eqx 'callback: 1000 elements, [0-9]+ callbacks, sorted 1' && smallok=yes
+largeok=no; [ "$crc" = 0 ] && echo "$cline" | grep -Eqx "callback: $CALLBACK_ELEMENTS elements, [0-9]+ callbacks, sorted 1" && largeok=yes
+if [ $smallok = yes ] && [ $largeok = yes ]; then
+    pass 9 "callback_x64.exe sorted 1000 and $CALLBACK_ELEMENTS elements through callbacks from native code: '$cline' ($cdir/summary.txt)"
+elif [ $smallok = yes ] && [ -z "$LOADER_PROFILE" ]; then
+    todo "item 9: callback_x64.exe sorts 1000 elements ('$sline') but does not finish $CALLBACK_ELEMENTS (exit $crc, 142 = stopped after $CALLBACK_TIMEOUT s): FEX's guard pages need 4K pages, which need LOADER_PROFILE ($cdir/summary.txt)"
+else
+    fail 9 "callback_x64.exe: 1000 elements ok=$smallok (exit $src, '$sline'); $CALLBACK_ELEMENTS elements ok=$largeok (exit $crc, '$cline') ($cdir/summary.txt)"
+fi
+fi  # item 9
 
 todo "4K pages, memory below 4 GB and hardware TSO have no items yet (they need LOADER_PROFILE; the loader's code for the first two is written and has never run); Wave 3b is not done"
 
