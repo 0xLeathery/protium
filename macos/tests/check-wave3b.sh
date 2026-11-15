@@ -65,6 +65,7 @@ MINGW_BUILD_DIR=${MINGW_BUILD_DIR:-$BUILD_ROOT/wine-aarch64}
 FEX_DIST=${FEX_DIST:-$BUILD_ROOT/fex-dist}
 VULKAN_DIST=${VULKAN_DIST:-$BUILD_ROOT/vulkan-dist}
 DXMT_DIST=${DXMT_DIST:-$BUILD_ROOT/dxmt-dist}
+MESA_DIST=${MESA_DIST:-$BUILD_ROOT/mesa-dist}
 SRC_DIR=${SRC_DIR:-$BUILD_ROOT/wine-src}
 TOOLCHAIN_DIR=${TOOLCHAIN_DIR:-/Users/annon/projects/proton-macos-toolchain/llvm-mingw-20261020-ucrt-macos-universal}
 EVIDENCE_DIR=${EVIDENCE_DIR:-$BUILD_ROOT/evidence/wave3b}
@@ -139,7 +140,7 @@ entitlement_keys() {
 # Build: Wine, the bundle and the test programs
 ########################################################################
 if want build; then
-echo "== build: macos/build-vulkan.sh, build-wine.sh (arm64ec + aarch64, MSVC mode, Vulkan), build-fex.sh, build-dxmt.sh, bundle-wine.sh and the test programs"
+echo "== build: macos/build-vulkan.sh, build-wine.sh (arm64ec + aarch64, MSVC mode, Vulkan), build-fex.sh, build-dxmt.sh, build-mesa.sh, bundle-wine.sh and the test programs"
 # This build has Vulkan and DXMT, which Wave 4 uses; it is one configuration, so that the two
 # waves' checks don't rebuild Wine and the bundle back and forth. Nothing in this wave's items
 # needs either.
@@ -177,8 +178,17 @@ if [ $dstatus = 0 ]; then
 else
     fail build "build-dxmt.sh exited $dstatus: $(tail -1 "$dlog") ($dlog)"
 fi
+# the Vulkan driver, which the bundle installs for the loader (check-wave4.sh uses it)
+mlog=$EVIDENCE_DIR/build-mesa.log
+MESA_DIST=$MESA_DIST "$PROTON_DIR/macos/build-mesa.sh" >"$mlog" 2>&1
+mstatus=$?
+if [ $mstatus = 0 ]; then
+    pass build "build-mesa.sh exit 0, $(sed -n 's/^:: \(Mesa [0-9][^:]*\).*/\1/p' "$mlog" | head -1) ($mlog)"
+else
+    fail build "build-mesa.sh exited $mstatus: $(tail -1 "$mlog") ($mlog)"
+fi
 ulog=$EVIDENCE_DIR/bundle.log
-BUILD_DIR=$BUILD_DIR FEX_DIST=$FEX_DIST VULKAN_DIST=$VULKAN_DIST DXMT_DIST=$DXMT_DIST LOADER_PROFILE=$LOADER_PROFILE "$PROTON_DIR/macos/bundle-wine.sh" >"$ulog" 2>&1
+BUILD_DIR=$BUILD_DIR FEX_DIST=$FEX_DIST VULKAN_DIST=$VULKAN_DIST DXMT_DIST=$DXMT_DIST MESA_DIST=$MESA_DIST LOADER_PROFILE=$LOADER_PROFILE "$PROTON_DIR/macos/bundle-wine.sh" >"$ulog" 2>&1
 ustatus=$?
 if [ $ustatus = 0 ]; then
     pass build "bundle-wine.sh exit 0, $([ -n "$LOADER_PROFILE" ] && echo "profile $LOADER_PROFILE" || echo "ad hoc") ($ulog)"
