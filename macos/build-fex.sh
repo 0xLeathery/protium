@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# Build FEX's ARM64EC emulator module for the native arm64 macOS Wine build.
+# Build FEX's emulator modules for the native arm64 macOS Wine build.
 #
 # An x86_64 Windows program runs as an ARM64EC process, and Proton's Wine loads
 # libarm64ecfex.dll into every one of them. The module has two parts, built here as Proton's
@@ -8,6 +8,15 @@
 #
 #   lib/wine/aarch64-windows/libarm64ecfex.dll   PE, llvm-mingw (arm64ec-w64-mingw32)
 #   lib/wine/aarch64-unix/libarm64ecfex.so       its Unix library, Apple clang
+#
+# A 32-bit x86 program runs in a WoW64 process, an ARM64 process whose wow64.dll loads
+# libwow64fex.dll for the 32-bit code ("fex" for aarch64-windows in Makefile.in):
+#
+#   lib/wine/aarch64-windows/libwow64fex.dll     PE, llvm-mingw (aarch64-w64-mingw32)
+#   lib/wine/aarch64-unix/libwow64fex.so         its Unix library, Apple clang
+#
+# Such a process needs memory below 4 GB, which macOS gives only with the cross-architecture
+# entitlement, so this module is built ahead of the day it can run.
 #
 # under $FEX_DIST. Run Wine with WINEDLLPATH=$FEX_DIST/lib/wine to use them.
 #
@@ -49,6 +58,7 @@ command -v cmake >/dev/null || die "cmake not installed: brew install cmake"
 command -v ninja >/dev/null || die "ninja not installed: brew install ninja"
 MINGW_BIN=$TOOLCHAIN_DIR/bin
 [ -x "$MINGW_BIN/arm64ec-w64-mingw32-clang++" ] || die "llvm-mingw (arm64ec) not found in $TOOLCHAIN_DIR"
+[ -x "$MINGW_BIN/aarch64-w64-mingw32-clang++" ] || die "llvm-mingw (aarch64) not found in $TOOLCHAIN_DIR"
 
 mkdir -p "$BUILD_ROOT"
 free_gb=$(df -g "$BUILD_ROOT" | awk 'NR==2 {print $4}')
@@ -115,5 +125,28 @@ cmake --build "$unix_build" -j "$JOBS" --target arm64ecfex_unixlib
 mkdir -p "$unix_libdir"
 cp "$(find "$unix_build" -name libarm64ecfex.so -type f | head -1)" "$unix_libdir/libarm64ecfex.so"
 
+########################################################################
+# 4. libwow64fex.dll (FEX_aarch64_CMAKE_ARGS in Makefile.in) and libwow64fex.so
+########################################################################
+wow_build=$BUILD_ROOT/fex-wow64
+if [ ! -f "$wow_build/build.ninja" ] || [ "$(cat "$wow_build/.build-fex-commit" 2>/dev/null)" != "$FEX_COMMIT" ]; then
+    log "configuring $wow_build"
+    cmake -G Ninja -S "$FEX_SRC" -B "$wow_build" \
+        -DCMAKE_TOOLCHAIN_FILE="$FEX_SRC/Data/CMake/toolchain_mingw.cmake" \
+        -DMINGW_TRIPLE=aarch64-w64-mingw32 \
+        -DCMAKE_BUILD_TYPE=Release -DENABLE_LTO=False -DBUILD_TESTING=False \
+        -DENABLE_FEXCORE_PROFILER=True -DTUNE_CPU=none -DRANGES_NATIVE=OFF \
+        -DOVERRIDE_VERSION="$describe" -DOVERRIDE_HASH="$rev" \
+        -DCMAKE_INSTALL_PREFIX="$FEX_DIST" -DCMAKE_INSTALL_LIBDIR="$pe_libdir"
+    echo "$FEX_COMMIT" >"$wow_build/.build-fex-commit"
+fi
+log "building libwow64fex.dll"
+cmake --build "$wow_build" -j "$JOBS" --target wow64fex
+cp "$wow_build/Bin/libwow64fex.dll" "$pe_libdir/libwow64fex.dll" 2>/dev/null \
+    || cp "$(find "$wow_build" -name libwow64fex.dll -type f | head -1)" "$pe_libdir/libwow64fex.dll"
+log "building libwow64fex.so"
+cmake --build "$unix_build" -j "$JOBS" --target wow64fex_unixlib
+cp "$(find "$unix_build" -name libwow64fex.so -type f | head -1)" "$unix_libdir/libwow64fex.so"
+
 log "done: WINEDLLPATH=$FEX_DIST/lib/wine"
-ls -l "$pe_libdir/libarm64ecfex.dll" "$unix_libdir/libarm64ecfex.so" >&2
+ls -l "$pe_libdir/libarm64ecfex.dll" "$unix_libdir/libarm64ecfex.so" "$pe_libdir/libwow64fex.dll" "$unix_libdir/libwow64fex.so" >&2
