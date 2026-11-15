@@ -34,6 +34,9 @@
 #   FEX_DIST        output of build-fex.sh (default $BUILD_ROOT/fex-dist); its ARM64EC module is
 #                   installed with Wine's own modules when it is there. Without it an x86_64
 #                   program stops with "could not load libarm64ecfex.dll".
+#   HOST_DYLIBS     Homebrew libraries that Wine opens by name at run time (default
+#                   libfreetype.6.dylib, without which Wine has no TrueType fonts). They are
+#                   copied with the Homebrew libraries they need into lib/external.
 #   MIN_FREE_GB     abort if less free disk space than this (default 10)
 
 set -euo pipefail
@@ -44,6 +47,7 @@ BUILD_DIR=${BUILD_DIR:-$BUILD_ROOT/wine-aarch64}
 LOADER_PROFILE=${LOADER_PROFILE:-}
 BUNDLE_ID=${BUNDLE_ID:-}
 FEX_DIST=${FEX_DIST:-$BUILD_ROOT/fex-dist}
+HOST_DYLIBS=${HOST_DYLIBS:-libfreetype.6.dylib}
 MIN_FREE_GB=${MIN_FREE_GB:-10}
 ENTITLEMENTS=$SCRIPT_DIR/wine-loader.entitlements
 UNIX_DIR=aarch64-unix
@@ -156,7 +160,46 @@ else
 fi
 
 ########################################################################
-# 3. The bundle
+# 3. Host libraries
+########################################################################
+# Wine's Unix libraries open these by their bare name, which dyld only looks up in the rpaths
+# of the library that asks, and Wine links each with its own directory as the rpath. Homebrew's
+# directory is not searched, so a library that is only there is not found: "Wine cannot find the
+# FreeType font library". Copy each one and the Homebrew libraries it needs into lib/external,
+# make them refer to each other by @loader_path, and link the ones Wine asks for into the Unix
+# library directory. Changing the references voids the signatures, so sign again, ad hoc.
+extdir=$INSTALL_DIR/lib/external
+brew_prefix=$(brew --prefix 2>/dev/null) || die "Homebrew is required for the host libraries ($HOST_DYLIBS)"
+mkdir -p "$extdir"
+copy_host_dylib() {
+    local src=$1 name dep
+    name=$(basename "$src")
+    [ -f "$extdir/$name" ] && return 0
+    [ -f "$src" ] || die "host library $src not found"
+    cp -L "$src" "$extdir/$name"
+    chmod u+w "$extdir/$name"
+    install_name_tool -id "@loader_path/$name" "$extdir/$name" 2>/dev/null || die "install_name_tool -id failed for $name"
+    # the libraries it needs from Homebrew (the system's own stay where they are)
+    for dep in $(otool -L "$src" | awk 'NR > 1 { print $1 }' | grep -E "^($brew_prefix|@rpath|@loader_path)/" || true); do
+        case "$dep" in
+            @rpath/*|@loader_path/*) dep_src=$(dirname "$(realpath "$src")")/$(basename "$dep") ;;
+            *) dep_src=$dep ;;
+        esac
+        [ "$(basename "$dep")" = "$name" ] && continue
+        install_name_tool -change "$dep" "@loader_path/$(basename "$dep")" "$extdir/$name" 2>/dev/null \
+            || die "install_name_tool -change failed for $name ($dep)"
+        copy_host_dylib "$dep_src"
+    done
+    codesign --force --sign - "$extdir/$name" 2>/dev/null || die "codesign failed for $extdir/$name"
+}
+for lib in $HOST_DYLIBS; do
+    copy_host_dylib "$brew_prefix/lib/$lib"
+    ln -sf "../../external/$lib" "$unixdir/$lib"
+done
+log "host libraries in lib/external: $(ls "$extdir" | tr '\n' ' ')"
+
+########################################################################
+# 4. The bundle
 ########################################################################
 mkdir -p "$app/Contents/MacOS"
 mv "$unixdir/wine" "$app/Contents/MacOS/wine"
@@ -201,7 +244,7 @@ rm -f "$INSTALL_DIR/bin/wine"
 ln -s "../lib/wine/$UNIX_DIR/wine.app/Contents/MacOS/wine" "$INSTALL_DIR/bin/wine"
 
 ########################################################################
-# 4. Sign
+# 5. Sign
 ########################################################################
 # The bundle is signed as a whole and without --deep: the loader is the only code in it.
 if [ -n "$LOADER_PROFILE" ]; then
