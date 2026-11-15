@@ -23,10 +23,15 @@
 #      TrueType font with glyph outlines, draws a word with it and is listed TrueType families;
 #      Wine does not say that it cannot find FreeType, which the bundle now carries in
 #      lib/external with the Homebrew libraries it needs
+#   4  the Vulkan loader from Windows code: vulkan_test.exe, for aarch64 and for x86_64, loads
+#      vulkan-1.dll and gets the host loader's version (1.3 or later) through winevulkan, and
+#      Wine does not say that it has no Vulkan. There is no Vulkan driver yet: creating an
+#      instance gives VK_ERROR_INCOMPATIBLE_DRIVER, and the item wants the host loader's own
+#      "Found no drivers" then, which shows that it is the one that answered
 # The build and the test programs come first ("build").
 #
-# NOT YET CHECKED, so this check passing does not make Wave 4 done: Vulkan in Wine with
-# KosmicKrisp, DXMT, vkd3d-proton, and a game. The summary lists them as TODO and the exit
+# NOT YET CHECKED, so this check passing does not make Wave 4 done: a Vulkan driver
+# (KosmicKrisp), DXMT, vkd3d-proton, and a game. The summary lists them as TODO and the exit
 # status is 3 while they are open and nothing failed (1 when an item failed, 0 only when all of
 # it passed).
 # Logs go to $EVIDENCE_DIR.
@@ -53,7 +58,7 @@ RESULTS=()
 FAILED=0
 TODO=0
 # CHECK_ITEMS limits the run to some items ("build" rebuilds Wine, the bundle and the test programs).
-CHECK_ITEMS=${CHECK_ITEMS:-"build 1 2 3"}
+CHECK_ITEMS=${CHECK_ITEMS:-"build 1 2 3 4"}
 want() { case " $CHECK_ITEMS " in *" $1 "*) return 0 ;; esac; return 1; }
 pass() { RESULTS+=("PASS  item $1: $2"); echo "PASS  item $1: $2"; }
 fail() { RESULTS+=("FAIL  item $1: $2"); echo "FAIL  item $1: $2"; FAILED=1; }
@@ -113,7 +118,7 @@ build_gui_program() {
     [ -f "$TESTS_OUT/$name.exe" ] && [ -f "$TESTS_OUT/${name}_x64.exe" ] &&
         grep -q '^Format: COFF-ARM64$' "$log" && grep -q '^Format: COFF-x86-64$' "$log"
 }
-for p in window_test font_test; do
+for p in window_test font_test vulkan_test; do
     if build_gui_program $p; then
         pass build "$p.exe built, COFF-ARM64 and COFF-x86-64 ($TESTS_OUT/$p.build.log)"
     else
@@ -215,7 +220,40 @@ else
 fi
 fi  # item 3
 
-todo "Vulkan in Wine with KosmicKrisp, DXMT, vkd3d-proton and a game have no items yet; Wave 4 is not done"
+########################################################################
+# Item 4: the Vulkan loader from Windows code
+########################################################################
+if want 4; then
+echo "== item 4: the Vulkan loader from Windows code, aarch64 and x86_64"
+vdir=$EVIDENCE_DIR/item4-vulkan
+rm -rf "$vdir"; mkdir -p "$vdir"
+PREFIX=$BUILD_ROOT/wave4-prefix-vulkan
+rm -rf "$PREFIX"; mkdir -p "$PREFIX"
+VULKAN_LINE='vulkan: loader 1\.([3-9]|[1-9][0-9])\.[0-9]+, instance (0|-9), devices [0-9]+(, first device .*)?'
+vpass=0; t=$WINEBOOT_TIMEOUT   # the first run sets the prefix up
+for p in vulkan_test vulkan_test_x64; do
+    WINEPREFIX=$PREFIX VK_LOADER_DEBUG=error,warn run_timeout "$t" "$WINE" "$TESTS_OUT/$p.exe" >"$vdir/$p.stdout" 2>"$vdir/$p.stderr"
+    rc=$?
+    t=$RUN_TIMEOUT
+    out=$(tr -d '\r' <"$vdir/$p.stdout" | head -1)
+    line=no; echo "$out" | grep -Eqx "$VULKAN_LINE" && line=yes
+    res=$(echo "$out" | sed -n 's/.*, instance \(-\{0,1\}[0-9]*\), devices.*/\1/p')
+    nwine=$(grep -a -c -E 'built without Vulkan support|Failed to load libvulkan|Failed to load Wine graphics driver supporting Vulkan' "$vdir/$p.stderr")
+    nhost=$(grep -a -c 'Vulkan Loader.*Found no drivers' "$vdir/$p.stderr")
+    # without a driver, the host loader has to be the one that said so
+    answered=yes; [ "$res" = 0 ] || [ "$nhost" -ge 1 ] || answered=no
+    [ "$rc" = 0 ] && [ $line = yes ] && [ "$nwine" = 0 ] && [ $answered = yes ] && vpass=$((vpass + 1))
+    echo "$p.exe: exit=$rc line=$line ($out); Wine's no-Vulkan messages: $nwine; host loader's 'Found no drivers': $nhost" >>"$vdir/summary.txt"
+done
+cleanup_prefix "$PREFIX"
+if [ "$vpass" = 2 ]; then
+    pass 4 "vulkan_test.exe (aarch64) and vulkan_test_x64.exe (x86_64) reached the host Vulkan loader through vulkan-1.dll: '$out' ($vdir/summary.txt)"
+else
+    fail 4 "$vpass of 2 Vulkan tests passed ($vdir/summary.txt)"
+fi
+fi  # item 4
+
+todo "a Vulkan driver (KosmicKrisp), DXMT, vkd3d-proton and a game have no items yet; Wave 4 is not done"
 
 echo
 echo "== summary"
