@@ -66,6 +66,7 @@ FEX_DIST=${FEX_DIST:-$BUILD_ROOT/fex-dist}
 VULKAN_DIST=${VULKAN_DIST:-$BUILD_ROOT/vulkan-dist}
 DXMT_DIST=${DXMT_DIST:-$BUILD_ROOT/dxmt-dist}
 MESA_DIST=${MESA_DIST:-$BUILD_ROOT/mesa-dist}
+VKD3D_DIST=${VKD3D_DIST:-$BUILD_ROOT/vkd3d-proton-dist}
 SRC_DIR=${SRC_DIR:-$BUILD_ROOT/wine-src}
 TOOLCHAIN_DIR=${TOOLCHAIN_DIR:-/Users/annon/projects/proton-macos-toolchain/llvm-mingw-20261020-ucrt-macos-universal}
 EVIDENCE_DIR=${EVIDENCE_DIR:-$BUILD_ROOT/evidence/wave3b}
@@ -140,7 +141,7 @@ entitlement_keys() {
 # Build: Wine, the bundle and the test programs
 ########################################################################
 if want build; then
-echo "== build: macos/build-vulkan.sh, build-wine.sh (arm64ec + aarch64, MSVC mode, Vulkan), build-fex.sh, build-dxmt.sh, build-mesa.sh, bundle-wine.sh and the test programs"
+echo "== build: macos/build-vulkan.sh, build-wine.sh (arm64ec + aarch64, MSVC mode, Vulkan), build-fex.sh, build-dxmt.sh, build-mesa.sh, build-vkd3d-proton.sh, bundle-wine.sh and the test programs"
 # This build has Vulkan and DXMT, which Wave 4 uses; it is one configuration, so that the two
 # waves' checks don't rebuild Wine and the bundle back and forth. Nothing in this wave's items
 # needs either.
@@ -187,8 +188,18 @@ if [ $mstatus = 0 ]; then
 else
     fail build "build-mesa.sh exited $mstatus: $(tail -1 "$mlog") ($mlog)"
 fi
+# Direct3D 12, which the bundle installs in place of Wine's own (check-wave4.sh uses it); the
+# Wine build tree's winebuild marks its DLLs
+klog=$EVIDENCE_DIR/build-vkd3d-proton.log
+BUILD_DIR=$BUILD_DIR VKD3D_DIST=$VKD3D_DIST "$PROTON_DIR/macos/build-vkd3d-proton.sh" >"$klog" 2>&1
+kstatus=$?
+if [ $kstatus = 0 ]; then
+    pass build "build-vkd3d-proton.sh exit 0, $(sed -n 's/^:: \(vkd3d-proton [^:(]*\).*/\1/p' "$klog" | head -1) ($klog)"
+else
+    fail build "build-vkd3d-proton.sh exited $kstatus: $(tail -1 "$klog") ($klog)"
+fi
 ulog=$EVIDENCE_DIR/bundle.log
-BUILD_DIR=$BUILD_DIR FEX_DIST=$FEX_DIST VULKAN_DIST=$VULKAN_DIST DXMT_DIST=$DXMT_DIST MESA_DIST=$MESA_DIST LOADER_PROFILE=$LOADER_PROFILE "$PROTON_DIR/macos/bundle-wine.sh" >"$ulog" 2>&1
+BUILD_DIR=$BUILD_DIR FEX_DIST=$FEX_DIST VULKAN_DIST=$VULKAN_DIST DXMT_DIST=$DXMT_DIST MESA_DIST=$MESA_DIST VKD3D_DIST=$VKD3D_DIST LOADER_PROFILE=$LOADER_PROFILE "$PROTON_DIR/macos/bundle-wine.sh" >"$ulog" 2>&1
 ustatus=$?
 if [ $ustatus = 0 ]; then
     pass build "bundle-wine.sh exit 0, $([ -n "$LOADER_PROFILE" ] && echo "profile $LOADER_PROFILE" || echo "ad hoc") ($ulog)"
