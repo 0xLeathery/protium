@@ -19,12 +19,16 @@
 #      for a few seconds and needs a session with a display.
 #   2  regression: check-wave3b.sh has no FAIL (its exit status 3, for what the profile gates,
 #      is accepted)
+#   3  TrueType fonts: font_test.exe, for aarch64 and for x86_64, gets Wine's Tahoma as a
+#      TrueType font with glyph outlines, draws a word with it and is listed TrueType families;
+#      Wine does not say that it cannot find FreeType, which the bundle now carries in
+#      lib/external with the Homebrew libraries it needs
 # The build and the test programs come first ("build").
 #
-# NOT YET CHECKED, so this check passing does not make Wave 4 done: fonts (Wine does not find
-# FreeType at run time), Vulkan in Wine with KosmicKrisp, DXMT, vkd3d-proton, and a game. The
-# summary lists them as TODO and the exit status is 3 while they are open and nothing failed
-# (1 when an item failed, 0 only when all of it passed).
+# NOT YET CHECKED, so this check passing does not make Wave 4 done: Vulkan in Wine with
+# KosmicKrisp, DXMT, vkd3d-proton, and a game. The summary lists them as TODO and the exit
+# status is 3 while they are open and nothing failed (1 when an item failed, 0 only when all of
+# it passed).
 # Logs go to $EVIDENCE_DIR.
 
 set -u
@@ -49,7 +53,7 @@ RESULTS=()
 FAILED=0
 TODO=0
 # CHECK_ITEMS limits the run to some items ("build" rebuilds Wine, the bundle and the test programs).
-CHECK_ITEMS=${CHECK_ITEMS:-"build 1 2"}
+CHECK_ITEMS=${CHECK_ITEMS:-"build 1 2 3"}
 want() { case " $CHECK_ITEMS " in *" $1 "*) return 0 ;; esac; return 1; }
 pass() { RESULTS+=("PASS  item $1: $2"); echo "PASS  item $1: $2"; }
 fail() { RESULTS+=("FAIL  item $1: $2"); echo "FAIL  item $1: $2"; FAILED=1; }
@@ -86,31 +90,36 @@ if [ -s "$B3/check-summary.txt" ] && ! grep -q '^FAIL' "$B3/check-summary.txt" &
 else
     fail build "check-wave3b.sh build step: $(grep '^FAIL' "$B3/check-summary.txt" 2>/dev/null | cut -c1-80 | paste -sd';' -) ($B3)"
 fi
-# window_test.exe: for aarch64 with the build's own winegcc, in the build's MSVC mode, against
-# Wine's CRT; for x86_64 with the mingw compiler and its CRT, like a program from outside Wine
-wlog=$TESTS_OUT/window_test.build.log
-rm -f "$TESTS_OUT/window_test.exe" "$TESTS_OUT/window_test_x64.exe"
-{
-    echo "\$ winegcc -b aarch64-windows window_test.c (Wine CRT)"
-    libs=""
-    for l in user32 gdi32 winecrt0 ucrtbase kernel32 ntdll; do libs="$libs $BUILD_DIR/dlls/$l/aarch64-windows/lib$l.a"; done
-    # shellcheck disable=SC2086
-    PATH=$MINGW_BIN:$PATH "$BUILD_DIR/tools/winegcc/winegcc" -v --wine-objdir "$BUILD_DIR" -b aarch64-windows \
-        -mconsole -O2 -Wall -D_UCRT -I"$SRC_DIR/include/msvcrt" -I"$SRC_DIR/include" \
-        -o "$TESTS_OUT/window_test.exe" "$SCRIPT_DIR/window_test.c" $libs
-    echo "exit=$?"
-    "$READOBJ" --file-headers "$TESTS_OUT/window_test.exe" | grep -E 'Format|Machine'
-    echo "\$ x86_64-w64-mingw32-clang window_test.c"
-    "$MINGW_BIN/x86_64-w64-mingw32-clang" -O2 -Wall -o "$TESTS_OUT/window_test_x64.exe" "$SCRIPT_DIR/window_test.c" -luser32 -lgdi32
-    echo "exit=$?"
-    "$READOBJ" --file-headers "$TESTS_OUT/window_test_x64.exe" | grep -E 'Format|Machine'
-} >"$wlog" 2>&1
-if [ -f "$TESTS_OUT/window_test.exe" ] && [ -f "$TESTS_OUT/window_test_x64.exe" ] &&
-   grep -q '^Format: COFF-ARM64$' "$wlog" && grep -q '^Format: COFF-x86-64$' "$wlog"; then
-    pass build "window_test.exe built, COFF-ARM64 and COFF-x86-64 ($wlog)"
-else
-    fail build "window_test.exe did not build for both architectures ($wlog)"
-fi
+# The GUI test programs: for aarch64 with the build's own winegcc, in the build's MSVC mode,
+# against Wine's CRT; for x86_64 with the mingw compiler and its CRT, like a program from
+# outside Wine
+build_gui_program() {
+    local name=$1 log=$TESTS_OUT/$1.build.log libs="" l
+    rm -f "$TESTS_OUT/$name.exe" "$TESTS_OUT/${name}_x64.exe"
+    {
+        echo "\$ winegcc -b aarch64-windows $name.c (Wine CRT)"
+        for l in user32 gdi32 winecrt0 ucrtbase kernel32 ntdll; do libs="$libs $BUILD_DIR/dlls/$l/aarch64-windows/lib$l.a"; done
+        # shellcheck disable=SC2086
+        PATH=$MINGW_BIN:$PATH "$BUILD_DIR/tools/winegcc/winegcc" -v --wine-objdir "$BUILD_DIR" -b aarch64-windows \
+            -mconsole -O2 -Wall -D_UCRT -I"$SRC_DIR/include/msvcrt" -I"$SRC_DIR/include" \
+            -o "$TESTS_OUT/$name.exe" "$SCRIPT_DIR/$name.c" $libs
+        echo "exit=$?"
+        "$READOBJ" --file-headers "$TESTS_OUT/$name.exe" | grep -E 'Format|Machine'
+        echo "\$ x86_64-w64-mingw32-clang $name.c"
+        "$MINGW_BIN/x86_64-w64-mingw32-clang" -O2 -Wall -o "$TESTS_OUT/${name}_x64.exe" "$SCRIPT_DIR/$name.c" -luser32 -lgdi32
+        echo "exit=$?"
+        "$READOBJ" --file-headers "$TESTS_OUT/${name}_x64.exe" | grep -E 'Format|Machine'
+    } >"$log" 2>&1
+    [ -f "$TESTS_OUT/$name.exe" ] && [ -f "$TESTS_OUT/${name}_x64.exe" ] &&
+        grep -q '^Format: COFF-ARM64$' "$log" && grep -q '^Format: COFF-x86-64$' "$log"
+}
+for p in window_test font_test; do
+    if build_gui_program $p; then
+        pass build "$p.exe built, COFF-ARM64 and COFF-x86-64 ($TESTS_OUT/$p.build.log)"
+    else
+        fail build "$p.exe did not build for both architectures ($TESTS_OUT/$p.build.log)"
+    fi
+done
 llog=$TESTS_OUT/list_windows.build.log
 rm -f "$TESTS_OUT/list_windows"
 clang -O1 -Wall -Werror -o "$TESTS_OUT/list_windows" "$SCRIPT_DIR/list_windows.c" -framework CoreGraphics -framework CoreFoundation >"$llog" 2>&1
@@ -174,7 +183,39 @@ else
 fi
 fi  # item 2
 
-todo "fonts (FreeType is not found at run time), Vulkan in Wine with KosmicKrisp, DXMT, vkd3d-proton and a game have no items yet; Wave 4 is not done"
+########################################################################
+# Item 3: TrueType fonts
+########################################################################
+if want 3; then
+echo "== item 3: TrueType fonts, aarch64 and x86_64"
+fdir=$EVIDENCE_DIR/item3-fonts
+rm -rf "$fdir"; mkdir -p "$fdir"
+PREFIX=$BUILD_ROOT/wave4-prefix-font
+rm -rf "$PREFIX"; mkdir -p "$PREFIX"
+FONT_LINE='font: face Tahoma, truetype 1, outline 1, drawn pixels [1-9][0-9]*, truetype families [1-9][0-9]*'
+fpass=0; t=$WINEBOOT_TIMEOUT   # the first run sets the prefix up and makes the font list
+for p in font_test font_test_x64; do
+    WINEPREFIX=$PREFIX run_timeout "$t" "$WINE" "$TESTS_OUT/$p.exe" >"$fdir/$p.stdout" 2>"$fdir/$p.stderr"
+    rc=$?
+    t=$RUN_TIMEOUT
+    line=no; tr -d '\r' <"$fdir/$p.stdout" | grep -Eqx "$FONT_LINE" && line=yes
+    nft=$(grep -c 'cannot find the FreeType font library' "$fdir/$p.stderr")
+    [ "$rc" = 0 ] && [ $line = yes ] && [ "$nft" = 0 ] && fpass=$((fpass + 1))
+    echo "$p.exe: exit=$rc line=$line ($(tr -d '\r' <"$fdir/$p.stdout" | head -1)); 'cannot find the FreeType font library' messages: $nft" >>"$fdir/summary.txt"
+done
+cleanup_prefix "$PREFIX"
+ext=$INSTALL_DIR/lib/external
+{ echo "lib/external:"; ls -l "$ext" 2>&1; ls -l "$INSTALL_DIR/lib/wine/$UNIX_DIR/libfreetype.6.dylib" 2>&1; } >>"$fdir/summary.txt"
+extok=yes
+[ -f "$ext/libfreetype.6.dylib" ] && codesign --verify "$ext/libfreetype.6.dylib" 2>/dev/null || extok=no
+if [ "$fpass" = 2 ] && [ $extok = yes ]; then
+    pass 3 "font_test.exe (aarch64) and font_test_x64.exe (x86_64) got Tahoma as a TrueType font and drew with it; FreeType is in lib/external and Wine found it ($fdir/summary.txt)"
+else
+    fail 3 "$fpass of 2 font tests passed, FreeType bundled and signed: $extok ($fdir/summary.txt)"
+fi
+fi  # item 3
+
+todo "Vulkan in Wine with KosmicKrisp, DXMT, vkd3d-proton and a game have no items yet; Wave 4 is not done"
 
 echo
 echo "== summary"
