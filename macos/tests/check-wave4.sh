@@ -14,9 +14,10 @@
 # Items (pass/fail):
 #   1  a window through winemac.drv: window_test.exe, built for aarch64 and for x86_64 (which
 #      runs through FEX), opens a 320x240 window, paints it and reads the colour back; while it
-#      is open macOS lists a window of that size and place that belongs to the loader in
-#      wine.app, and none once it has closed. This item opens two small windows on the screen
-#      for a few seconds and needs a session with a display.
+#      is open the window server has a window of that size and place that belongs to the loader
+#      in wine.app, and none once it has closed. This item opens two small windows for a few
+#      seconds and needs a session with a display. The window need not be on screen: it is not
+#      while the user is in another Space, such as a full screen app.
 #   2  regression: check-wave3b.sh has no FAIL (its exit status 3, for what the profile gates,
 #      is accepted)
 #   3  TrueType fonts: font_test.exe, for aarch64 and for x86_64, gets Wine's Tahoma as a
@@ -148,8 +149,9 @@ rm -rf "$wdir"; mkdir -p "$wdir"
 PREFIX=$BUILD_ROOT/wave4-prefix-window
 rm -rf "$PREFIX"; mkdir -p "$PREFIX"
 WINDOW_LINE='window: driver winemac.drv, screen [0-9]+x[0-9]+, 320x240 at 120,120, painted 1, pixel 563412, visible 1'
-# the window as macOS has to list it: its size, its place, and the loader in wine.app as its owner
-MAC_WINDOW=$(printf '\t320x240\t120,120\t[0-9-]+\t%s$' "$BUNDLE_LOADER")
+# the window as the window server has to list it: its size, its place, and the loader in
+# wine.app as its owner; the last column says whether it is on screen, which is not asked for
+MAC_WINDOW=$(printf '\t320x240\t120,120\t[0-9-]+\t%s\t[01]$' "$BUNDLE_LOADER")
 # set the prefix up first, so that the timed runs only show the window
 WINEPREFIX=$PREFIX run_timeout "$WINEBOOT_TIMEOUT" "$WINE" "$TESTS_OUT/window_test.exe" 0 >"$wdir/setup.stdout" 2>"$wdir/setup.stderr"
 echo "prefix setup: exit=$? $(tr -d '\r' <"$wdir/setup.stdout")" >>"$wdir/summary.txt"
@@ -170,12 +172,13 @@ for p in window_test window_test_x64; do
     line=no; tr -d '\r' <"$wdir/$p.stdout" | grep -Eqx "$WINDOW_LINE" && line=yes
     open=$(grep -c -E "$MAC_WINDOW" "$wdir/$p.mac-open.txt")
     closed=$(grep -c -E "$MAC_WINDOW" "$wdir/$p.mac-closed.txt")
+    onscreen=$(grep -E "$MAC_WINDOW" "$wdir/$p.mac-open.txt" | grep -c "$(printf '\t1$')")
     [ "$rc" = 0 ] && [ $line = yes ] && [ "$open" = 1 ] && [ "$closed" = 0 ] && wpass=$((wpass + 1))
-    echo "$p.exe: exit=$rc line=$line ($(tr -d '\r' <"$wdir/$p.stdout" | head -1)); macOS lists the window while open: $open, after: $closed" >>"$wdir/summary.txt"
+    echo "$p.exe: exit=$rc line=$line ($(tr -d '\r' <"$wdir/$p.stdout" | head -1)); the window server has the window while open: $open (on screen: $onscreen), after: $closed" >>"$wdir/summary.txt"
 done
 cleanup_prefix "$PREFIX"
 if [ "$wpass" = 2 ]; then
-    pass 1 "window_test.exe (aarch64) and window_test_x64.exe (x86_64) opened, painted and read back a 320x240 window through winemac.drv, and macOS listed it for the loader in wine.app while it was open ($wdir/summary.txt)"
+    pass 1 "window_test.exe (aarch64) and window_test_x64.exe (x86_64) opened, painted and read back a 320x240 window through winemac.drv, and the window server had it for the loader in wine.app while it was open ($wdir/summary.txt)"
 else
     fail 1 "$wpass of 2 window tests passed ($wdir/summary.txt)"
 fi
