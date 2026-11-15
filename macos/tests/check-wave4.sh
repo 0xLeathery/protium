@@ -24,11 +24,11 @@
 #      TrueType font with glyph outlines, draws a word with it and is listed TrueType families;
 #      Wine does not say that it cannot find FreeType, which the bundle now carries in
 #      lib/external with the Homebrew libraries it needs
-#   4  the Vulkan loader from Windows code: vulkan_test.exe, for aarch64 and for x86_64, loads
-#      vulkan-1.dll and gets the host loader's version (1.3 or later) through winevulkan, and
-#      Wine does not say that it has no Vulkan. There is no Vulkan driver yet: creating an
-#      instance gives VK_ERROR_INCOMPATIBLE_DRIVER, and the item wants the host loader's own
-#      "Found no drivers" then, which shows that it is the one that answered
+#   4  a Vulkan device from Windows code: vulkan_test.exe, for aarch64 and for x86_64, loads
+#      vulkan-1.dll, gets the host loader's version (1.3 or later) through winevulkan, creates
+#      an instance and is given at least one device. The host loader reads the manifest of the
+#      driver that the install carries (KosmicKrisp, in share/vulkan/icd.d, which ntdll names
+#      to it) and no other manifest, and Wine does not say that it has no Vulkan
 #   5  Direct3D 11 through DXMT, off screen: d3d11_test_x64.exe, an x86_64 program, gets a
 #      hardware device of feature level 11_0 or more from DXMT (winemetal.dll is in the
 #      process), compiles two HLSL shaders, draws into a texture and reads back the colour it
@@ -47,8 +47,8 @@
 # The build and the test programs come first ("build").
 #
 # NOT YET CHECKED, so this check passing does not make Wave 4 done: that Direct3D frames are on
-# the screen (for someone to look at) and follow a resized window, a Vulkan driver
-# (KosmicKrisp), vkd3d-proton, and a game. The summary lists them as TODO and the exit status is
+# the screen (for someone to look at) and follow a resized window, vkd3d-proton (Direct3D 12),
+# and a game. The summary lists them as TODO and the exit status is
 # 3 while they are open and nothing failed (1 when an item failed, 0 only when all of it
 # passed).
 # Logs go to $EVIDENCE_DIR.
@@ -72,12 +72,16 @@ WINE_DIR=$PROTON_DIR/wine
 # wine and superproject commits this wave starts from (the tips after Wave 3b's last change)
 WINE_WAVE_BASE=${WINE_WAVE_BASE:-367c1ae9b0468f5d8b60b32be12cefe91eba0ffb}
 SUPER_WAVE_BASE=${SUPER_WAVE_BASE:-acfe76e00fbbbf49b10ef781d58e2bfdabb76ec5}
-# Wine files this wave may change: winemac.drv's table for DXMT.
-WAVE_FILES="dlls/winemac.drv/macdrv.h dlls/winemac.drv/window.c"
+# Wine files this wave may change: winemac.drv's table for DXMT, and where ntdll tells the
+# Vulkan loader to look for drivers.
+WAVE_FILES="dlls/winemac.drv/macdrv.h dlls/winemac.drv/window.c dlls/ntdll/unix/loader.c"
 UNIX_DIR=aarch64-unix
 export MIN_FREE_GB=${MIN_FREE_GB:-10}
 # A new prefix would otherwise wait on the Mono and Gecko install dialogs.
 export WINEDLLOVERRIDES=${WINEDLLOVERRIDES:-mscoree,mshtml=}
+# ntdll leaves the Vulkan loader to the caller when one of these is set; the check is of the
+# driver the install carries.
+unset VK_DRIVER_FILES VK_ICD_FILENAMES VK_ADD_DRIVER_FILES
 
 mkdir -p "$EVIDENCE_DIR"
 RESULTS=()
@@ -292,34 +296,41 @@ fi
 fi  # item 3
 
 ########################################################################
-# Item 4: the Vulkan loader from Windows code
+# Item 4: a Vulkan device from Windows code
 ########################################################################
 if want 4; then
-echo "== item 4: the Vulkan loader from Windows code, aarch64 and x86_64"
+echo "== item 4: a Vulkan device from Windows code, aarch64 and x86_64"
 vdir=$EVIDENCE_DIR/item4-vulkan
 rm -rf "$vdir"; mkdir -p "$vdir"
 PREFIX=$BUILD_ROOT/wave4-prefix-vulkan
 rm -rf "$PREFIX"; mkdir -p "$PREFIX"
 hold_server "$PREFIX"
-VULKAN_LINE='vulkan: loader 1\.([3-9]|[1-9][0-9])\.[0-9]+, instance (0|-9), devices [0-9]+(, first device .*)?'
+VULKAN_LINE='vulkan: loader 1\.([3-9]|[1-9][0-9])\.[0-9]+, instance 0, devices [1-9][0-9]*, first device "[^"]+" api 1\.[0-9]+\.[0-9]+'
+OWN_ICD=$(realpath "$INSTALL_DIR/share/vulkan/icd.d/kosmickrisp_mesa_icd.aarch64.json" 2>/dev/null)
 vpass=0; t=$WINEBOOT_TIMEOUT   # the first run sets the prefix up
 for p in vulkan_test vulkan_test_x64; do
-    WINEPREFIX=$PREFIX VK_LOADER_DEBUG=error,warn run_timeout "$t" "$WINE" "$TESTS_OUT/$p.exe" >"$vdir/$p.stdout" 2>"$vdir/$p.stderr"
+    WINEPREFIX=$PREFIX VK_LOADER_DEBUG=error,warn,driver run_timeout "$t" "$WINE" "$TESTS_OUT/$p.exe" >"$vdir/$p.stdout" 2>"$vdir/$p.stderr"
     rc=$?
     t=$RUN_TIMEOUT
     out=$(tr -d '\r' <"$vdir/$p.stdout" | head -1)
     line=no; echo "$out" | grep -Eqx "$VULKAN_LINE" && line=yes
-    res=$(echo "$out" | sed -n 's/.*, instance \(-\{0,1\}[0-9]*\), devices.*/\1/p')
     nwine=$(grep -a -c -E 'built without Vulkan support|Failed to load libvulkan|Failed to load Wine graphics driver supporting Vulkan' "$vdir/$p.stderr")
     nhost=$(grep -a -c 'Vulkan Loader.*Found no drivers' "$vdir/$p.stderr")
-    # without a driver, the host loader has to be the one that said so
-    answered=yes; [ "$res" = 0 ] || [ "$nhost" -ge 1 ] || answered=no
-    [ "$rc" = 0 ] && [ $line = yes ] && [ "$nwine" = 0 ] && [ $answered = yes ] && vpass=$((vpass + 1))
-    echo "$p.exe: exit=$rc line=$line ($out); Wine's no-Vulkan messages: $nwine; host loader's 'Found no drivers': $nhost" >>"$vdir/summary.txt"
+    # the manifests the host loader read: the install's own, and none from anywhere else
+    # (ntdll names the directory relative to its own, so the paths are compared resolved)
+    nown=0; nother=0
+    while IFS= read -r m; do
+        [ -n "$m" ] || continue
+        if [ -n "$OWN_ICD" ] && [ "$(realpath "$m" 2>/dev/null)" = "$OWN_ICD" ]; then nown=$((nown + 1)); else nother=$((nother + 1)); fi
+    done <<EOF
+$(grep -a 'Vulkan Loader.*Found ICD manifest file ' "$vdir/$p.stderr" | sed 's/.*Found ICD manifest file \(.*\), version .*/\1/')
+EOF
+    [ "$rc" = 0 ] && [ $line = yes ] && [ "$nwine" = 0 ] && [ "$nhost" = 0 ] && [ "$nown" -ge 1 ] && [ "$nother" = 0 ] && vpass=$((vpass + 1))
+    echo "$p.exe: exit=$rc line=$line ($out); Wine's no-Vulkan messages: $nwine; host loader's 'Found no drivers': $nhost; it read the install's KosmicKrisp manifest $nown times and $nother other manifests" >>"$vdir/summary.txt"
 done
 cleanup_prefix "$PREFIX"
 if [ "$vpass" = 2 ]; then
-    pass 4 "vulkan_test.exe (aarch64) and vulkan_test_x64.exe (x86_64) reached the host Vulkan loader through vulkan-1.dll: '$out' ($vdir/summary.txt)"
+    pass 4 "vulkan_test.exe (aarch64) and vulkan_test_x64.exe (x86_64) got a device from the install's KosmicKrisp through vulkan-1.dll: '$out' ($vdir/summary.txt)"
 else
     fail 4 "$vpass of 2 Vulkan tests passed ($vdir/summary.txt)"
 fi
@@ -523,7 +534,7 @@ else
 fi
 fi  # item 8
 
-todo "that Direct3D frames are on the screen and follow a resized window, a Vulkan driver (KosmicKrisp), vkd3d-proton and a game have no items yet; Wave 4 is not done"
+todo "that Direct3D frames are on the screen and follow a resized window, vkd3d-proton (Direct3D 12) and a game have no items yet; Wave 4 is not done"
 
 echo
 echo "== summary"
