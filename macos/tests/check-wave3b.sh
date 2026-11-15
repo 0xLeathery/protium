@@ -37,13 +37,19 @@
 #      FEX_RUNS runs, and libarm64ecfex.dll is loaded as a builtin. cpuid_x64.exe is told that
 #      the CPU has SSE4.2, PCLMULQDQ, AES and SHA, which every Apple Silicon CPU has the ARM
 #      counterparts of, and Wine no longer says that the ID registers are a stub
+#   8  MAP_JIT memory for an emulator's code: jit_view_test.exe passes (a view allocated with
+#      Wine's JIT attribute follows protection changes, decommits and guard pages and keeps its
+#      contents; a write from Windows code faults and Wine says why). jit_x64.exe, an x86_64
+#      program of 4000 functions, prints the checksum of a native build of its source through
+#      FEX, FEX says that it uses per-thread W^X memory, and the run takes at most
+#      JIT_MAX_FLIPS page flips (over 8000 with FEX's code in flipped pages)
 # The build (macos/build-wine.sh, macos/build-fex.sh, macos/bundle-wine.sh) and the test programs
 # come first ("build").
 #
 # NOT YET CHECKED, so this check passing does not make Wave 3b done: 4K pages, memory below 4 GB
-# (shared user data back at 0x7ffe0000), MAP_JIT memory for FEX's code and hardware TSO. All but
-# MAP_JIT need the profile. The summary lists them as TODO and the exit status is 3 while they
-# are open and nothing failed (1 when an item failed, 0 only when all of it passed).
+# (shared user data back at 0x7ffe0000) and hardware TSO. They need the profile. The summary
+# lists them as TODO and the exit status is 3 while they are open and nothing failed (1 when an
+# item failed, 0 only when all of it passed).
 # Logs go to $EVIDENCE_DIR.
 
 set -u
@@ -67,6 +73,7 @@ RUN_TIMEOUT=${RUN_TIMEOUT:-120}
 HELLO_RUNS=${HELLO_RUNS:-5}
 WINEBOOT_RUNS=${WINEBOOT_RUNS:-3}
 FEX_RUNS=${FEX_RUNS:-5}
+JIT_MAX_FLIPS=${JIT_MAX_FLIPS:-200}
 UNIX_DIR=aarch64-unix
 X18_ENTITLEMENT=com.apple.security.custom-x18-abi-toggle
 CROSS_ARCH_ENTITLEMENT=com.apple.developer.cross-architecture-support
@@ -83,7 +90,7 @@ RESULTS=()
 FAILED=0
 TODO=0
 # CHECK_ITEMS limits the run to some items ("build" rebuilds Wine, the bundle and the test programs).
-CHECK_ITEMS=${CHECK_ITEMS:-"build 1 2 3 4 5 6 7"}
+CHECK_ITEMS=${CHECK_ITEMS:-"build 1 2 3 4 5 6 7 8"}
 want() { case " $CHECK_ITEMS " in *" $1 "*) return 0 ;; esac; return 1; }
 pass() { RESULTS+=("PASS  item $1: $2"); echo "PASS  item $1: $2"; }
 fail() { RESULTS+=("FAIL  item $1: $2"); echo "FAIL  item $1: $2"; FAILED=1; }
@@ -150,13 +157,13 @@ fi
 # build's MSVC mode, against Wine's CRT; the import libraries of a hybrid build are in
 # aarch64-windows for both
 build_hello() {
-    local name=$1 target=$2 format=$3 log=$TESTS_OUT/$1.build.log
+    local name=$1 target=$2 format=$3 src=${4:-hello.c} log=$TESTS_OUT/$1.build.log
     rm -f "$TESTS_OUT/$name.exe"
     {
-        echo "\$ winegcc -b $target hello.c (Wine CRT)"
+        echo "\$ winegcc -b $target $src (Wine CRT)"
         PATH=$MINGW_BIN:$PATH "$BUILD_DIR/tools/winegcc/winegcc" -v --wine-objdir "$BUILD_DIR" -b "$target" \
             -mconsole -O2 -Wall -D_UCRT -I"$SRC_DIR/include/msvcrt" -I"$SRC_DIR/include" \
-            -o "$TESTS_OUT/$name.exe" "$SCRIPT_DIR/hello.c" \
+            -o "$TESTS_OUT/$name.exe" "$SCRIPT_DIR/$src" \
             "$BUILD_DIR/dlls/winecrt0/aarch64-windows/libwinecrt0.a" "$BUILD_DIR/dlls/ucrtbase/aarch64-windows/libucrtbase.a" \
             "$BUILD_DIR/dlls/kernel32/aarch64-windows/libkernel32.a" "$BUILD_DIR/dlls/ntdll/aarch64-windows/libntdll.a"
         echo "exit=$?"
@@ -166,6 +173,7 @@ build_hello() {
 }
 if build_hello hello aarch64-windows COFF-ARM64; then pass build "hello.exe built, COFF-ARM64 ($TESTS_OUT/hello.build.log)"; else fail build "hello.exe did not build as COFF-ARM64 ($TESTS_OUT/hello.build.log)"; fi
 if build_hello hello_ec arm64ec-windows COFF-ARM64EC; then pass build "hello_ec.exe built, COFF-ARM64EC ($TESTS_OUT/hello_ec.build.log)"; else fail build "hello_ec.exe did not build as COFF-ARM64EC ($TESTS_OUT/hello_ec.build.log)"; fi
+if build_hello jit_view_test aarch64-windows COFF-ARM64 jit_view_test.c; then pass build "jit_view_test.exe built, COFF-ARM64 ($TESTS_OUT/jit_view_test.build.log)"; else fail build "jit_view_test.exe did not build as COFF-ARM64 ($TESTS_OUT/jit_view_test.build.log)"; fi
 # hello_x64.exe: an x86_64 program as one from outside Wine, the mingw compiler and its own CRT
 xlog=$TESTS_OUT/hello_x64.build.log
 rm -f "$TESTS_OUT/hello_x64.exe"
@@ -186,6 +194,19 @@ rm -f "$TESTS_OUT/cpuid_x64.exe"
     "$READOBJ" --file-headers "$TESTS_OUT/cpuid_x64.exe" | grep -E 'Format|Machine'
 } >"$ilog" 2>&1
 if [ -f "$TESTS_OUT/cpuid_x64.exe" ] && grep -q '^Format: COFF-x86-64$' "$ilog"; then pass build "cpuid_x64.exe built, COFF-x86-64 ($ilog)"; else fail build "cpuid_x64.exe did not build as COFF-x86-64 ($ilog)"; fi
+# jit_x64.exe, and a native build of the same source for the checksum it has to print
+jlog=$TESTS_OUT/jit_x64.build.log
+rm -f "$TESTS_OUT/jit_x64.exe" "$TESTS_OUT/jit_native"
+{
+    echo "\$ x86_64-w64-mingw32-clang -O1 jit_x64.c"
+    "$MINGW_BIN/x86_64-w64-mingw32-clang" -O1 -Wall -o "$TESTS_OUT/jit_x64.exe" "$SCRIPT_DIR/jit_x64.c"
+    echo "exit=$?"
+    "$READOBJ" --file-headers "$TESTS_OUT/jit_x64.exe" | grep -E 'Format|Machine'
+    echo "\$ clang -O1 jit_x64.c (native)"
+    clang -O1 -Wall -o "$TESTS_OUT/jit_native" "$SCRIPT_DIR/jit_x64.c"
+    echo "exit=$?"
+} >"$jlog" 2>&1
+if [ -f "$TESTS_OUT/jit_x64.exe" ] && [ -x "$TESTS_OUT/jit_native" ] && grep -q '^Format: COFF-x86-64$' "$jlog"; then pass build "jit_x64.exe built, COFF-x86-64, and natively ($jlog)"; else fail build "jit_x64.exe did not build as COFF-x86-64 and natively ($jlog)"; fi
 plog=$TESTS_OUT/proc_exec_path.build.log
 rm -f "$TESTS_OUT/proc_exec_path"
 clang -O1 -Wall -Werror -o "$TESTS_OUT/proc_exec_path" "$SCRIPT_DIR/proc_exec_path.c" >"$plog" 2>&1
@@ -524,7 +545,57 @@ else
 fi
 fi  # item 7
 
-todo "4K pages, memory below 4 GB, MAP_JIT memory for FEX's code and hardware TSO have no items yet (all but MAP_JIT need LOADER_PROFILE); Wave 3b is not done"
+########################################################################
+# Item 8: MAP_JIT memory for an emulator's code
+########################################################################
+if want 8; then
+echo "== item 8: MAP_JIT memory for an emulator's code"
+jdir=$EVIDENCE_DIR/item8-jit
+rm -rf "$jdir"; mkdir -p "$jdir"
+PREFIX=$BUILD_ROOT/wave3b-prefix-jit
+rm -rf "$PREFIX"; mkdir -p "$PREFIX"
+# a view with the attribute, from Windows code (the first run sets the prefix up)
+WINEPREFIX=$PREFIX run_timeout "$WINEBOOT_TIMEOUT" "$WINE" "$TESTS_OUT/jit_view_test.exe" >"$jdir/jit_view_test.stdout" 2>"$jdir/jit_view_test.stderr"
+vrc=$?
+navs=$(tr -d '\r' <"$jdir/jit_view_test.stdout" | sed -n 's/^jit_view_test: PASS (\([0-9]*\) expected access violations)$/\1/p')
+nmsg=$(grep -c 'in MAP_JIT memory, written outside a JIT write window' "$jdir/jit_view_test.stderr")
+nlost=$(grep -c -E 'lost its MAP_JIT backing|failed to replace the MAP_JIT memory|was taken by another mapping' "$jdir/jit_view_test.stderr")
+viewok=no
+[ "$vrc" = 0 ] && [ -n "$navs" ] && [ "$navs" -gt 0 ] && [ "$navs" = "$nmsg" ] && [ "$nlost" = 0 ] && viewok=yes
+{
+    echo "jit_view_test.exe: exit=$vrc, $(tr -d '\r' <"$jdir/jit_view_test.stdout" | tail -1)"
+    tr -d '\r' <"$jdir/jit_view_test.stdout" | grep '^FAIL'
+    echo "Wine reported $nmsg writes outside a JIT write window, $nlost lost or stuck MAP_JIT ranges"
+} >>"$jdir/summary.txt"
+# FEX compiling 4000 functions: the result, and what FEX says about its code memory
+expected=$("$TESTS_OUT/jit_native" 2>/dev/null | sed -n 's/^jit: .*checksum \([0-9a-f]*\),.*/\1/p')
+WINEPREFIX=$PREFIX FEX_SILENTLOG=0 run_timeout "$RUN_TIMEOUT" "$WINE" "$TESTS_OUT/jit_x64.exe" >"$jdir/jit_x64.stdout" 2>"$jdir/jit_x64.stderr"
+jrc=$?
+jline=$(tr -d '\r' <"$jdir/jit_x64.stdout" | grep '^jit: ' | head -1)
+got=$(echo "$jline" | sed -n 's/^jit: .*checksum \([0-9a-f]*\),.*/\1/p')
+fexjit=$(grep -a -c 'FEX: Using per-thread W^X JIT code memory' "$jdir/jit_x64.stderr")
+jfault=$(grep -a -c -E 'in MAP_JIT memory|lost its MAP_JIT backing' "$jdir/jit_x64.stderr")
+# the page flips of such a run, from the trace of the flip itself (one round is enough)
+WINEPREFIX=$PREFIX WINEDEBUG=+virtual run_timeout "$RUN_TIMEOUT" "$WINE" "$TESTS_OUT/jit_x64.exe" 2 >/dev/null 2>"$jdir/jit_x64.trace"
+nflip=$(grep -a -c 'flipping .* to ' "$jdir/jit_x64.trace")
+ntrace=$(wc -l <"$jdir/jit_x64.trace" | tr -d ' ')
+rm -f "$jdir/jit_x64.trace"
+cleanup_prefix "$PREFIX"
+{
+    echo "jit_x64.exe: exit=$jrc, $jline"
+    echo "native build of the same source: checksum ${expected:-none}"
+    echo "FEX said 'Using per-thread W^X JIT code memory' $fexjit times; faults in JIT memory: $jfault"
+    echo "page flips in a run of 2 rounds: $nflip (limit $JIT_MAX_FLIPS; trace of $ntrace lines)"
+} >>"$jdir/summary.txt"
+if [ $viewok = yes ] && [ "$jrc" = 0 ] && [ -n "$expected" ] && [ "$got" = "$expected" ] && [ "$fexjit" -ge 1 ] && [ "$jfault" = 0 ] &&
+   [ "$ntrace" -gt 0 ] && [ "$nflip" -le "$JIT_MAX_FLIPS" ]; then
+    pass 8 "jit_view_test.exe passed with $navs expected access violations; jit_x64.exe printed checksum $got as the native build does, with $nflip page flips; '$jline' ($jdir/summary.txt)"
+else
+    fail 8 "jit_view_test ok=$viewok (exit $vrc, $navs faults, $nmsg messages, $nlost lost); jit_x64.exe exit $jrc, checksum '${got}' expected '${expected}', FEX JIT memory lines $fexjit, JIT faults $jfault, page flips $nflip of at most $JIT_MAX_FLIPS ($jdir/summary.txt)"
+fi
+fi  # item 8
+
+todo "4K pages, memory below 4 GB and hardware TSO have no items yet (they need LOADER_PROFILE); Wave 3b is not done"
 
 echo
 echo "== summary"
