@@ -55,6 +55,15 @@
 #      last back buffer the colour it was cleared to; the window server has the window
 #      meanwhile. The frames go through Wine's Vulkan surface for the window (winemac.drv) and
 #      KosmicKrisp. As in item 6, that the frame is on the screen is not shown.
+#  11  a real program: the Godot editor for Windows, which macos/tests/fetch-godot.sh downloads
+#      (a TODO while it is not there). Its native arm64 build runs the project manager for
+#      GODOT_FRAMES frames and exits 0, once on its Vulkan renderer and once on its Direct3D
+#      12 renderer, and says for each that it uses device 0. Its x86_64 build has to do the
+#      same on Vulkan when there is a profile. Without one it gets a device and then hangs or
+#      crashes before its first frame, and is a TODO, not a pass: one cause is known (FEX's
+#      guard pages need 4K pages, check-wave3b.sh item 9), and whether it is the only one
+#      cannot be told while that one is there. This item opens the editor's window three
+#      times for some seconds.
 # The build and the test programs come first ("build").
 #
 # NOT YET CHECKED, so this check passing does not make Wave 4 done: that Direct3D frames are on
@@ -78,6 +87,10 @@ WINDOW_HOLD_MS=${WINDOW_HOLD_MS:-3000}
 D3D_RUNS=${D3D_RUNS:-5}
 D3D_FRAMES=${D3D_FRAMES:-180}
 AUDIO_RUNS=${AUDIO_RUNS:-3}
+GODOT_DIR=${GODOT_DIR:-$BUILD_ROOT/third-party/godot-4.7.2-stable}
+GODOT_FRAMES=${GODOT_FRAMES:-600}
+GODOT_X64_TIMEOUT=${GODOT_X64_TIMEOUT:-90}
+LOADER_PROFILE=${LOADER_PROFILE:-}
 WINE_DIR=$PROTON_DIR/wine
 # wine and superproject commits this wave starts from (the tips after Wave 3b's last change)
 WINE_WAVE_BASE=${WINE_WAVE_BASE:-367c1ae9b0468f5d8b60b32be12cefe91eba0ffb}
@@ -98,7 +111,7 @@ RESULTS=()
 FAILED=0
 TODO=0
 # CHECK_ITEMS limits the run to some items ("build" rebuilds Wine, the bundle and the test programs).
-CHECK_ITEMS=${CHECK_ITEMS:-"build 1 2 3 4 5 6 7 8 9 10"}
+CHECK_ITEMS=${CHECK_ITEMS:-"build 1 2 3 4 5 6 7 8 9 10 11"}
 want() { case " $CHECK_ITEMS " in *" $1 "*) return 0 ;; esac; return 1; }
 pass() { RESULTS+=("PASS  item $1: $2"); echo "PASS  item $1: $2"; }
 fail() { RESULTS+=("FAIL  item $1: $2"); echo "FAIL  item $1: $2"; FAILED=1; }
@@ -648,6 +661,47 @@ else
     fail 10 "exit $rc, line $line: '$out'; window listed $nopen; vkd3d-proton created a swap chain $nswap times ($wdir/summary.txt)"
 fi
 fi  # item 10
+
+########################################################################
+# Item 11: a real program, the Godot editor
+########################################################################
+if want 11; then
+echo "== item 11: the Godot editor's project manager, $GODOT_FRAMES frames: arm64 on Vulkan and Direct3D 12, x86_64 on Vulkan"
+gdir=$EVIDENCE_DIR/item11-godot
+rm -rf "$gdir"; mkdir -p "$gdir"
+GODOT_ARM64=$(ls "$GODOT_DIR"/arm64/Godot_v*_windows_arm64.exe 2>/dev/null | head -1)
+GODOT_X64=$(ls "$GODOT_DIR"/x86_64/Godot_v*_win64.exe 2>/dev/null | head -1)
+if [ -z "$GODOT_ARM64" ] || [ -z "$GODOT_X64" ]; then
+    todo "item 11: the Godot editor is not in $GODOT_DIR (macos/tests/fetch-godot.sh downloads it); no real program was run"
+else
+    PREFIX=$BUILD_ROOT/wave4-prefix-godot
+    rm -rf "$PREFIX"; mkdir -p "$PREFIX"
+    hold_server "$PREFIX"
+    # godot_run NAME EXE DRIVER TIMEOUT: sets grc and gline, the line that names the renderer and device
+    godot_run() {
+        WINEPREFIX=$PREFIX VKD3D_SHADER_CACHE_PATH=0 run_timeout "$4" "$WINE" "$2" --project-manager --rendering-driver "$3" --quit-after "$GODOT_FRAMES" >"$gdir/$1.stdout" 2>"$gdir/$1.stderr"
+        grc=$?
+        gline=$(tr -d '\r' <"$gdir/$1.stdout" | grep -a -m1 -E '^(Vulkan [0-9.]+|D3D12 [0-9_]+) - .* - Using Device #0: .+')
+        echo "$1: exit=$grc (142 = stopped after $4 s) '$gline'; last line: '$(tr -d '\r' <"$gdir/$1.stdout" | grep -a -v '^$' | tail -1 | cut -c1-100)'" >>"$gdir/summary.txt"
+    }
+    gpass=0
+    godot_run arm64-vulkan "$GODOT_ARM64" vulkan "$WINEBOOT_TIMEOUT"   # the first run sets the prefix up
+    [ "$grc" = 0 ] && echo "$gline" | grep -q '^Vulkan ' && gpass=$((gpass + 1)); vline=$gline
+    godot_run arm64-d3d12 "$GODOT_ARM64" d3d12 "$RUN_TIMEOUT"
+    [ "$grc" = 0 ] && echo "$gline" | grep -q '^D3D12 ' && gpass=$((gpass + 1)); dline=$gline
+    godot_run x86_64-vulkan "$GODOT_X64" vulkan "$GODOT_X64_TIMEOUT"
+    xok=no; [ "$grc" = 0 ] && echo "$gline" | grep -q '^Vulkan ' && xok=yes
+    cleanup_prefix "$PREFIX"
+    if [ "$gpass" = 2 ] && [ $xok = yes ]; then
+        pass 11 "the Godot editor ran $GODOT_FRAMES frames and exited 0: arm64 '$vline' and '$dline', x86_64 '$gline' ($gdir/summary.txt)"
+    elif [ "$gpass" = 2 ] && [ -z "$LOADER_PROFILE" ]; then
+        pass 11 "the arm64 Godot editor ran $GODOT_FRAMES frames and exited 0 on both renderers: '$vline' and '$dline' ($gdir/summary.txt)"
+        todo "item 11: the x86_64 Godot editor does not get through $GODOT_FRAMES frames (exit $grc, 142 = stopped after $GODOT_X64_TIMEOUT s; it got to '$gline'). One cause is known: FEX's guard pages need 4K pages, which need LOADER_PROFILE (check-wave3b.sh item 9) ($gdir/summary.txt)"
+    else
+        fail 11 "the Godot editor: arm64 passed $gpass of 2 renderers ('$vline', '$dline'); x86_64 on Vulkan ok=$xok (exit $grc, '$gline') ($gdir/summary.txt)"
+    fi
+fi
+fi  # item 11
 
 todo "that Direct3D frames are on the screen and follow a resized window, and a game, have no items yet; Wave 4 is not done"
 
