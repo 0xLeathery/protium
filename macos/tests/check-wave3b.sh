@@ -51,6 +51,14 @@
 #      catches the end of its call-return stack with a 4K guard page, which a host with 16K
 #      pages cannot give it, so the program gets an access violation it did not cause. Any
 #      larger x86_64 program runs into this (the first was the Godot editor).
+#  10  a 32-bit program: hello_x86.exe, built for i686, runs in a WoW64 process through FEX's
+#      libwow64fex.dll and prints its line, FEX_RUNS runs, when there is a profile. Without one
+#      the item is a TODO and nothing is run: a 32-bit process lives below 4 GB, where macOS
+#      maps nothing without the entitlement (the program's image at 0x400000 gets "Cannot
+#      allocate memory" and ntdll aborts on an assertion). What can be had before that day is
+#      checked by the build step: Wine's i386 DLLs and FEX's WoW64 module build. The item also
+#      wants the 32-bit side left out of an install without a profile, where it would only
+#      make every new prefix start a process that aborts.
 # The build (macos/build-wine.sh, macos/build-fex.sh, macos/bundle-wine.sh) and the test programs
 # come first ("build").
 #
@@ -107,7 +115,7 @@ RESULTS=()
 FAILED=0
 TODO=0
 # CHECK_ITEMS limits the run to some items ("build" rebuilds Wine, the bundle and the test programs).
-CHECK_ITEMS=${CHECK_ITEMS:-"build 1 2 3 4 5 6 7 8 9"}
+CHECK_ITEMS=${CHECK_ITEMS:-"build 1 2 3 4 5 6 7 8 9 10"}
 want() { case " $CHECK_ITEMS " in *" $1 "*) return 0 ;; esac; return 1; }
 pass() { RESULTS+=("PASS  item $1: $2"); echo "PASS  item $1: $2"; }
 fail() { RESULTS+=("FAIL  item $1: $2"); echo "FAIL  item $1: $2"; FAILED=1; }
@@ -161,7 +169,7 @@ entitlement_keys() {
 # Build: Wine, the bundle and the test programs
 ########################################################################
 if want build; then
-echo "== build: macos/build-vulkan.sh, build-wine.sh (arm64ec + aarch64, MSVC mode, Vulkan), build-fex.sh, build-dxmt.sh, build-mesa.sh, build-vkd3d-proton.sh, bundle-wine.sh and the test programs"
+echo "== build: macos/build-vulkan.sh, build-wine.sh (arm64ec + aarch64 + i386, MSVC mode, Vulkan), build-fex.sh, build-dxmt.sh, build-mesa.sh, build-vkd3d-proton.sh, bundle-wine.sh and the test programs"
 # This build has Vulkan and DXMT, which Wave 4 uses; it is one configuration, so that the two
 # waves' checks don't rebuild Wine and the bundle back and forth. Nothing in this wave's items
 # needs either.
@@ -175,12 +183,19 @@ else
 fi
 blog=$EVIDENCE_DIR/build.log
 start=$(date +%s)
-PE_MODE=msvc WINE_ARCHS=arm64ec,aarch64 BUILD_DIR=$BUILD_DIR VULKAN_DIST=$VULKAN_DIST "$PROTON_DIR/macos/build-wine.sh" >"$blog" 2>&1
+PE_MODE=msvc WINE_ARCHS=arm64ec,aarch64,i386 BUILD_DIR=$BUILD_DIR VULKAN_DIST=$VULKAN_DIST "$PROTON_DIR/macos/build-wine.sh" >"$blog" 2>&1
 bstatus=$?
 if [ $bstatus = 0 ]; then
-    pass build "build-wine.sh (PE_MODE=msvc, arm64ec,aarch64, Vulkan) exit 0 in $(( $(date +%s) - start ))s ($blog)"
+    pass build "build-wine.sh (PE_MODE=msvc, arm64ec,aarch64,i386, Vulkan) exit 0 in $(( $(date +%s) - start ))s ($blog)"
 else
-    fail build "build-wine.sh (PE_MODE=msvc, arm64ec,aarch64, Vulkan) exited $bstatus: $(tail -1 "$blog") ($blog)"
+    fail build "build-wine.sh (PE_MODE=msvc, arm64ec,aarch64,i386, Vulkan) exited $bstatus: $(tail -1 "$blog") ($blog)"
+fi
+# the 32-bit side: i386 PE DLLs, and the ARM64 wow64.dll that runs them
+n386=$(find "$BUILD_DIR/dlls" -path '*/i386-windows/*.dll' 2>/dev/null | wc -l | tr -d ' ')
+if [ -f "$BUILD_DIR/dlls/ntdll/i386-windows/ntdll.dll" ] && [ -f "$BUILD_DIR/dlls/wow64/aarch64-windows/wow64.dll" ] && [ "$n386" -ge 500 ]; then
+    pass build "the 32-bit side built: $n386 i386 DLLs, with ntdll.dll, and wow64.dll for aarch64"
+else
+    fail build "the 32-bit side did not build: $n386 i386 DLLs under $BUILD_DIR/dlls"
 fi
 flog=$EVIDENCE_DIR/build-fex.log
 FEX_DIST=$FEX_DIST "$PROTON_DIR/macos/build-fex.sh" >"$flog" 2>&1
@@ -189,6 +204,12 @@ if [ $fstatus = 0 ]; then
     pass build "build-fex.sh exit 0, $(sed -n 's/^:: \(FEX .*\)/\1/p' "$flog" | head -1) ($flog)"
 else
     fail build "build-fex.sh exited $fstatus: $(tail -1 "$flog") ($flog)"
+fi
+if [ "$("$READOBJ" --file-headers "$FEX_DIST/lib/wine/aarch64-windows/libwow64fex.dll" 2>/dev/null | sed -n 's/^Format: //p' | head -1)" = COFF-ARM64 ] &&
+   [ "$(lipo -archs "$FEX_DIST/lib/wine/aarch64-unix/libwow64fex.so" 2>/dev/null)" = arm64 ]; then
+    pass build "FEX's WoW64 module built: libwow64fex.dll (COFF-ARM64) and libwow64fex.so"
+else
+    fail build "FEX's WoW64 module is not in $FEX_DIST"
 fi
 # DXMT links against this Wine build tree, so it comes after it
 dlog=$EVIDENCE_DIR/build-dxmt.log
@@ -267,6 +288,15 @@ rm -f "$TESTS_OUT/callback_x64.exe"
     "$READOBJ" --file-headers "$TESTS_OUT/callback_x64.exe" | grep -E 'Format|Machine'
 } >"$clog" 2>&1
 if [ -f "$TESTS_OUT/callback_x64.exe" ] && grep -q '^Format: COFF-x86-64$' "$clog"; then pass build "callback_x64.exe built, COFF-x86-64 ($clog)"; else fail build "callback_x64.exe did not build as COFF-x86-64 ($clog)"; fi
+hlog=$TESTS_OUT/hello_x86.build.log
+rm -f "$TESTS_OUT/hello_x86.exe"
+{
+    echo "\$ i686-w64-mingw32-clang hello_x86.c"
+    "$MINGW_BIN/i686-w64-mingw32-clang" -O2 -Wall -o "$TESTS_OUT/hello_x86.exe" "$SCRIPT_DIR/hello_x86.c"
+    echo "exit=$?"
+    "$READOBJ" --file-headers "$TESTS_OUT/hello_x86.exe" | grep -E 'Format|Machine'
+} >"$hlog" 2>&1
+if [ -f "$TESTS_OUT/hello_x86.exe" ] && grep -q '^Format: COFF-i386$' "$hlog"; then pass build "hello_x86.exe built, COFF-i386 ($hlog)"; else fail build "hello_x86.exe did not build as COFF-i386 ($hlog)"; fi
 ilog=$TESTS_OUT/cpuid_x64.build.log
 rm -f "$TESTS_OUT/cpuid_x64.exe"
 {
@@ -711,6 +741,47 @@ else
     fail 9 "callback_x64.exe: 1000 elements ok=$smallok (exit $src, '$sline'); $CALLBACK_ELEMENTS elements ok=$largeok (exit $crc, '$cline') ($cdir/summary.txt)"
 fi
 fi  # item 9
+
+########################################################################
+# Item 10: a 32-bit program
+########################################################################
+if want 10; then
+echo "== item 10: a 32-bit program through WoW64 and FEX"
+xdir=$EVIDENCE_DIR/item10-x86
+rm -rf "$xdir"; mkdir -p "$xdir"
+I386_DIR=$INSTALL_DIR/lib/wine/i386-windows
+if [ -z "$LOADER_PROFILE" ]; then
+    if [ -d "$I386_DIR" ]; then
+        fail 10 "the install has lib/wine/i386-windows without a profile: every new prefix then starts a 32-bit process that aborts (bundle-wine.sh leaves it out unless WOW64=yes)"
+    else
+        todo "item 10: hello_x86.exe was not run: a 32-bit process lives below 4 GB, which needs LOADER_PROFILE. Its side is built and left out of this install"
+    fi
+else
+    PREFIX=$BUILD_ROOT/wave3b-prefix-x86
+    rm -rf "$PREFIX"; mkdir -p "$PREFIX"
+    hold_server "$PREFIX"
+    X86_LINE='hello from 32-bit x86 code on macOS: 6*7=42, pointer size 4, processor architecture 0, native 12, wow64 1'
+    x86pass=0; t=$WINEBOOT_TIMEOUT   # the first run sets the prefix up
+    for i in $(seq 1 "$FEX_RUNS"); do
+        dbg=; [ $i = 1 ] && dbg=+loaddll
+        WINEPREFIX=$PREFIX WINEDEBUG=$dbg run_timeout "$t" "$WINE" "$TESTS_OUT/hello_x86.exe" >"$xdir/run$i.stdout" 2>"$xdir/run$i.stderr"
+        rc=$?
+        t=$RUN_TIMEOUT
+        out=$(tr -d '\r' <"$xdir/run$i.stdout" | head -1)
+        line=no; [ "$out" = "$X86_LINE" ] && line=yes
+        [ "$rc" = 0 ] && [ $line = yes ] && x86pass=$((x86pass + 1))
+        echo "run $i: exit=$rc line=$line ($out)" >>"$xdir/summary.txt"
+    done
+    nwow=$(grep -a -c -i 'libwow64fex.dll.*builtin' "$xdir/run1.stderr")
+    echo "libwow64fex.dll loaded as a builtin: $nwow lines" >>"$xdir/summary.txt"
+    cleanup_prefix "$PREFIX"
+    if [ "$x86pass" = "$FEX_RUNS" ] && [ "$nwow" -ge 1 ]; then
+        pass 10 "hello_x86.exe printed its line and exited 0 in $x86pass/$FEX_RUNS runs, with libwow64fex.dll loaded as a builtin: '$out' ($xdir/summary.txt)"
+    else
+        fail 10 "hello_x86.exe passed $x86pass/$FEX_RUNS runs, libwow64fex.dll builtin lines $nwow: '$out' ($xdir/summary.txt)"
+    fi
+fi
+fi  # item 10
 
 todo "4K pages, memory below 4 GB and hardware TSO have no items yet (they need LOADER_PROFILE; the loader's code for the first two is written and has never run); Wave 3b is not done"
 
