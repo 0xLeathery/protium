@@ -37,6 +37,9 @@
 #   DXMT_DIST       output of build-dxmt.sh (default $BUILD_ROOT/dxmt-dist); when it is there,
 #                   its dxgi, d3d10core and d3d11 take the place of Wine's own, which have no
 #                   usable backend on this build, and its winemetal modules are added
+#   VKD3D_DIST      output of build-vkd3d-proton.sh (default $BUILD_ROOT/vkd3d-proton-dist); when
+#                   it is there, its d3d12 and d3d12core take the place of Wine's own. Direct3D
+#                   12 then needs the Vulkan driver of MESA_DIST.
 #   HOST_DYLIBS     Homebrew libraries that Wine opens by name at run time (default
 #                   libfreetype.6.dylib, without which Wine has no TrueType fonts). They are
 #                   copied with the Homebrew libraries they need into lib/external.
@@ -56,6 +59,7 @@ LOADER_PROFILE=${LOADER_PROFILE:-}
 BUNDLE_ID=${BUNDLE_ID:-}
 FEX_DIST=${FEX_DIST:-$BUILD_ROOT/fex-dist}
 DXMT_DIST=${DXMT_DIST:-$BUILD_ROOT/dxmt-dist}
+VKD3D_DIST=${VKD3D_DIST:-$BUILD_ROOT/vkd3d-proton-dist}
 HOST_DYLIBS=${HOST_DYLIBS:-libfreetype.6.dylib}
 VULKAN_DIST=${VULKAN_DIST:-$BUILD_ROOT/vulkan-dist}
 MESA_DIST=${MESA_DIST:-$BUILD_ROOT/mesa-dist}
@@ -183,6 +187,18 @@ if [ -f "$DXMT_DIST/lib/wine/aarch64-windows/d3d11.dll" ] && [ -f "$DXMT_DIST/li
     log "installed DXMT $(cat "$DXMT_DIST/DESCRIBE" 2>/dev/null) from $DXMT_DIST in place of Wine's dxgi, d3d10core and d3d11"
 else
     log "no DXMT in $DXMT_DIST (macos/build-dxmt.sh builds it): Direct3D 10 and 11 stay Wine's own"
+fi
+
+# vkd3d-proton, Direct3D 12 on Vulkan. Its d3d12 and d3d12core are Wine builtins of the same
+# names as Wine's own and replace them: Wine's make no device on the adapter of DXMT's dxgi,
+# which in turn presents vkd3d-proton's swap chains.
+if [ -f "$VKD3D_DIST/lib/wine/aarch64-windows/d3d12.dll" ] && [ -f "$VKD3D_DIST/lib/wine/aarch64-windows/d3d12core.dll" ]; then
+    for dll in d3d12 d3d12core; do
+        cp "$VKD3D_DIST/lib/wine/aarch64-windows/$dll.dll" "$pedir/$dll.dll"
+    done
+    log "installed vkd3d-proton $(cat "$VKD3D_DIST/DESCRIBE" 2>/dev/null) from $VKD3D_DIST in place of Wine's d3d12 and d3d12core"
+else
+    log "no vkd3d-proton in $VKD3D_DIST (macos/build-vkd3d-proton.sh builds it): Direct3D 12 stays Wine's own"
 fi
 
 ########################################################################
