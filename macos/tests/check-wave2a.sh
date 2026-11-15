@@ -385,6 +385,11 @@ classify_faults() {
 ########################################################################
 if want 3; then
 echo "== item 3: no memory below 4 GB, shared user data above it"
+# Since Wave 3b the loader asks once per process for 16K at 0x10000, which only the
+# cross-architecture entitlement allows, to find out whether it has it. Without the entitlement
+# the request fails and the loader goes on as before. That one failed request is not a use of
+# low memory; any other request below 4 GB, and any that succeeds, still fails this item.
+ENTITLEMENT_PROBE=' LOW mmap\(0x10000, 0x4000, prot 0, flags 0x[0-9a-f]+ FIXED, fd -1\) -> 0xffffffffffffffff$'
 vlog=$EVIDENCE_DIR/item3-virtual.log
 plog3=$EVIDENCE_DIR/item3-probe.log
 alog=$EVIDENCE_DIR/item3-analysis.log
@@ -420,8 +425,10 @@ else
         fi
         echo "--- probe: loaded in processes"
         grep -c 'probe loaded' "$plog3"
-        echo "--- probe: LOW (request or result below 4 GB)"
-        grep ' LOW ' "$plog3"
+        echo "--- probe: LOW (request or result below 4 GB), other than the loader's failed entitlement probe"
+        grep ' LOW ' "$plog3" | grep -v -E "$ENTITLEMENT_PROBE"
+        echo "--- probe: the loader's failed entitlement probe (at most one per process)"
+        grep ' LOW ' "$plog3" | grep -c -E "$ENTITLEMENT_PROBE"
         echo "--- probe: USD (shared user data range)"
         grep ' USD ' "$plog3"
         echo "--- +virtual lines naming an address below 4 GB"
@@ -440,7 +447,9 @@ else
         grep -n -E 'err:virtual|failed to map the shared user data|failed to remap the process USD' "$vlog" | head -20
     } >"$alog" 2>&1
     grep -q 'probe loaded' "$plog3" || ok=no
-    grep -q ' LOW ' "$plog3" && ok=no
+    [ "$(grep ' LOW ' "$plog3" | grep -c -v -E "$ENTITLEMENT_PROBE")" = 0 ] || ok=no
+    nprobe=$(grep ' LOW ' "$plog3" | grep -c -E "$ENTITLEMENT_PROBE")
+    [ "$nprobe" -le "$(grep -c 'probe loaded' "$plog3")" ] || ok=no
     [ -n "$(check_virtual_log "$vlog")" ] && ok=no
     if [ -n "$USD" ]; then
         usdhex=$(printf '0x%x' $((USD)))
@@ -457,7 +466,7 @@ else
     [ -n "$USD" ] && [ -n "$(behind_usd "$vlog" "$USD")" ] && ok=no
     [ -n "$(low_vallocs "$vlog" "${FLOOR:-0x100000000}")" ] || ok=no
     if [ $ok = yes ]; then
-        pass 3 "no mapping below 4 GB (probe + +virtual), no err:virtual below the floor ($FLOOR), bottom-up allocations above the floor, shared user data reserved, allocated and mapped at $USD ($alog)"
+        pass 3 "no mapping below 4 GB (probe + +virtual; the loader's entitlement probe failed $nprobe times and nothing else asked), no err:virtual below the floor ($FLOOR), bottom-up allocations above the floor, shared user data reserved, allocated and mapped at $USD ($alog)"
     else
         fail 3 "see $alog ($vlog, $plog3)"
     fi
