@@ -121,6 +121,13 @@ cleanup_prefix() {
     WINEPREFIX=$1 run_timeout 60 "$SERVER" -w >/dev/null 2>&1
     rm -rf "$1"
 }
+# Proton's wineserver starts to shut down the moment its last process exits (server/main.c sets
+# master_socket_timeout to 0, where Wine's own default is 3 seconds). A wine that starts right
+# after another one has exited then meets a server that is going away: it brings Wine's
+# services up again, and now and then it is dropped while the server exits, which ends it with
+# status 0 and no output. For a run of launches in one prefix, hold_server starts a server that
+# waits 10 seconds for the next process instead; cleanup_prefix ends it.
+hold_server() { WINEPREFIX=$1 run_timeout 30 "$SERVER" -p10 >/dev/null 2>&1; }
 # entitlement keys of a signed file or bundle, one per line
 entitlement_keys() {
     codesign -d --entitlements - --xml "$1" 2>/dev/null | perl -ne 'print "$1\n" while /<key>([^<]*)<\/key>/g'
@@ -312,6 +319,7 @@ hdir=$EVIDENCE_DIR/item3-hello
 rm -rf "$hdir"; mkdir -p "$hdir"
 PREFIX=$BUILD_ROOT/wave3b-prefix-hello
 rm -rf "$PREFIX"; mkdir -p "$PREFIX"
+hold_server "$PREFIX"
 hpass=0
 for i in $(seq 1 "$HELLO_RUNS"); do
     t=$RUN_TIMEOUT; [ $i = 1 ] && t=$WINEBOOT_TIMEOUT   # the first run sets the prefix up
@@ -512,6 +520,7 @@ fdir=$EVIDENCE_DIR/item7-fex
 rm -rf "$fdir"; mkdir -p "$fdir"
 PREFIX=$BUILD_ROOT/wave3b-prefix-fex
 rm -rf "$PREFIX"; mkdir -p "$PREFIX"
+hold_server "$PREFIX"
 X64_LINE='hello from x86_64 code on macOS: 6*7=42, processor architecture 9, native 12, page size 4096'
 EC_LINE='hello from Windows ARM64 code on macOS'
 ecpass=0; xpass=0
@@ -567,6 +576,7 @@ jdir=$EVIDENCE_DIR/item8-jit
 rm -rf "$jdir"; mkdir -p "$jdir"
 PREFIX=$BUILD_ROOT/wave3b-prefix-jit
 rm -rf "$PREFIX"; mkdir -p "$PREFIX"
+hold_server "$PREFIX"
 # a view with the attribute, from Windows code (the first run sets the prefix up)
 WINEPREFIX=$PREFIX run_timeout "$WINEBOOT_TIMEOUT" "$WINE" "$TESTS_OUT/jit_view_test.exe" >"$jdir/jit_view_test.stdout" 2>"$jdir/jit_view_test.stderr"
 vrc=$?

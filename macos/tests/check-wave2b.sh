@@ -99,6 +99,13 @@ cleanup_prefix() {
     WINEPREFIX=$1 run_timeout 30 "$SERVER" -w >/dev/null 2>&1
     rm -rf "$1"
 }
+# Proton's wineserver starts to shut down the moment its last process exits (server/main.c sets
+# master_socket_timeout to 0, where Wine's own default is 3 seconds). A wine that starts right
+# after another one has exited then meets a server that is going away: it brings Wine's
+# services up again, and now and then it is dropped while the server exits, which ends it with
+# status 0 and no output. For a run of launches in one prefix, hold_server starts a server that
+# waits 10 seconds for the next process instead; cleanup_prefix ends it.
+hold_server() { WINEPREFIX=$1 run_timeout 30 "$SERVER" -p10 >/dev/null 2>&1; }
 
 ########################################################################
 # Build: Wine (incremental) and the test programs
@@ -404,6 +411,7 @@ hout=$EVIDENCE_DIR/item3-hello.out
 hlog=$EVIDENCE_DIR/item3-hello-debug.log
 PREFIX=$BUILD_DIR/wave2b-prefix-hello
 rm -rf "$PREFIX"; mkdir -p "$PREFIX"
+hold_server "$PREFIX"
 if [ -f "$TESTS_OUT/hello.exe" ]; then
     # first run in a fresh prefix (Wine sets the prefix up first), with the requested channels
     echo "\$ WINEPREFIX=$PREFIX WINEDEBUG=+seh,+loaddll,+process $WINE hello.exe   (fresh prefix, timeout ${WINEBOOT_TIMEOUT}s)" >"$hlog"
@@ -439,6 +447,7 @@ tdir=$EVIDENCE_DIR/item4-teb_test
 rm -rf "$tdir"; mkdir -p "$tdir"
 PREFIX=$BUILD_DIR/wave2b-prefix-teb
 rm -rf "$PREFIX"; mkdir -p "$PREFIX"
+hold_server "$PREFIX"
 tpass=0
 for i in $(seq 1 "$TEB_TEST_RUNS"); do
     if [ -f "$TESTS_OUT/teb_test.exe" ]; then

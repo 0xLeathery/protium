@@ -95,6 +95,13 @@ cleanup_prefix() {
     WINEPREFIX=$1 run_timeout 60 "$SERVER" -w >/dev/null 2>&1
     rm -rf "$1"
 }
+# Proton's wineserver starts to shut down the moment its last process exits (server/main.c sets
+# master_socket_timeout to 0, where Wine's own default is 3 seconds). A wine that starts right
+# after another one has exited then meets a server that is going away: it brings Wine's
+# services up again, and now and then it is dropped while the server exits, which ends it with
+# status 0 and no output. For a run of launches in one prefix, hold_server starts a server that
+# waits 10 seconds for the next process instead; cleanup_prefix ends it.
+hold_server() { WINEPREFIX=$1 run_timeout 30 "$SERVER" -p10 >/dev/null 2>&1; }
 # entitlement keys of a signed file, one per line
 entitlement_keys() {
     codesign -d --entitlements - --xml "$1" 2>/dev/null | perl -ne 'print "$1\n" while /<key>([^<]*)<\/key>/g'
@@ -255,6 +262,7 @@ hdir=$EVIDENCE_DIR/item3-hello
 rm -rf "$hdir"; mkdir -p "$hdir"
 PREFIX=$BUILD_DIR/wave3a-prefix-hello
 rm -rf "$PREFIX"; mkdir -p "$PREFIX"
+hold_server "$PREFIX"
 hpass=0
 for i in $(seq 1 "$HELLO_RUNS"); do
     t=$RUN_TIMEOUT; [ $i = 1 ] && t=$WINEBOOT_TIMEOUT   # the first run sets the prefix up
@@ -283,6 +291,7 @@ tdir=$EVIDENCE_DIR/item4-teb_test
 rm -rf "$tdir"; mkdir -p "$tdir"
 PREFIX=$BUILD_DIR/wave3a-prefix-teb
 rm -rf "$PREFIX"; mkdir -p "$PREFIX"
+hold_server "$PREFIX"
 tpass=0
 for i in $(seq 1 "$TEB_TEST_RUNS"); do
     t=$RUN_TIMEOUT; [ $i = 1 ] && t=$WINEBOOT_TIMEOUT
@@ -361,6 +370,7 @@ wdir=$EVIDENCE_DIR/item6-wx_test
 rm -rf "$wdir"; mkdir -p "$wdir"
 PREFIX=$BUILD_DIR/wave3a-prefix-wx
 rm -rf "$PREFIX"; mkdir -p "$PREFIX"
+hold_server "$PREFIX"
 wpass=0
 for i in $(seq 1 "$WX_RUNS"); do
     t=$RUN_TIMEOUT; [ $i = 1 ] && t=$WINEBOOT_TIMEOUT

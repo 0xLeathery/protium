@@ -81,6 +81,13 @@ cleanup_prefix() {
     WINEPREFIX=$1 run_timeout 60 "$SERVER" -w >/dev/null 2>&1
     rm -rf "$1"
 }
+# Proton's wineserver starts to shut down the moment its last process exits (server/main.c sets
+# master_socket_timeout to 0, where Wine's own default is 3 seconds). A wine that starts right
+# after another one has exited then meets a server that is going away: it brings Wine's
+# services up again, and now and then it is dropped while the server exits, which ends it with
+# status 0 and no output. For a run of launches in one prefix, hold_server starts a server that
+# waits 10 seconds for the next process instead; cleanup_prefix ends it.
+hold_server() { WINEPREFIX=$1 run_timeout 30 "$SERVER" -p10 >/dev/null 2>&1; }
 
 ########################################################################
 # Build: Wave 3b's build and bundle, and the test programs
@@ -146,6 +153,9 @@ MAC_WINDOW=$(printf '\t320x240\t120,120\t[0-9-]+\t%s$' "$BUNDLE_LOADER")
 # set the prefix up first, so that the timed runs only show the window
 WINEPREFIX=$PREFIX run_timeout "$WINEBOOT_TIMEOUT" "$WINE" "$TESTS_OUT/window_test.exe" 0 >"$wdir/setup.stdout" 2>"$wdir/setup.stderr"
 echo "prefix setup: exit=$? $(tr -d '\r' <"$wdir/setup.stdout")" >>"$wdir/summary.txt"
+# each launch of this item waits for the session before it to end (see hold_server): macOS is
+# asked for the window list once Wine is gone
+WINEPREFIX=$PREFIX run_timeout 60 "$SERVER" -w >/dev/null 2>&1
 wpass=0
 for p in window_test window_test_x64; do
     WINEPREFIX=$PREFIX run_timeout "$RUN_TIMEOUT" "$WINE" "$TESTS_OUT/$p.exe" "$WINDOW_HOLD_MS" >"$wdir/$p.stdout" 2>"$wdir/$p.stderr" &
@@ -197,6 +207,7 @@ fdir=$EVIDENCE_DIR/item3-fonts
 rm -rf "$fdir"; mkdir -p "$fdir"
 PREFIX=$BUILD_ROOT/wave4-prefix-font
 rm -rf "$PREFIX"; mkdir -p "$PREFIX"
+hold_server "$PREFIX"
 FONT_LINE='font: face Tahoma, truetype 1, outline 1, drawn pixels [1-9][0-9]*, truetype families [1-9][0-9]*'
 fpass=0; t=$WINEBOOT_TIMEOUT   # the first run sets the prefix up and makes the font list
 for p in font_test font_test_x64; do
@@ -229,6 +240,7 @@ vdir=$EVIDENCE_DIR/item4-vulkan
 rm -rf "$vdir"; mkdir -p "$vdir"
 PREFIX=$BUILD_ROOT/wave4-prefix-vulkan
 rm -rf "$PREFIX"; mkdir -p "$PREFIX"
+hold_server "$PREFIX"
 VULKAN_LINE='vulkan: loader 1\.([3-9]|[1-9][0-9])\.[0-9]+, instance (0|-9), devices [0-9]+(, first device .*)?'
 vpass=0; t=$WINEBOOT_TIMEOUT   # the first run sets the prefix up
 for p in vulkan_test vulkan_test_x64; do
