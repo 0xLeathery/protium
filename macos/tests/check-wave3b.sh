@@ -2,31 +2,44 @@
 #
 # Wave 3b acceptance check for the native arm64 macOS Wine build: Wine runs from an install tree
 # with its loader in wine.app (macos/bundle-wine.sh), the only place where a provisioning profile
-# can give it the cross-architecture entitlement (4K pages, memory below 4 GB, hardware TSO).
+# can give it the cross-architecture entitlement (4K pages, memory below 4 GB, hardware TSO), and
+# runs x86_64 programs through FEX.
 #
 #   macos/tests/check-wave3b.sh                                    # ad-hoc signed bundle
 #   LOADER_PROFILE=/path/to/loader.provisionprofile macos/tests/check-wave3b.sh
+#
+# This wave's build is not the one of the earlier waves: an x86_64 program runs as an ARM64EC
+# process, so the PE side is built for arm64ec and aarch64 with clang in MSVC mode, as Proton's
+# own arm64 build is (PE_MODE=msvc, see macos/build-wine.sh), in $BUILD_DIR. The earlier checks
+# keep their aarch64 mingw build in $MINGW_BUILD_DIR; item 5 runs them there and their runtime
+# items here as well.
 #
 # Items (pass/fail):
 #   1  the bundle: wine.app/Contents/{MacOS/wine, Info.plist} next to ntdll.so, lib/wine/
 #      aarch64-unix/wine and bin/wine are links into it, the signature verifies (--strict) and
 #      carries exactly the x18 entitlement (with LOADER_PROFILE: the cross-architecture
-#      entitlement too, and the profile is embedded); wineserver has no entitlements
+#      entitlement too, and the profile is embedded); wineserver has no entitlements; FEX's
+#      ARM64EC module is installed with Wine's modules
 #   2  the loader finds ntdll.so started through bin/wine, through the link next to ntdll.so and
 #      by its path in the bundle (wine --version)
 #   3  bin/wine hello.exe prints its line and exits 0, HELLO_RUNS runs (the first in a fresh prefix)
 #   4  bin/wine wineboot -u in a fresh prefix, WINEBOOT_RUNS runs: exit 0, no fault, and every
 #      process Wine starts is started by the loader's path inside wine.app, none through the link
 #      (a process started through the link has no bundle)
-#   5  regression: check-wave3a.sh passes (it runs check-wave1.sh, 2a and 2b itself)
+#   5  regression: check-wave3a.sh passes on the aarch64 mingw build (it runs check-wave1.sh, 2a
+#      and 2b itself), and its runtime items (3 4 6 7) pass on this wave's build
 #   6  other targets unchanged: every line of this wave in Wine is under __APPLE__ && __aarch64__
 #      (with either undefined the files are the wave base text); diff scope
-# The build (macos/build-wine.sh, macos/bundle-wine.sh) and the test programs come first ("build").
+#   7  through FEX: bin/wine runs hello.exe built as ARM64EC and hello_x64.exe, an x86_64
+#      program built with the mingw compiler and its CRT; both print their line and exit 0,
+#      FEX_RUNS runs, and libarm64ecfex.dll is loaded as a builtin
+# The build (macos/build-wine.sh, macos/build-fex.sh, macos/bundle-wine.sh) and the test programs
+# come first ("build").
 #
 # NOT YET CHECKED, so this check passing does not make Wave 3b done: 4K pages, memory below 4 GB
-# (shared user data back at 0x7ffe0000), MAP_JIT memory for a Unix JIT, hardware TSO and FEX. They
-# need the profile. The summary lists them as TODO and the exit status is 3 while they are open
-# and nothing failed (1 when an item failed, 0 only when all of it passed).
+# (shared user data back at 0x7ffe0000), MAP_JIT memory for FEX's code and hardware TSO. All but
+# MAP_JIT need the profile. The summary lists them as TODO and the exit status is 3 while they
+# are open and nothing failed (1 when an item failed, 0 only when all of it passed).
 # Logs go to $EVIDENCE_DIR.
 
 set -u
@@ -35,7 +48,9 @@ SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 PROTON_DIR=$(cd "$SCRIPT_DIR/../.." && pwd)
 WINE_DIR=$PROTON_DIR/wine
 BUILD_ROOT=${BUILD_ROOT:-/Users/annon/projects/proton-macos-build}
-BUILD_DIR=${BUILD_DIR:-$BUILD_ROOT/wine-aarch64}
+BUILD_DIR=${BUILD_DIR:-$BUILD_ROOT/wine-arm64ec}
+MINGW_BUILD_DIR=${MINGW_BUILD_DIR:-$BUILD_ROOT/wine-aarch64}
+FEX_DIST=${FEX_DIST:-$BUILD_ROOT/fex-dist}
 SRC_DIR=${SRC_DIR:-$BUILD_ROOT/wine-src}
 TOOLCHAIN_DIR=${TOOLCHAIN_DIR:-/Users/annon/projects/proton-macos-toolchain/llvm-mingw-20261020-ucrt-macos-universal}
 EVIDENCE_DIR=${EVIDENCE_DIR:-$BUILD_ROOT/evidence/wave3b}
@@ -47,6 +62,7 @@ WINEBOOT_TIMEOUT=${WINEBOOT_TIMEOUT:-300}
 RUN_TIMEOUT=${RUN_TIMEOUT:-120}
 HELLO_RUNS=${HELLO_RUNS:-5}
 WINEBOOT_RUNS=${WINEBOOT_RUNS:-3}
+FEX_RUNS=${FEX_RUNS:-5}
 UNIX_DIR=aarch64-unix
 X18_ENTITLEMENT=com.apple.security.custom-x18-abi-toggle
 CROSS_ARCH_ENTITLEMENT=com.apple.developer.cross-architecture-support
@@ -62,7 +78,7 @@ RESULTS=()
 FAILED=0
 TODO=0
 # CHECK_ITEMS limits the run to some items ("build" rebuilds Wine, the bundle and the test programs).
-CHECK_ITEMS=${CHECK_ITEMS:-"build 1 2 3 4 5 6"}
+CHECK_ITEMS=${CHECK_ITEMS:-"build 1 2 3 4 5 6 7"}
 want() { case " $CHECK_ITEMS " in *" $1 "*) return 0 ;; esac; return 1; }
 pass() { RESULTS+=("PASS  item $1: $2"); echo "PASS  item $1: $2"; }
 fail() { RESULTS+=("FAIL  item $1: $2"); echo "FAIL  item $1: $2"; FAILED=1; }
@@ -73,6 +89,7 @@ WORK=$EVIDENCE_DIR/work
 mkdir -p "$WORK"
 MINGW_BIN=$TOOLCHAIN_DIR/bin
 OBJDUMP=$MINGW_BIN/llvm-objdump
+READOBJ=$MINGW_BIN/llvm-readobj
 INSTALL_DIR=$(sed -n 's/^prefix = //p' "$BUILD_DIR/Makefile" 2>/dev/null | head -1)
 INSTALL_DIR=$(cd "${INSTALL_DIR:-/nonexistent}" 2>/dev/null && pwd -P || echo "${INSTALL_DIR:-/nonexistent}")
 VERSION=$(sed -n 's/^PACKAGE_VERSION = //p' "$BUILD_DIR/Makefile" 2>/dev/null | head -1)
@@ -98,38 +115,63 @@ entitlement_keys() {
 # Build: Wine, the bundle and the test programs
 ########################################################################
 if want build; then
-echo "== build: macos/build-wine.sh (incremental), macos/bundle-wine.sh and the test programs"
+echo "== build: macos/build-wine.sh (arm64ec + aarch64, MSVC mode), build-fex.sh, bundle-wine.sh and the test programs"
 blog=$EVIDENCE_DIR/build.log
 start=$(date +%s)
-"$PROTON_DIR/macos/build-wine.sh" >"$blog" 2>&1
+PE_MODE=msvc WINE_ARCHS=arm64ec,aarch64 BUILD_DIR=$BUILD_DIR "$PROTON_DIR/macos/build-wine.sh" >"$blog" 2>&1
 bstatus=$?
 if [ $bstatus = 0 ]; then
-    pass build "build-wine.sh (incremental) exit 0 in $(( $(date +%s) - start ))s ($blog)"
+    pass build "build-wine.sh (PE_MODE=msvc, arm64ec,aarch64) exit 0 in $(( $(date +%s) - start ))s ($blog)"
 else
-    fail build "build-wine.sh (incremental) exited $bstatus ($blog)"
+    fail build "build-wine.sh (PE_MODE=msvc, arm64ec,aarch64) exited $bstatus: $(tail -1 "$blog") ($blog)"
+fi
+flog=$EVIDENCE_DIR/build-fex.log
+FEX_DIST=$FEX_DIST "$PROTON_DIR/macos/build-fex.sh" >"$flog" 2>&1
+fstatus=$?
+if [ $fstatus = 0 ]; then
+    pass build "build-fex.sh exit 0, $(sed -n 's/^:: \(FEX .*\)/\1/p' "$flog" | head -1) ($flog)"
+else
+    fail build "build-fex.sh exited $fstatus: $(tail -1 "$flog") ($flog)"
 fi
 ulog=$EVIDENCE_DIR/bundle.log
-LOADER_PROFILE=$LOADER_PROFILE "$PROTON_DIR/macos/bundle-wine.sh" >"$ulog" 2>&1
+BUILD_DIR=$BUILD_DIR FEX_DIST=$FEX_DIST LOADER_PROFILE=$LOADER_PROFILE "$PROTON_DIR/macos/bundle-wine.sh" >"$ulog" 2>&1
 ustatus=$?
 if [ $ustatus = 0 ]; then
     pass build "bundle-wine.sh exit 0, $([ -n "$LOADER_PROFILE" ] && echo "profile $LOADER_PROFILE" || echo "ad hoc") ($ulog)"
 else
     fail build "bundle-wine.sh exited $ustatus: $(tail -1 "$ulog") ($ulog)"
 fi
-# hello.exe: the build's own winegcc for aarch64-windows, against Wine's CRT, as in check-wave3a.sh
-hlog=$TESTS_OUT/hello.build.log
-rm -f "$TESTS_OUT/hello.exe"
+# hello.exe (aarch64) and hello_ec.exe (ARM64EC): hello.c with the build's own winegcc, in the
+# build's MSVC mode, against Wine's CRT; the import libraries of a hybrid build are in
+# aarch64-windows for both
+build_hello() {
+    local name=$1 target=$2 format=$3 log=$TESTS_OUT/$1.build.log
+    rm -f "$TESTS_OUT/$name.exe"
+    {
+        echo "\$ winegcc -b $target hello.c (Wine CRT)"
+        PATH=$MINGW_BIN:$PATH "$BUILD_DIR/tools/winegcc/winegcc" -v --wine-objdir "$BUILD_DIR" -b "$target" \
+            -mconsole -O2 -Wall -D_UCRT -I"$SRC_DIR/include/msvcrt" -I"$SRC_DIR/include" \
+            -o "$TESTS_OUT/$name.exe" "$SCRIPT_DIR/hello.c" \
+            "$BUILD_DIR/dlls/winecrt0/aarch64-windows/libwinecrt0.a" "$BUILD_DIR/dlls/ucrtbase/aarch64-windows/libucrtbase.a" \
+            "$BUILD_DIR/dlls/kernel32/aarch64-windows/libkernel32.a" "$BUILD_DIR/dlls/ntdll/aarch64-windows/libntdll.a"
+        echo "exit=$?"
+        "$READOBJ" --file-headers "$TESTS_OUT/$name.exe" | grep -E 'Format|Machine'
+    } >"$log" 2>&1
+    [ -f "$TESTS_OUT/$name.exe" ] && grep -q "^Format: $format\$" "$log"
+}
+if build_hello hello aarch64-windows COFF-ARM64; then pass build "hello.exe built, COFF-ARM64 ($TESTS_OUT/hello.build.log)"; else fail build "hello.exe did not build as COFF-ARM64 ($TESTS_OUT/hello.build.log)"; fi
+if build_hello hello_ec arm64ec-windows COFF-ARM64EC; then pass build "hello_ec.exe built, COFF-ARM64EC ($TESTS_OUT/hello_ec.build.log)"; else fail build "hello_ec.exe did not build as COFF-ARM64EC ($TESTS_OUT/hello_ec.build.log)"; fi
+# hello_x64.exe: an x86_64 program as one from outside Wine, the mingw compiler and its own CRT
+xlog=$TESTS_OUT/hello_x64.build.log
+rm -f "$TESTS_OUT/hello_x64.exe"
 {
-    echo "\$ winegcc -b aarch64-w64-mingw32 hello.c (Wine CRT)"
-    PATH=$MINGW_BIN:$PATH "$BUILD_DIR/tools/winegcc/winegcc" -v --wine-objdir "$BUILD_DIR" -b aarch64-w64-mingw32 \
-        -mconsole -O2 -Wall -D_UCRT -I"$SRC_DIR/include/msvcrt" -I"$SRC_DIR/include" \
-        -o "$TESTS_OUT/hello.exe" "$SCRIPT_DIR/hello.c" \
-        "$BUILD_DIR/dlls/winecrt0/aarch64-windows/libwinecrt0.a" "$BUILD_DIR/dlls/ucrtbase/aarch64-windows/libucrtbase.a" \
-        "$BUILD_DIR/dlls/kernel32/aarch64-windows/libkernel32.a" "$BUILD_DIR/dlls/ntdll/aarch64-windows/libntdll.a"
+    echo "\$ x86_64-w64-mingw32-clang hello_x64.c"
+    "$MINGW_BIN/x86_64-w64-mingw32-clang" -O2 -Wall -o "$TESTS_OUT/hello_x64.exe" "$SCRIPT_DIR/hello_x64.c"
     echo "exit=$?"
-    "$OBJDUMP" -p "$TESTS_OUT/hello.exe" | grep 'DLL Name'
-} >"$hlog" 2>&1
-if [ -f "$TESTS_OUT/hello.exe" ]; then pass build "hello.exe built ($hlog)"; else fail build "hello.exe did not build ($hlog)"; fi
+    "$READOBJ" --file-headers "$TESTS_OUT/hello_x64.exe" | grep -E 'Format|Machine'
+    "$OBJDUMP" -p "$TESTS_OUT/hello_x64.exe" | grep 'DLL Name'
+} >"$xlog" 2>&1
+if [ -f "$TESTS_OUT/hello_x64.exe" ] && grep -q '^Format: COFF-x86-64$' "$xlog"; then pass build "hello_x64.exe built, COFF-x86-64 ($xlog)"; else fail build "hello_x64.exe did not build as COFF-x86-64 ($xlog)"; fi
 plog=$TESTS_OUT/proc_exec_path.build.log
 rm -f "$TESTS_OUT/proc_exec_path"
 clang -O1 -Wall -Werror -o "$TESTS_OUT/proc_exec_path" "$SCRIPT_DIR/proc_exec_path.c" >"$plog" 2>&1
@@ -183,8 +225,11 @@ fi
 skeys=$(entitlement_keys "$SERVER" | paste -sd, -)
 { echo "=== $SERVER (must not carry entitlements)"; codesign -dv "$SERVER" 2>&1; echo "entitlement keys: ${skeys:-<none>}"; } >>"$clog"
 [ -z "$skeys" ] || no "wineserver carries entitlements"
+{ echo "=== FEX's ARM64EC module"; ls -l "$INSTALL_DIR/lib/wine/aarch64-windows/libarm64ecfex.dll" "$UNIXLIB/libarm64ecfex.so" 2>&1; } >>"$clog"
+cmp -s "$FEX_DIST/lib/wine/aarch64-windows/libarm64ecfex.dll" "$INSTALL_DIR/lib/wine/aarch64-windows/libarm64ecfex.dll" || no "libarm64ecfex.dll is not the one of $FEX_DIST"
+cmp -s "$FEX_DIST/lib/wine/$UNIX_DIR/libarm64ecfex.so" "$UNIXLIB/libarm64ecfex.so" || no "libarm64ecfex.so is not the one of $FEX_DIST"
 if [ $ok = yes ]; then
-    pass 1 "wine.app ($kind) next to ntdll.so, both links point into it, signature verifies with ${keys}; wineserver has no entitlements ($clog)"
+    pass 1 "wine.app ($kind) next to ntdll.so, both links point into it, signature verifies with ${keys}; wineserver has no entitlements; FEX's module is installed ($clog)"
 else
     fail 1 "$(grep -c '^WRONG' "$clog") things wrong with the bundle: $(grep '^WRONG' "$clog" | head -3 | cut -c8-90 | paste -sd';' -) ($clog)"
 fi
@@ -289,13 +334,22 @@ fi  # item 4
 if want 5; then
 echo "== item 5: Wave 3a regression"
 R=$EVIDENCE_DIR/regression-wave3a
-rm -rf "$R"; mkdir -p "$R"
-EVIDENCE_DIR=$R "$PROTON_DIR/macos/tests/check-wave3a.sh" >"$R/check-wave3a.out" 2>&1
+R2=$EVIDENCE_DIR/regression-wave3a-this-build
+rm -rf "$R" "$R2"; mkdir -p "$R" "$R2/programs"
+# all of it on the build it was written for
+BUILD_DIR=$MINGW_BUILD_DIR EVIDENCE_DIR=$R "$PROTON_DIR/macos/tests/check-wave3a.sh" >"$R/check-wave3a.out" 2>&1
 rrc=$?
-if [ $rrc = 0 ] && [ -s "$R/check-summary.txt" ] && ! grep -q '^FAIL' "$R/check-summary.txt"; then
-    pass 5 "check-wave3a.sh: exit 0, no FAIL ($R/check-summary.txt)"
+# its runtime items on this wave's build, with the test programs the run above built: hello.exe,
+# teb_test.exe, wx_test.exe and wineboot (its build item would rebuild in mingw mode, and its
+# items 1, 2, 5, 8 and 9 are about that build's files and sources)
+cp "$R"/programs/*.exe "$R2/programs/" 2>/dev/null
+BUILD_DIR=$BUILD_DIR EVIDENCE_DIR=$R2 CHECK_ITEMS="3 4 6 7" "$PROTON_DIR/macos/tests/check-wave3a.sh" >"$R2/check-wave3a.out" 2>&1
+r2ok=yes
+for i in 3 4 6 7; do grep -q "^PASS  item $i:" "$R2/check-summary.txt" 2>/dev/null || r2ok=no; done
+if [ $rrc = 0 ] && [ -s "$R/check-summary.txt" ] && ! grep -q '^FAIL' "$R/check-summary.txt" && [ $r2ok = yes ]; then
+    pass 5 "check-wave3a.sh: exit 0, no FAIL on the aarch64 mingw build; items 3 4 6 7 pass on this build ($R/check-summary.txt, $R2/check-summary.txt)"
 else
-    fail 5 "check-wave3a.sh exit $rrc: $(grep '^FAIL' "$R/check-summary.txt" 2>/dev/null | cut -c1-70 | paste -sd';' -) ($R)"
+    fail 5 "check-wave3a.sh exit $rrc on the mingw build, runtime items on this build ok=$r2ok: $(cat "$R/check-summary.txt" "$R2/check-summary.txt" 2>/dev/null | grep '^FAIL' | cut -c1-70 | paste -sd';' -) ($R, $R2)"
 fi
 fi  # item 5
 
@@ -379,7 +433,51 @@ else
 fi
 fi  # item 6
 
-todo "4K pages, memory below 4 GB, MAP_JIT memory, hardware TSO and FEX have no items yet (they need LOADER_PROFILE); Wave 3b is not done"
+########################################################################
+# Item 7: ARM64EC and x86_64 programs through FEX
+########################################################################
+if want 7; then
+echo "== item 7: hello_ec.exe (ARM64EC) and hello_x64.exe (x86_64) through FEX x $FEX_RUNS"
+fdir=$EVIDENCE_DIR/item7-fex
+rm -rf "$fdir"; mkdir -p "$fdir"
+PREFIX=$BUILD_ROOT/wave3b-prefix-fex
+rm -rf "$PREFIX"; mkdir -p "$PREFIX"
+X64_LINE='hello from x86_64 code on macOS: 6*7=42, processor architecture 9, native 12, page size 4096'
+EC_LINE='hello from Windows ARM64 code on macOS'
+ecpass=0; xpass=0
+for i in $(seq 1 "$FEX_RUNS"); do
+    t=$RUN_TIMEOUT; [ $i = 1 ] && t=$WINEBOOT_TIMEOUT   # the first run sets the prefix up
+    for p in hello_ec hello_x64; do
+        # the first run of each also records which modules are loaded
+        dbg=; [ $i = 1 ] && dbg=+loaddll
+        echo "\$ WINEPREFIX=$PREFIX WINEDEBUG=$dbg WINEDLLOVERRIDES=$WINEDLLOVERRIDES $WINE $TESTS_OUT/$p.exe" >"$fdir/$p.run$i.log"
+        WINEPREFIX=$PREFIX WINEDEBUG=$dbg run_timeout "$t" "$WINE" "$TESTS_OUT/$p.exe" >"$fdir/$p.run$i.stdout" 2>"$fdir/$p.run$i.stderr"
+        rc=$?
+        t=$RUN_TIMEOUT
+        { echo "--- stdout"; cat "$fdir/$p.run$i.stdout"; echo "--- stderr"; cat "$fdir/$p.run$i.stderr"; echo "exit=$rc"; } >>"$fdir/$p.run$i.log"
+        want_line=$EC_LINE; [ $p = hello_x64 ] && want_line=$X64_LINE
+        line=no; tr -d '\r' <"$fdir/$p.run$i.stdout" | grep -qxF "$want_line" && line=yes
+        if [ "$rc" = 0 ] && [ $line = yes ]; then
+            if [ $p = hello_ec ]; then ecpass=$((ecpass + 1)); else xpass=$((xpass + 1)); fi
+        fi
+        echo "run $i $p.exe: exit=$rc line=$line" >>"$fdir/summary.txt"
+    done
+done
+cleanup_prefix "$PREFIX"
+# FEX's module is the builtin from the install tree, in both kinds of process
+fexload=0
+for p in hello_ec hello_x64; do
+    grep -q -E 'Loaded L"C:\\\\windows\\\\system32\\\\libarm64ecfex\.dll" at [0-9A-F]+: builtin' "$fdir/$p.run1.stderr" && fexload=$((fexload + 1))
+done
+echo "libarm64ecfex.dll loaded as a builtin in the first run of: $fexload/2 programs" >>"$fdir/summary.txt"
+if [ "$ecpass" = "$FEX_RUNS" ] && [ "$xpass" = "$FEX_RUNS" ] && [ "$fexload" = 2 ]; then
+    pass 7 "hello_ec.exe (ARM64EC) $ecpass/$FEX_RUNS and hello_x64.exe (x86_64) $xpass/$FEX_RUNS printed their line and exited 0 through bin/wine; libarm64ecfex.dll loaded as a builtin in both ($fdir/summary.txt)"
+else
+    fail 7 "hello_ec.exe passed $ecpass/$FEX_RUNS, hello_x64.exe $xpass/$FEX_RUNS, libarm64ecfex.dll builtin in $fexload/2 ($fdir/summary.txt)"
+fi
+fi  # item 7
+
+todo "4K pages, memory below 4 GB, MAP_JIT memory for FEX's code and hardware TSO have no items yet (all but MAP_JIT need LOADER_PROFILE); Wave 3b is not done"
 
 echo
 echo "== summary"
