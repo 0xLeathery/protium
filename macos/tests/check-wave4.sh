@@ -71,10 +71,13 @@
 # the audio output takes the first 100 ms and then stalls. They fail then, without being run,
 # and say why.
 #
-# NOT YET CHECKED, so this check passing does not make Wave 4 done: that Direct3D frames are on
-# the screen (for someone to look at) and follow a resized window, and a game. The summary lists them as TODO and the exit status is
-# 3 while they are open and nothing failed (1 when an item failed, 0 only when all of it
-# passed).
+# NOT YET CHECKED, so this check passing does not make Wave 4 done: that Direct3D 11 frames are
+# on the screen, which only someone looking can tell (DXMT has its own way into the window, the
+# metal view of item 6), that a window's picture follows it when it is resized, and a game.
+# What goes through Wine's Vulkan surface, Vulkan and Direct3D 12, has been seen: on 2026-11-16
+# the user watched the Godot editor of item 11 open and run during a run of this check. The
+# summary lists the rest as TODO and the exit status is 3 while it is open and nothing failed
+# (1 when an item failed, 0 only when all of it passed).
 # Logs go to $EVIDENCE_DIR.
 
 set -u
@@ -714,7 +717,7 @@ else
 fi
 fi  # item 11
 
-todo "that Direct3D frames are on the screen and follow a resized window, and a game, have no items yet; Wave 4 is not done"
+todo "that Direct3D 11 frames are on the screen, that a window's picture follows a resize, and a game have no items yet; Wave 4 is not done"
 
 echo
 echo "== summary"
