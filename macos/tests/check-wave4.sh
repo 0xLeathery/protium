@@ -44,11 +44,16 @@
 #   8  audio output: audio_test_x64.exe, an x86_64 program, finds an output device, opens it
 #      at 48 kHz 16 bit stereo through winmm and Wine's CoreAudio driver, and the device plays
 #      300 ms of silence to the end, AUDIO_RUNS runs. Nothing is heard.
+#   9  Direct3D 12 through vkd3d-proton, off screen: d3d12_test_x64.exe, an x86_64 program,
+#      gets a device from vkd3d-proton (its d3d12core.dll is in the process) on the adapter of
+#      DXMT's dxgi, compiles two HLSL shaders, makes a pipeline state from them, draws into a
+#      texture and reads back the colour it drew, D3D_RUNS runs. vkd3d-proton reaches the GPU
+#      through Wine's Vulkan and the install's KosmicKrisp. No window is involved.
 # The build and the test programs come first ("build").
 #
 # NOT YET CHECKED, so this check passing does not make Wave 4 done: that Direct3D frames are on
-# the screen (for someone to look at) and follow a resized window, vkd3d-proton (Direct3D 12),
-# and a game. The summary lists them as TODO and the exit status is
+# the screen (for someone to look at) and follow a resized window, a Direct3D 12 swap chain in
+# a window, and a game. The summary lists them as TODO and the exit status is
 # 3 while they are open and nothing failed (1 when an item failed, 0 only when all of it
 # passed).
 # Logs go to $EVIDENCE_DIR.
@@ -88,7 +93,7 @@ RESULTS=()
 FAILED=0
 TODO=0
 # CHECK_ITEMS limits the run to some items ("build" rebuilds Wine, the bundle and the test programs).
-CHECK_ITEMS=${CHECK_ITEMS:-"build 1 2 3 4 5 6 7 8"}
+CHECK_ITEMS=${CHECK_ITEMS:-"build 1 2 3 4 5 6 7 8 9"}
 want() { case " $CHECK_ITEMS " in *" $1 "*) return 0 ;; esac; return 1; }
 pass() { RESULTS+=("PASS  item $1: $2"); echo "PASS  item $1: $2"; }
 fail() { RESULTS+=("FAIL  item $1: $2"); echo "FAIL  item $1: $2"; FAILED=1; }
@@ -185,6 +190,16 @@ rm -f "$TESTS_OUT/d3d11_window_test_x64.exe"
     "$READOBJ" --file-headers "$TESTS_OUT/d3d11_window_test_x64.exe" | grep -E 'Format|Machine'
 } >"$dwlog" 2>&1
 if [ -f "$TESTS_OUT/d3d11_window_test_x64.exe" ] && grep -q '^Format: COFF-x86-64$' "$dwlog"; then pass build "d3d11_window_test_x64.exe built, COFF-x86-64 ($dwlog)"; else fail build "d3d11_window_test_x64.exe did not build as COFF-x86-64 ($dwlog)"; fi
+d12log=$TESTS_OUT/d3d12_test_x64.build.log
+rm -f "$TESTS_OUT/d3d12_test_x64.exe"
+{
+    echo "\$ x86_64-w64-mingw32-clang d3d12_test.c -ld3d12 -ldxgi -ld3dcompiler_47 -ldxguid -luuid"
+    "$MINGW_BIN/x86_64-w64-mingw32-clang" -O2 -Wall -o "$TESTS_OUT/d3d12_test_x64.exe" "$SCRIPT_DIR/d3d12_test.c" \
+        -ld3d12 -ldxgi -ld3dcompiler_47 -ldxguid -luuid
+    echo "exit=$?"
+    "$READOBJ" --file-headers "$TESTS_OUT/d3d12_test_x64.exe" | grep -E 'Format|Machine'
+} >"$d12log" 2>&1
+if [ -f "$TESTS_OUT/d3d12_test_x64.exe" ] && grep -q '^Format: COFF-x86-64$' "$d12log"; then pass build "d3d12_test_x64.exe built, COFF-x86-64 ($d12log)"; else fail build "d3d12_test_x64.exe did not build as COFF-x86-64 ($d12log)"; fi
 alog=$TESTS_OUT/audio_test_x64.build.log
 rm -f "$TESTS_OUT/audio_test_x64.exe"
 {
@@ -534,7 +549,42 @@ else
 fi
 fi  # item 8
 
-todo "that Direct3D frames are on the screen and follow a resized window, vkd3d-proton (Direct3D 12) and a game have no items yet; Wave 4 is not done"
+########################################################################
+# Item 9: Direct3D 12 through vkd3d-proton, off screen
+########################################################################
+if want 9; then
+echo "== item 9: Direct3D 12 through vkd3d-proton, off screen, x86_64 x $D3D_RUNS"
+kdir=$EVIDENCE_DIR/item9-d3d12
+rm -rf "$kdir"; mkdir -p "$kdir"
+PREFIX=$BUILD_ROOT/wave4-prefix-d3d12
+rm -rf "$PREFIX"; mkdir -p "$PREFIX"
+hold_server "$PREFIX"
+D3D12_LINE='d3d12: vkd3d 1, adapter "[^"]+", feature level [bc][01]00, pixel [0-9a-f]{8}, expected 4080bfff'
+kpass=0; t=$WINEBOOT_TIMEOUT   # the first run sets the prefix up
+for i in $(seq 1 "$D3D_RUNS"); do
+    # vkd3d-proton would otherwise leave its shader cache in the working directory
+    WINEPREFIX=$PREFIX VKD3D_SHADER_CACHE_PATH=0 run_timeout "$t" "$WINE" "$TESTS_OUT/d3d12_test_x64.exe" >"$kdir/run$i.stdout" 2>"$kdir/run$i.stderr"
+    rc=$?
+    t=$RUN_TIMEOUT
+    out=$(tr -d '\r' <"$kdir/run$i.stdout" | head -1)
+    line=no; echo "$out" | grep -Eqx "$D3D12_LINE" && line=yes
+    [ "$rc" = 0 ] && [ $line = yes ] && kpass=$((kpass + 1))
+    echo "run $i: exit=$rc line=$line ($out)" >>"$kdir/summary.txt"
+done
+cleanup_prefix "$PREFIX"
+{
+    echo "vkd3d-proton said: $(grep -a -h -o 'vkd3d-proton - build: [0-9a-f]*' "$kdir"/run1.stderr | head -1)"
+    echo "vkd3d-proton in the install tree:"
+    ls -l "$INSTALL_DIR/lib/wine/aarch64-windows/d3d12.dll" "$INSTALL_DIR/lib/wine/aarch64-windows/d3d12core.dll" 2>&1
+} >>"$kdir/summary.txt"
+if [ "$kpass" = "$D3D_RUNS" ]; then
+    pass 9 "d3d12_test_x64.exe drew into a texture with vkd3d-proton and read its colour back in $kpass/$D3D_RUNS runs: '$out' ($kdir/summary.txt)"
+else
+    fail 9 "d3d12_test_x64.exe passed $kpass/$D3D_RUNS runs: '$out' ($kdir/summary.txt)"
+fi
+fi  # item 9
+
+todo "that Direct3D frames are on the screen and follow a resized window, a Direct3D 12 swap chain in a window and a game have no items yet; Wave 4 is not done"
 
 echo
 echo "== summary"
