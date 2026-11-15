@@ -15,6 +15,13 @@
 #   BUILD_DIR      (default $BUILD_ROOT/wine-aarch64)
 #   TOOLCHAIN_DIR  (default /Users/annon/projects/proton-macos-toolchain/llvm-mingw-20261020-ucrt-macos-universal)
 #   WINE_ARCHS     PE architectures for --enable-archs (default aarch64)
+#   PE_MODE        how the PE side is compiled (default mingw):
+#                    mingw  <arch>-w64-mingw32-clang, GNU mode
+#                    msvc   the toolchain's clang with -target <arch>-windows, which is what
+#                           Proton's own arm64 build does (--with-mingw=clang). arm64ec only
+#                           builds this way: in GNU mode the compiler defines __x86_64__ for it
+#                           and Wine's headers then pick their x86 inline assembly.
+#                  A build directory keeps the mode it was first built with.
 #   JOBS           make parallelism (default 12)
 #   MIN_FREE_GB    abort if less free disk space than this (default 20)
 
@@ -28,6 +35,7 @@ SRC_DIR=${SRC_DIR:-$BUILD_ROOT/wine-src}
 BUILD_DIR=${BUILD_DIR:-$BUILD_ROOT/wine-aarch64}
 TOOLCHAIN_DIR=${TOOLCHAIN_DIR:-/Users/annon/projects/proton-macos-toolchain/llvm-mingw-20261020-ucrt-macos-universal}
 WINE_ARCHS=${WINE_ARCHS:-aarch64}
+PE_MODE=${PE_MODE:-mingw}
 JOBS=${JOBS:-12}
 MIN_FREE_GB=${MIN_FREE_GB:-20}
 
@@ -54,6 +62,20 @@ BISON_BIN=$(brew --prefix bison)/bin
 command -v autoreconf >/dev/null || die "autoconf not installed: brew install autoconf"
 MINGW_BIN=$TOOLCHAIN_DIR/bin
 [ -x "$MINGW_BIN/aarch64-w64-mingw32-clang" ] || die "llvm-mingw not found in $TOOLCHAIN_DIR"
+case "$PE_MODE" in
+    mingw) ;;
+    msvc) [ -x "$MINGW_BIN/clang" ] && [ -x "$MINGW_BIN/lld-link" ] || die "no clang and lld-link in $MINGW_BIN for PE_MODE=msvc" ;;
+    *) die "unknown PE_MODE '$PE_MODE' (mingw or msvc)" ;;
+esac
+# Objects of the two modes must not be mixed, and make does not rebuild them when only the
+# compiler flags change. A directory without the mode file predates PE_MODE and is mingw.
+mode_file=$BUILD_DIR/.build-wine-pe-mode
+if [ -f "$BUILD_DIR/Makefile" ]; then
+    built_mode=mingw
+    [ -f "$mode_file" ] && built_mode=$(cat "$mode_file")
+    [ "$built_mode" = "$PE_MODE" ] \
+        || die "$BUILD_DIR was built with PE_MODE=$built_mode; remove it or use another BUILD_DIR for PE_MODE=$PE_MODE"
+fi
 
 # Keg-only bison first; llvm-mingw for the PE side. Nothing is linked globally.
 export PATH="$BISON_BIN:$MINGW_BIN:$PATH"
@@ -110,11 +132,16 @@ sort -u -o "$GENERATED_LIST" "$GENERATED_LIST"
 # 3. Configure (only when the arguments change; make re-runs config.status itself)
 ########################################################################
 pe_cc_vars=()
-IFS=, read -r -a archs <<<"$WINE_ARCHS"
-for arch in "${archs[@]}"; do
-    pe_cc_vars+=("${arch}_CC=$MINGW_BIN/${arch}-w64-mingw32-clang")
-    [ "$arch" = arm64ec ] && pe_cc_vars+=("x86_64_CC=$MINGW_BIN/x86_64-w64-mingw32-clang")
-done
+if [ "$PE_MODE" = msvc ]; then
+    # configure then uses this clang for every PE architecture, with -target <arch>-windows
+    pe_cc_vars+=("--with-mingw=$MINGW_BIN/clang")
+else
+    IFS=, read -r -a archs <<<"$WINE_ARCHS"
+    for arch in "${archs[@]}"; do
+        pe_cc_vars+=("${arch}_CC=$MINGW_BIN/${arch}-w64-mingw32-clang")
+        [ "$arch" = arm64ec ] && pe_cc_vars+=("x86_64_CC=$MINGW_BIN/x86_64-w64-mingw32-clang")
+    done
+fi
 
 CONFIGURE_ARGS=(
     --prefix="$BUILD_ROOT/install-aarch64"
@@ -146,6 +173,7 @@ if [ ! -f "$BUILD_DIR/Makefile" ] || [ ! -f "$args_file" ] || [ "$(cat "$args_fi
     rm -f "$args_file"
     "$SRC_DIR/configure" "${CONFIGURE_ARGS[@]}"
     printf '%s\n' "$new_args" >"$args_file"
+    echo "$PE_MODE" >"$mode_file"
 fi
 
 ########################################################################
