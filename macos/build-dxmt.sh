@@ -1,0 +1,136 @@
+#!/bin/bash
+#
+# Build DXMT, Direct3D 10 and 11 on Metal, for the native arm64 macOS Wine build.
+#
+#   lib/wine/aarch64-windows/{dxgi,d3d10core,d3d11,winemetal}.dll   ARM64X
+#   lib/wine/aarch64-unix/winemetal.so                              arm64
+#
+# under $DXMT_DIST. The DLLs are ARM64X: an x86_64 game runs as an ARM64EC process and loads
+# their ARM64EC half, so DXMT's own code runs natively and only the game's code goes through
+# FEX. They are built with llvm-mingw and DXMT's build-arm64ec.txt cross file against the Wine
+# build tree (its libwinecrt0.a, libntdll.a and winebuild, which marks them as Wine builtins),
+# and winemetal.so against that tree's winemac.so and ntdll.so, so they belong to that Wine
+# build. winemetal.so also links LLVM 15 (macos/build-llvm15.sh) for DXMT's shader converter.
+#
+# The source is the macos-patched branch of github.com/athei/dxmt at a fixed commit, built as
+# it is, the way github.com/athei/mach9 builds it. DXMT does not take AI-generated code (its
+# AGENTS.md), so this script must never patch the source: a change that DXMT needs is for its
+# authors to write. The script refuses a source tree that differs from the commit.
+#
+# Environment overrides:
+#   BUILD_ROOT     (default /Users/annon/projects/proton-macos-build)
+#   BUILD_DIR      the Wine build tree to link against (default $BUILD_ROOT/wine-arm64ec)
+#   TOOLCHAIN_DIR  (default /Users/annon/projects/proton-macos-toolchain/llvm-mingw-20261020-ucrt-macos-universal)
+#   LLVM15_DIST    (default $BUILD_ROOT/llvm15-dist), built when missing
+#   DXMT_REPO      (default https://github.com/athei/dxmt)
+#   DXMT_COMMIT    (default 01e59e9bde030f105937f249afaac92ada01b4d7, macos-patched on 2026-11-15)
+#   DXMT_SRC       (default $BUILD_ROOT/dxmt-src), cloned when missing
+#   DXMT_DIST      (default $BUILD_ROOT/dxmt-dist)
+#   VENV           Python environment that gets meson (default $BUILD_ROOT/py-venv)
+#   MIN_FREE_GB    abort if less free disk space than this (default 10)
+
+set -euo pipefail
+
+SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
+PROTON_DIR=$(cd "$SCRIPT_DIR/.." && pwd)
+BUILD_ROOT=${BUILD_ROOT:-/Users/annon/projects/proton-macos-build}
+BUILD_DIR=${BUILD_DIR:-$BUILD_ROOT/wine-arm64ec}
+TOOLCHAIN_DIR=${TOOLCHAIN_DIR:-/Users/annon/projects/proton-macos-toolchain/llvm-mingw-20261020-ucrt-macos-universal}
+LLVM15_DIST=${LLVM15_DIST:-$BUILD_ROOT/llvm15-dist}
+DXMT_REPO=${DXMT_REPO:-https://github.com/athei/dxmt}
+DXMT_COMMIT=${DXMT_COMMIT:-01e59e9bde030f105937f249afaac92ada01b4d7}
+DXMT_SRC=${DXMT_SRC:-$BUILD_ROOT/dxmt-src}
+DXMT_DIST=${DXMT_DIST:-$BUILD_ROOT/dxmt-dist}
+VENV=${VENV:-$BUILD_ROOT/py-venv}
+MIN_FREE_GB=${MIN_FREE_GB:-10}
+MESON_VERSION=1.11.2
+DLLS="dxgi d3d10core d3d11 winemetal"
+BLD=$BUILD_ROOT/dxmt-build/arm64x
+
+log() { echo ":: $*" >&2; }
+die() { echo "build-dxmt.sh: error: $*" >&2; exit 1; }
+
+[ "$(uname -s)" = Darwin ] || die "this script builds on macOS only"
+[ "$(uname -m)" = arm64 ] || die "this script expects an arm64 (Apple Silicon) host"
+for tool in git ninja xxd python3; do command -v $tool >/dev/null || die "$tool not found"; done
+MINGW_BIN=$TOOLCHAIN_DIR/bin
+[ -x "$MINGW_BIN/arm64ec-w64-mingw32-g++" ] || die "llvm-mingw (arm64ec) not found in $TOOLCHAIN_DIR"
+READOBJ=$MINGW_BIN/llvm-readobj
+for f in dlls/winecrt0/aarch64-windows/libwinecrt0.a dlls/winemac.drv/winemac.so dlls/ntdll/ntdll.so tools/winebuild/winebuild; do
+    [ -e "$BUILD_DIR/$f" ] || die "no $f in $BUILD_DIR: build Wine first (macos/build-wine.sh with PE_MODE=msvc WINE_ARCHS=arm64ec,aarch64)"
+done
+
+mkdir -p "$BUILD_ROOT"
+free_gb=$(df -g "$BUILD_ROOT" | awk 'NR==2 {print $4}')
+log "free disk space: ${free_gb} GB"
+[ "$free_gb" -ge "$MIN_FREE_GB" ] || die "only ${free_gb} GB free on $BUILD_ROOT (minimum ${MIN_FREE_GB} GB)"
+
+########################################################################
+# 1. LLVM 15 and meson
+########################################################################
+LLVM15_DIST=$LLVM15_DIST "$SCRIPT_DIR/build-llvm15.sh"
+if [ "$("$VENV/bin/meson" --version 2>/dev/null)" != "$MESON_VERSION" ]; then
+    log "meson $MESON_VERSION into $VENV"
+    [ -x "$VENV/bin/python3" ] || python3 -m venv "$VENV"
+    "$VENV/bin/python3" -m pip install --quiet --disable-pip-version-check "meson==$MESON_VERSION"
+fi
+
+########################################################################
+# 2. Source at the fixed commit, unmodified
+########################################################################
+if [ ! -d "$DXMT_SRC/.git" ]; then
+    log "cloning $DXMT_REPO -> $DXMT_SRC"
+    git clone -q --filter=blob:none --no-checkout "$DXMT_REPO" "$DXMT_SRC"
+fi
+git -C "$DXMT_SRC" cat-file -e "$DXMT_COMMIT^{commit}" 2>/dev/null || git -C "$DXMT_SRC" fetch -q origin "$DXMT_COMMIT"
+[ "$(git -C "$DXMT_SRC" rev-parse HEAD 2>/dev/null)" = "$DXMT_COMMIT" ] \
+    || git -C "$DXMT_SRC" -c advice.detachedHead=false checkout -q --detach "$DXMT_COMMIT"
+git -C "$DXMT_SRC" submodule update -q --init --recursive
+dirty=$(git -C "$DXMT_SRC" status --porcelain --untracked-files=no --ignore-submodules=none | head -5)
+[ -z "$dirty" ] || die "$DXMT_SRC differs from $DXMT_COMMIT; DXMT is built unmodified:
+$dirty"
+describe=$(git -C "$DXMT_SRC" describe --always --tags)
+log "DXMT $describe ($DXMT_COMMIT)"
+
+########################################################################
+# 3. Build: a fresh tree whenever what it is built from or linked against changes
+########################################################################
+wine_commit=$(git -C "$PROTON_DIR/wine" rev-parse HEAD)
+[ -z "$(git -C "$PROTON_DIR/wine" status --porcelain --untracked-files=no)" ] || wine_commit="$wine_commit-dirty"
+key="dxmt=$DXMT_COMMIT wine=$wine_commit build=$BUILD_DIR llvm=$(cat "$LLVM15_DIST/KEY") meson=$MESON_VERSION clang=$("$MINGW_BIN/clang" --version | head -1)"
+export PATH="$VENV/bin:$MINGW_BIN:$PATH"
+if [ "$(cat "$BLD/.build-dxmt-key" 2>/dev/null)" != "$key" ]; then
+    log "configuring $BLD"
+    rm -rf "$BLD"
+    meson setup "$BLD" "$DXMT_SRC" --cross-file "$DXMT_SRC/build-arm64ec.txt" --buildtype release \
+        -Dnative_llvm_path="$LLVM15_DIST" -Dwine_build_path="$BUILD_DIR" -Denable_d3d12=false >"$BUILD_ROOT/dxmt-build.setup.log" 2>&1 \
+        || die "meson setup failed, see $BUILD_ROOT/dxmt-build.setup.log"
+    echo "$key" >"$BLD/.build-dxmt-key"
+fi
+log "building"
+ninja -C "$BLD" src/dxgi/dxgi.dll.postproc src/d3d10/d3d10core.dll.postproc src/d3d11/d3d11.dll.postproc \
+    src/winemetal/winemetal.dll.postproc src/winemetal/unix/winemetal.so >"$BUILD_ROOT/dxmt-build.ninja.log" 2>&1 \
+    || die "ninja failed, see $BUILD_ROOT/dxmt-build.ninja.log"
+
+########################################################################
+# 4. Stage and check
+########################################################################
+pe=$DXMT_DIST/lib/wine/aarch64-windows
+unix=$DXMT_DIST/lib/wine/aarch64-unix
+rm -rf "$DXMT_DIST"
+mkdir -p "$pe" "$unix"
+for dll in $DLLS; do
+    dir=$dll; [ $dll = d3d10core ] && dir=d3d10
+    cp "$BLD/src/$dir/$dll.dll" "$pe/$dll.dll"
+    # A cross file that fell back to another compiler, or a link without -marm64x, would still
+    # leave a DLL: of the wrong machine, or without its ARM64 half.
+    [ "$("$READOBJ" --file-headers "$pe/$dll.dll" | sed -n 's/^Format: //p' | head -1)" = COFF-ARM64X ] \
+        || die "$dll.dll is not ARM64X"
+    head -c 128 "$pe/$dll.dll" | grep -qa "Wine builtin DLL" || die "$dll.dll is not marked as a Wine builtin"
+done
+cp "$BLD/src/winemetal/unix/winemetal.so" "$unix/winemetal.so"
+[ "$(lipo -archs "$unix/winemetal.so")" = arm64 ] || die "winemetal.so is not an arm64-only Mach-O"
+echo "$describe" >"$DXMT_DIST/DESCRIBE"
+echo "$key" >"$DXMT_DIST/KEY"
+log "done: $DXMT_DIST ($describe)"
+ls -l "$pe" "$unix" >&2
