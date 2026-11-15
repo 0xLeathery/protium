@@ -31,6 +31,9 @@
 #   LOADER_PROFILE  provisioning profile to embed (default: none)
 #   BUNDLE_ID       bundle identifier (default: the profile's, or org.winehq.wine without a
 #                   profile); with a profile it has to be the one the profile is for
+#   FEX_DIST        output of build-fex.sh (default $BUILD_ROOT/fex-dist); its ARM64EC module is
+#                   installed with Wine's own modules when it is there. Without it an x86_64
+#                   program stops with "could not load libarm64ecfex.dll".
 #   MIN_FREE_GB     abort if less free disk space than this (default 10)
 
 set -euo pipefail
@@ -40,6 +43,7 @@ BUILD_ROOT=${BUILD_ROOT:-/Users/annon/projects/proton-macos-build}
 BUILD_DIR=${BUILD_DIR:-$BUILD_ROOT/wine-aarch64}
 LOADER_PROFILE=${LOADER_PROFILE:-}
 BUNDLE_ID=${BUNDLE_ID:-}
+FEX_DIST=${FEX_DIST:-$BUILD_ROOT/fex-dist}
 MIN_FREE_GB=${MIN_FREE_GB:-10}
 ENTITLEMENTS=$SCRIPT_DIR/wine-loader.entitlements
 UNIX_DIR=aarch64-unix
@@ -61,9 +65,11 @@ die() { echo "bundle-wine.sh: error: $*" >&2; exit 1; }
 [ -f "$ENTITLEMENTS" ] || die "missing $ENTITLEMENTS"
 
 INSTALL_DIR=$(sed -n 's/^prefix = //p' "$BUILD_DIR/Makefile" | head -1)
+# The install tree is removed and written again below, so it has to be a directory of ours.
 case "$INSTALL_DIR" in
-    /*/*) ;;
-    *) die "the build in $BUILD_DIR has no usable prefix ('$INSTALL_DIR')" ;;
+    *..*) die "the prefix of the build in $BUILD_DIR ('$INSTALL_DIR') contains '..'" ;;
+    "$BUILD_ROOT"/?*) ;;
+    *) die "the prefix of the build in $BUILD_DIR ('$INSTALL_DIR') is not below $BUILD_ROOT" ;;
 esac
 VERSION=$(sed -n 's/^PACKAGE_VERSION = //p' "$BUILD_DIR/Makefile" | head -1)
 [ -n "$VERSION" ] || die "no PACKAGE_VERSION in $BUILD_DIR/Makefile"
@@ -127,16 +133,27 @@ log "free disk space: ${free_gb} GB"
 [ "$free_gb" -ge "$MIN_FREE_GB" ] || die "only ${free_gb} GB free on $BUILD_ROOT (minimum ${MIN_FREE_GB} GB)"
 
 unixdir=$INSTALL_DIR/lib/wine/$UNIX_DIR
+pedir=$INSTALL_DIR/lib/wine/aarch64-windows
 app=$unixdir/wine.app
-# The links of an earlier run point into the bundle: make install must not write through them.
-rm -rf "$app"
-rm -f "$unixdir/wine" "$INSTALL_DIR/bin/wine"
+# Start from an empty tree. The links of an earlier run point into the bundle, and make install
+# must not write through them; a build directory with other PE architectures installs into the
+# same prefix, and nothing of it may be left behind.
+rm -rf "$INSTALL_DIR"
 
 install_log=$BUILD_ROOT/bundle-wine-install.log
 log "make install-lib into $INSTALL_DIR (log: $install_log)"
 make -C "$BUILD_DIR" install-lib >"$install_log" 2>&1 || die "make install-lib failed, see $install_log"
 [ -f "$unixdir/wine" ] && [ ! -L "$unixdir/wine" ] || die "make install-lib left no loader at $unixdir/wine"
 [ -f "$unixdir/ntdll.so" ] || die "make install-lib left no $unixdir/ntdll.so"
+
+# FEX's ARM64EC module, where Proton's Makefile.in installs it
+if [ -f "$FEX_DIST/lib/wine/aarch64-windows/libarm64ecfex.dll" ] && [ -f "$FEX_DIST/lib/wine/$UNIX_DIR/libarm64ecfex.so" ]; then
+    cp "$FEX_DIST/lib/wine/aarch64-windows/libarm64ecfex.dll" "$pedir/libarm64ecfex.dll"
+    cp "$FEX_DIST/lib/wine/$UNIX_DIR/libarm64ecfex.so" "$unixdir/libarm64ecfex.so"
+    log "installed FEX's ARM64EC module from $FEX_DIST"
+else
+    log "no FEX module in $FEX_DIST (macos/build-fex.sh builds it): x86_64 programs will not run"
+fi
 
 ########################################################################
 # 3. The bundle
