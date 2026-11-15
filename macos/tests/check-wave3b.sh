@@ -63,6 +63,7 @@ BUILD_ROOT=${BUILD_ROOT:-/Users/annon/projects/proton-macos-build}
 BUILD_DIR=${BUILD_DIR:-$BUILD_ROOT/wine-arm64ec}
 MINGW_BUILD_DIR=${MINGW_BUILD_DIR:-$BUILD_ROOT/wine-aarch64}
 FEX_DIST=${FEX_DIST:-$BUILD_ROOT/fex-dist}
+VULKAN_DIST=${VULKAN_DIST:-$BUILD_ROOT/vulkan-dist}
 SRC_DIR=${SRC_DIR:-$BUILD_ROOT/wine-src}
 TOOLCHAIN_DIR=${TOOLCHAIN_DIR:-/Users/annon/projects/proton-macos-toolchain/llvm-mingw-20261020-ucrt-macos-universal}
 EVIDENCE_DIR=${EVIDENCE_DIR:-$BUILD_ROOT/evidence/wave3b}
@@ -129,15 +130,25 @@ entitlement_keys() {
 # Build: Wine, the bundle and the test programs
 ########################################################################
 if want build; then
-echo "== build: macos/build-wine.sh (arm64ec + aarch64, MSVC mode), build-fex.sh, bundle-wine.sh and the test programs"
+echo "== build: macos/build-vulkan.sh, build-wine.sh (arm64ec + aarch64, MSVC mode, Vulkan), build-fex.sh, bundle-wine.sh and the test programs"
+# This build has Vulkan, which Wave 4 uses; it is one configuration, so that the two waves'
+# checks don't rebuild Wine back and forth. Nothing in this wave's items needs Vulkan.
+vlog=$EVIDENCE_DIR/build-vulkan.log
+VULKAN_DIST=$VULKAN_DIST "$PROTON_DIR/macos/build-vulkan.sh" >"$vlog" 2>&1
+vstatus=$?
+if [ $vstatus = 0 ]; then
+    pass build "build-vulkan.sh exit 0 ($vlog)"
+else
+    fail build "build-vulkan.sh exited $vstatus: $(tail -1 "$vlog") ($vlog)"
+fi
 blog=$EVIDENCE_DIR/build.log
 start=$(date +%s)
-PE_MODE=msvc WINE_ARCHS=arm64ec,aarch64 BUILD_DIR=$BUILD_DIR "$PROTON_DIR/macos/build-wine.sh" >"$blog" 2>&1
+PE_MODE=msvc WINE_ARCHS=arm64ec,aarch64 BUILD_DIR=$BUILD_DIR VULKAN_DIST=$VULKAN_DIST "$PROTON_DIR/macos/build-wine.sh" >"$blog" 2>&1
 bstatus=$?
 if [ $bstatus = 0 ]; then
-    pass build "build-wine.sh (PE_MODE=msvc, arm64ec,aarch64) exit 0 in $(( $(date +%s) - start ))s ($blog)"
+    pass build "build-wine.sh (PE_MODE=msvc, arm64ec,aarch64, Vulkan) exit 0 in $(( $(date +%s) - start ))s ($blog)"
 else
-    fail build "build-wine.sh (PE_MODE=msvc, arm64ec,aarch64) exited $bstatus: $(tail -1 "$blog") ($blog)"
+    fail build "build-wine.sh (PE_MODE=msvc, arm64ec,aarch64, Vulkan) exited $bstatus: $(tail -1 "$blog") ($blog)"
 fi
 flog=$EVIDENCE_DIR/build-fex.log
 FEX_DIST=$FEX_DIST "$PROTON_DIR/macos/build-fex.sh" >"$flog" 2>&1
@@ -148,7 +159,7 @@ else
     fail build "build-fex.sh exited $fstatus: $(tail -1 "$flog") ($flog)"
 fi
 ulog=$EVIDENCE_DIR/bundle.log
-BUILD_DIR=$BUILD_DIR FEX_DIST=$FEX_DIST LOADER_PROFILE=$LOADER_PROFILE "$PROTON_DIR/macos/bundle-wine.sh" >"$ulog" 2>&1
+BUILD_DIR=$BUILD_DIR FEX_DIST=$FEX_DIST VULKAN_DIST=$VULKAN_DIST LOADER_PROFILE=$LOADER_PROFILE "$PROTON_DIR/macos/bundle-wine.sh" >"$ulog" 2>&1
 ustatus=$?
 if [ $ustatus = 0 ]; then
     pass build "bundle-wine.sh exit 0, $([ -n "$LOADER_PROFILE" ] && echo "profile $LOADER_PROFILE" || echo "ad hoc") ($ulog)"
