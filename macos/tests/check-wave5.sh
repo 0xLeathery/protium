@@ -14,7 +14,9 @@
 #   3  video: mf_video_test.exe, x86_64 and i386, decodes one second of H.264/AAC in MP4 and of
 #      VP9/Opus in WebM through Media Foundation (winedmo and winegstreamer on the bundle's
 #      GStreamer and FFmpeg): all 30 video frames, the first one's centre within 6 of #3366cc in
-#      each channel, and audio
+#      each channel, and audio. Then the same with a Direct3D 11 device given to the reader, as
+#      Unity's video player gives one: all 30 frames again, each as a Direct3D 11 texture (DXMT
+#      has no NV12 textures, so the H.264 decoder's own samples are in system memory there)
 #   4  cursor clip: cursor_clip_test.exe clips the cursor to a point and releases it 2000 times
 #      and finds it where it should be every time. It shows two windows and moves the pointer.
 #   5  fullscreen: fullscreen_test.exe switches a Direct3D 11 swap chain to fullscreen and back
@@ -70,7 +72,7 @@ SUPER_WAVE_BASE=${SUPER_WAVE_BASE:-43acb634}
 # trampolines, winemac.drv's update of DXMT's client surfaces, ntdll's GStreamer paths, an include
 # in winegstreamer's media converter, winebus's IOHID game controllers, and the source reader's
 # drain of a decoder, which is PE code and so is guarded by configure's WINE_MACOS_AARCH64
-WAVE_FILES="dlls/ntdll/unix/virtual.c dlls/ntdll/unix/loader.c dlls/winemac.drv/window.c dlls/winegstreamer/media-converter/media-converter.h dlls/winebus.sys/bus_iohid.c dlls/mfreadwrite/reader.c configure.ac"
+WAVE_FILES="dlls/ntdll/unix/virtual.c dlls/ntdll/unix/loader.c dlls/winemac.drv/window.c dlls/winegstreamer/media-converter/media-converter.h dlls/winebus.sys/bus_iohid.c dlls/mfreadwrite/reader.c configure.ac dlls/winegstreamer/video_decoder.c dlls/winegstreamer/video_processor.c"
 SUPER_FILES="lsteamclient/unixlib.cpp lsteamclient/unix_steam_input_manual.cpp"
 export MIN_FREE_GB=${MIN_FREE_GB:-4}
 export WINEDLLOVERRIDES=${WINEDLLOVERRIDES:-mscoree,mshtml=}
@@ -147,7 +149,7 @@ if true; then
     for a in x86_64 i686; do
         cc $a https_test_$a.exe https_test.c -lwinhttp
         cc $a bcrypt_test_$a.exe bcrypt_test.c -lbcrypt
-        cc $a mf_video_test_$a.exe mf_video_test.c -lmfplat -lmfreadwrite -lmfuuid -lole32 -luuid
+        cc $a mf_video_test_$a.exe mf_video_test.c -lmfplat -lmfreadwrite -lmfuuid -lole32 -luuid -ld3d11 -ldxguid
         cc $a d3d9_test_$a.exe d3d9_test.c -ld3d9 -luser32
         cc $a opengl_test_$a.exe opengl_test.c -lopengl32 -lgdi32 -luser32
     done
@@ -193,17 +195,23 @@ if want 3; then
     ok=yes; lines=""
     for a in x86_64 i686; do
         for f in h264_aac.mp4 vp9_opus.webm; do
-            winrun "$EVIDENCE_DIR/item3-$a-$f" "$T/mf_video_test_$a.exe" "$(winpath "$T/$f")"
-            line=$(head -1 "$EVIDENCE_DIR/item3-$a-$f.out")
-            lines="$lines $a $f: '$line'"
-            c=$(echo "$line" | sed -n 's/.*first centre \([0-9a-f]\{6\}\).*/\1/p')
-            frames=$(echo "$line" | sed -n 's/^mf video: \([0-9]*\) frames.*/\1/p')
-            audio=$(echo "$line" | sed -n 's/.*audio \([0-9]*\) bytes.*/\1/p')
-            close=$(perl -e '$c = hex shift; $w = 0x3366cc; for $s (0, 8, 16) { exit 1 if abs((($c >> $s) & 255) - (($w >> $s) & 255)) > 6 } exit 0' "${c:-0}" && echo yes || echo no)
-            [ "${frames:-0}" -eq 30 ] && [ "${audio:-0}" -gt 0 ] && [ "$close" = yes ] || ok=no
+            for mode in "" d3d11; do
+                winrun "$EVIDENCE_DIR/item3-$a-$f${mode:+-$mode}" "$T/mf_video_test_$a.exe" "$(winpath "$T/$f")" $mode
+                line=$(head -1 "$EVIDENCE_DIR/item3-$a-$f${mode:+-$mode}.out")
+                lines="$lines $a $f${mode:+ $mode}: '$line'"
+                c=$(echo "$line" | sed -n 's/.*first centre \([0-9a-f]\{6\}\).*/\1/p')
+                frames=$(echo "$line" | sed -n 's/^mf video: \([0-9]*\) frames.*/\1/p')
+                audio=$(echo "$line" | sed -n 's/.*audio \([0-9]*\) bytes.*/\1/p')
+                close=$(perl -e '$c = hex shift; $w = 0x3366cc; for $s (0, 8, 16) { exit 1 if abs((($c >> $s) & 255) - (($w >> $s) & 255)) > 6 } exit 0' "${c:-0}" && echo yes || echo no)
+                [ "${frames:-0}" -eq 30 ] && [ "${audio:-0}" -gt 0 ] && [ "$close" = yes ] || ok=no
+                if [ -n "$mode" ]; then
+                    textures=$(echo "$line" | sed -n 's/.*d3d11 textures \([0-9]*\).*/\1/p')
+                    [ "${textures:-0}" -eq 30 ] || ok=no
+                fi
+            done
         done
     done
-    [ $ok = yes ] && pass 3 "Media Foundation decodes H.264/AAC and VP9/Opus:$lines" || fail 3 "$lines ($EVIDENCE_DIR/item3-*)"
+    [ $ok = yes ] && pass 3 "Media Foundation decodes H.264/AAC and VP9/Opus, also with a Direct3D 11 device:$lines" || fail 3 "$lines ($EVIDENCE_DIR/item3-*)"
 fi
 
 if want 4 && needs_unlocked 4; then
