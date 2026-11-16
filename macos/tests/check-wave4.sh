@@ -321,7 +321,9 @@ if want 2; then
 echo "== item 2: Wave 3b regression"
 R=$EVIDENCE_DIR/regression-wave3b
 rm -rf "$R"; mkdir -p "$R"
-EVIDENCE_DIR=$R "$PROTON_DIR/macos/tests/check-wave3b.sh" >"$R/check-wave3b.out" 2>&1
+# without this check's CHECK_ITEMS, which a caller may have exported: check-wave3b.sh runs all its
+# items, its build step too, which compiles its test programs into $R
+env -u CHECK_ITEMS EVIDENCE_DIR=$R "$PROTON_DIR/macos/tests/check-wave3b.sh" >"$R/check-wave3b.out" 2>&1
 rrc=$?
 # 3 is its status while only its TODO line, what the provisioning profile gates, is open
 if { [ $rrc = 0 ] || [ $rrc = 3 ]; } && [ -s "$R/check-summary.txt" ] && ! grep -q '^FAIL' "$R/check-summary.txt"; then
