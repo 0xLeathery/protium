@@ -43,7 +43,8 @@
 #                   force it.
 #   DXMT_DIST       output of build-dxmt.sh (default $BUILD_ROOT/dxmt-dist); when it is there,
 #                   its dxgi, d3d10core and d3d11 take the place of Wine's own, which have no
-#                   usable backend on this build, and its winemetal modules are added
+#                   usable backend on this build, and its winemetal modules are added; on the
+#                   32-bit side the same for its i386 DLLs, when it has them
 #   VKD3D_DIST      output of build-vkd3d-proton.sh (default $BUILD_ROOT/vkd3d-proton-dist); when
 #                   it is there, its d3d12 and d3d12core take the place of Wine's own. Direct3D
 #                   12 then needs the Vulkan driver of MESA_DIST.
@@ -220,6 +221,17 @@ if [ -f "$DXMT_DIST/lib/wine/aarch64-windows/d3d11.dll" ] && [ -f "$DXMT_DIST/li
     done
     cp "$DXMT_DIST/lib/wine/$UNIX_DIR/winemetal.so" "$unixdir/winemetal.so"
     log "installed DXMT $(cat "$DXMT_DIST/DESCRIBE" 2>/dev/null) from $DXMT_DIST in place of Wine's dxgi, d3d10core and d3d11"
+    # and its 32-bit DLLs on the 32-bit side, which reach the same winemetal.so through WoW64
+    if [ $wow64 = yes ] && [ -d "$i386dir" ]; then
+        if [ -f "$DXMT_DIST/lib/wine/i386-windows/d3d11.dll" ]; then
+            for dll in dxgi d3d10core d3d11 winemetal; do
+                cp "$DXMT_DIST/lib/wine/i386-windows/$dll.dll" "$i386dir/$dll.dll"
+            done
+            log "installed DXMT's 32-bit DLLs in lib/wine/i386-windows"
+        else
+            log "no 32-bit DXMT in $DXMT_DIST: 32-bit Direct3D 10 and 11 stay Wine's own"
+        fi
+    fi
 else
     log "no DXMT in $DXMT_DIST (macos/build-dxmt.sh builds it): Direct3D 10 and 11 stay Wine's own"
 fi
