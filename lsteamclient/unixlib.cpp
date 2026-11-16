@@ -795,8 +795,15 @@ static NTSTATUS steamclient_init( Params *params, bool wow64 )
     LOAD_FUNC( Steam_GetAPICallResult );
     LOAD_FUNC( Steam_FreeLastCallback );
     LOAD_FUNC( Steam_ReleaseThreadLocalMemory );
+#if defined(__APPLE__) && defined(__aarch64__)
+    /* The Mac client exports neither; without them every version counts as known and a
+     * missing one is not reported, see steamclient_Steam_IsKnownInterface. */
+    p_Steam_IsKnownInterface = (decltype(p_Steam_IsKnownInterface))dlsym( steamclient, "Steam_IsKnownInterface" );
+    p_Steam_NotifyMissingInterface = (decltype(p_Steam_NotifyMissingInterface))dlsym( steamclient, "Steam_NotifyMissingInterface" );
+#else
     LOAD_FUNC( Steam_IsKnownInterface );
     LOAD_FUNC( Steam_NotifyMissingInterface );
+#endif
 
     TRACE( "Loaded host steamclient from %s\n", debugstr_a(path) );
     return 0;
@@ -851,6 +858,10 @@ static NTSTATUS steamclient_Steam_ReleaseThreadLocalMemory( Params *params, bool
 template< typename Params >
 static NTSTATUS steamclient_Steam_IsKnownInterface( Params *params, bool wow64 )
 {
+#if defined(__APPLE__) && defined(__aarch64__)
+    /* An interface the client lacks still comes back NULL from its getter. */
+    if (!p_Steam_IsKnownInterface) { params->_ret = true; return 0; }
+#endif
     params->_ret = p_Steam_IsKnownInterface( params->version );
     return 0;
 }
@@ -858,6 +869,9 @@ static NTSTATUS steamclient_Steam_IsKnownInterface( Params *params, bool wow64 )
 template< typename Params >
 static NTSTATUS steamclient_Steam_NotifyMissingInterface( Params *params, bool wow64 )
 {
+#if defined(__APPLE__) && defined(__aarch64__)
+    if (!p_Steam_NotifyMissingInterface) return 0;
+#endif
     p_Steam_NotifyMissingInterface( params->pipe, params->version );
     return 0;
 }
