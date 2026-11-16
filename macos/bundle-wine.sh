@@ -52,7 +52,10 @@
 #                   it is there, Proton's lsteamclient and steam.exe are installed, so a game
 #                   reaches Mac Steam's steamclient.dylib
 #   HOST_DYLIBS     Homebrew libraries that Wine opens by name at run time (default
-#                   libfreetype.6.dylib, without which Wine has no TrueType fonts). They are
+#                   libfreetype.6.dylib, without which Wine has no TrueType fonts, and
+#                   libgnutls.30.dylib, without which schannel has no TLS, and libgmp.10.dylib,
+#                   which bcrypt opens for Diffie-Hellman keys, and libgcrypt.20.dylib, for its
+#                   ECDH secret agreement). They are
 #                   copied with the Homebrew libraries they need into lib/external.
 #   VULKAN_DIST     output of build-vulkan.sh (default $BUILD_ROOT/vulkan-dist); its loader is
 #                   installed the same way when it is there
@@ -72,7 +75,7 @@ FEX_DIST=${FEX_DIST:-$BUILD_ROOT/fex-dist}
 DXMT_DIST=${DXMT_DIST:-$BUILD_ROOT/dxmt-dist}
 VKD3D_DIST=${VKD3D_DIST:-$BUILD_ROOT/vkd3d-proton-dist}
 BRIDGE_DIST=${BRIDGE_DIST:-$BUILD_ROOT/steam-bridge-dist}
-HOST_DYLIBS=${HOST_DYLIBS:-libfreetype.6.dylib}
+HOST_DYLIBS=${HOST_DYLIBS:-libfreetype.6.dylib libgnutls.30.dylib libgmp.10.dylib libgcrypt.20.dylib}
 WOW64=${WOW64:-auto}
 VULKAN_DIST=${VULKAN_DIST:-$BUILD_ROOT/vulkan-dist}
 MESA_DIST=${MESA_DIST:-$BUILD_ROOT/mesa-dist}

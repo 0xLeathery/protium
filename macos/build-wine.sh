@@ -63,6 +63,8 @@ command -v brew >/dev/null || die "Homebrew is required (bison, autoconf)"
 BISON_BIN=$(brew --prefix bison)/bin
 [ -x "$BISON_BIN/bison" ] || die "Homebrew bison not installed: brew install bison"
 command -v autoreconf >/dev/null || die "autoconf not installed: brew install autoconf"
+[ -f "$(brew --prefix)/opt/gnutls/lib/libgnutls.30.dylib" ] || die "GnuTLS not installed: brew install gnutls"
+[ -f "$(brew --prefix)/opt/libgcrypt/lib/libgcrypt.20.dylib" ] || die "libgcrypt not installed: brew install libgcrypt"
 MINGW_BIN=$TOOLCHAIN_DIR/bin
 [ -x "$MINGW_BIN/aarch64-w64-mingw32-clang" ] || die "llvm-mingw not found in $TOOLCHAIN_DIR"
 case "$PE_MODE" in
@@ -160,13 +162,19 @@ CONFIGURE_ARGS=(
     --disable-tests
     # macOS system frameworks and the host libraries that are present
     --with-coreaudio --with-opencl --with-freetype --with-pthread --with-unwind
+    # GnuTLS for schannel (TLS) and bcrypt's asymmetric keys, and libgcrypt for bcrypt's ECDH
+    # secret agreement (Proton's path for it), both loaded at run time from lib/external
+    --with-gnutls --with-gcrypt
+    # dlls/bcrypt/Makefile.in passes GnuTLS's and GMP's include flags but not libgcrypt's, which
+    # only works where gcrypt.h is in a default include directory
+    "CPPFLAGS=$(pkg-config --cflags libgcrypt)"
     # not available (or not wanted) on this host: disable explicitly instead of letting configure guess
     --without-opengl --without-x --without-wayland --without-xcomposite --without-xcursor --without-xfixes
     --without-xinerama --without-xinput --without-xinput2 --without-xrandr --without-xrender
     --without-xshape --without-xshm --without-xxf86vm
     --without-alsa --without-oss --without-pulse --without-gstreamer --without-ffmpeg
-    --without-capi --without-cups --without-dbus --without-fontconfig --without-gcrypt
-    --without-gettext --without-gettextpo --without-gphoto --without-gnutls --without-gssapi
+    --without-capi --without-cups --without-dbus --without-fontconfig
+    --without-gettext --without-gettextpo --without-gphoto --without-gssapi
     --without-hwloc --without-inotify --without-krb5 --without-netapi --without-pcap
     --without-pcsclite --without-piper --without-sane --without-sdl --without-udev --without-usb
     --without-v4l2 --without-vosk "${vulkan_args[@]}"
