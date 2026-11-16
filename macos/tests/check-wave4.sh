@@ -62,8 +62,14 @@
 #      same on Vulkan when there is a profile. Without one it gets a device and then hangs or
 #      crashes before its first frame, and is a TODO, not a pass: one cause is known (FEX's
 #      guard pages need 4K pages, check-wave3b.sh item 9), and whether it is the only one
-#      cannot be told while that one is there. This item opens the editor's window three
-#      times for some seconds.
+#      cannot be told while that one is there. With the profile it is not the only one: the
+#      x86_64 editor still hangs after "EditorTheme: Generating new styles", with one thread
+#      rasterising shapes in ThorVG (Godot's icon and theme renderer) whose coordinates are
+#      absurd, around -790000 pixels (macos/tests/thread_rip_sampler.c, 2026-11-16). Not the
+#      cause: FEX's AFP, FRINTTS, RPRES, FlagM, CSSC, LRCPC or x87 precision switches, nor
+#      ucrtbase's maths under ARM64EC (crt_math_test.c). Left open: the next step is ThorVG as a
+#      test program for arm64 and x86_64, compared step by step, for a FEX report. This item
+#      opens the editor's window three times for some seconds.
 # The build and the test programs come first ("build").
 #
 # Items 1, 6, 8 and 10 need the screen unlocked. While it is locked the window server reports
