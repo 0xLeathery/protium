@@ -1,0 +1,243 @@
+#!/usr/bin/env python3
+"""Steam Play on the Mac: Windows games that Mac Steam installed, played from Steam's library.
+
+    macos/steamplay list              Windows games in Steam's libraries
+    macos/steamplay sync [--dry-run]  give each one a shortcut in Steam's library (Steam quit)
+    macos/steamplay play <app id>     start one now, through Steam Play.app
+
+Mac Steam downloads a Windows build when its download platform is forced, but will not launch
+it. "sync" adds a non-Steam shortcut per game to the signed-in user's shortcuts.vdf, named
+after the game and with its artwork from Steam's library cache, which opens
+"Steam Play.app" (macos/make-steamplay-app.sh) for the game's app id. The game itself then
+reports the real app id to Steam through Proton's lsteamclient, so Steam shows the game as
+playing and counts its playtime. Shortcuts made earlier by sync are replaced, others are kept,
+and shortcuts.vdf is backed up first. Steam must be quit while it is written, since Steam
+rewrites the file when it quits.
+
+Environment: STEAM_ROOT (default ~/Library/Application Support/Steam), STEAMPLAY_APP (default
+<build root>/steamplay-apps/Steam Play.app), STEAMPLAY_BACKUPS (default <build root>/steamplay/backups).
+"""
+import os
+import re
+import shutil
+import struct
+import subprocess
+import sys
+import time
+import zlib
+
+BUILD_ROOT = os.environ.get("BUILD_ROOT", "/Users/annon/projects/proton-macos-build")
+STEAM_ROOT = os.environ.get("STEAM_ROOT", os.path.expanduser("~/Library/Application Support/Steam"))
+STEAMPLAY_APP = os.environ.get("STEAMPLAY_APP", os.path.join(BUILD_ROOT, "steamplay-apps", "Steam Play.app"))
+BACKUPS = os.environ.get("STEAMPLAY_BACKUPS", os.path.join(BUILD_ROOT, "steamplay", "backups"))
+TAG = "Steam Play"          # marks the shortcuts that sync owns
+OPEN = "/usr/bin/open"
+
+
+def die(msg):
+    sys.exit("steamplay: error: " + msg)
+
+
+# ---------------------------------------------------------------- text VDF (manifests, libraries)
+
+def text_vdf_values(path, key):
+    """Every value of a "key" "value" line in a text VDF file."""
+    with open(path, encoding="utf-8", errors="replace") as f:
+        return re.findall(r'^\s*"' + re.escape(key) + r'"\s*"(.*)"\s*$', f.read(), re.M)
+
+
+def libraries():
+    paths = text_vdf_values(os.path.join(STEAM_ROOT, "steamapps", "libraryfolders.vdf"), "path")
+    return [p for p in paths if os.path.isdir(os.path.join(p, "steamapps"))]
+
+
+def windows_games():
+    """(app id, name, library, install folder) of every installed app whose folder holds a
+    Windows program and no Mac app."""
+    games = []
+    for lib in libraries():
+        apps = os.path.join(lib, "steamapps")
+        for entry in sorted(os.listdir(apps)):
+            m = re.fullmatch(r"appmanifest_(\d+)\.acf", entry)
+            if not m:
+                continue
+            manifest = os.path.join(apps, entry)
+            name = (text_vdf_values(manifest, "name") or [m.group(1)])[0]
+            installdir = (text_vdf_values(manifest, "installdir") or [""])[0]
+            folder = os.path.join(apps, "common", installdir)
+            if not installdir or not os.path.isdir(folder):
+                continue
+            files = os.listdir(folder)
+            if any(f.lower().endswith(".exe") for f in files) and not any(f.endswith(".app") for f in files):
+                games.append((int(m.group(1)), name, lib, folder))
+    return games
+
+
+# ---------------------------------------------------------------- binary VDF (shortcuts.vdf)
+
+def bvdf_read(data, pos=0):
+    """Read a map's entries from pos up to its end byte; return (dict, position after it)."""
+    out = {}
+    while True:
+        kind = data[pos]
+        pos += 1
+        if kind == 0x08:
+            return out, pos
+        end = data.index(b"\0", pos)
+        key = data[pos:end].decode("utf-8", "replace")
+        pos = end + 1
+        if kind == 0x00:
+            out[key], pos = bvdf_read(data, pos)
+        elif kind == 0x01:
+            end = data.index(b"\0", pos)
+            out[key] = data[pos:end].decode("utf-8", "replace")
+            pos = end + 1
+        elif kind == 0x02:
+            out[key] = struct.unpack_from("<i", data, pos)[0]
+            pos += 4
+        else:
+            raise ValueError("unknown binary VDF type %#x at %d" % (kind, pos - 1))
+
+
+def bvdf_write(obj):
+    out = bytearray()
+    for key, value in obj.items():
+        k = key.encode("utf-8") + b"\0"
+        if isinstance(value, dict):
+            out += b"\x00" + k + bvdf_write(value)
+        elif isinstance(value, int):
+            out += b"\x02" + k + struct.pack("<i", value)
+        else:
+            out += b"\x01" + k + str(value).encode("utf-8") + b"\0"
+    return bytes(out) + b"\x08"
+
+
+def read_shortcuts(path):
+    if not os.path.exists(path):
+        return []
+    with open(path, "rb") as f:
+        data = f.read()
+    if not data:
+        return []
+    root, _ = bvdf_read(data, 0)
+    return [root["shortcuts"][k] for k in sorted(root.get("shortcuts", {}), key=int)]
+
+
+def write_shortcuts(path, shortcuts):
+    root = {"shortcuts": {str(i): s for i, s in enumerate(shortcuts)}}
+    with open(path + ".new", "wb") as f:
+        f.write(bvdf_write(root) + b"\x08")
+    os.replace(path + ".new", path)
+
+
+def shortcut_id(exe, name):
+    """The id Steam gives a non-Steam shortcut: its artwork files are named after it."""
+    return zlib.crc32((exe + name).encode("utf-8")) | 0x80000000
+
+
+# ---------------------------------------------------------------- user and artwork
+
+def steam_user_config():
+    """The config folder of the user who signed in last: the one whose localconfig.vdf is newest."""
+    base = os.path.join(STEAM_ROOT, "userdata")
+    best = None
+    for uid in os.listdir(base):
+        cfg = os.path.join(base, uid, "config")
+        lc = os.path.join(cfg, "localconfig.vdf")
+        if uid.isdigit() and uid != "0" and os.path.exists(lc):
+            if not best or os.path.getmtime(lc) > os.path.getmtime(os.path.join(best, "localconfig.vdf")):
+                best = cfg
+    if not best:
+        die("no signed-in Steam user under " + base)
+    return best
+
+
+def artwork(appid):
+    """Steam's cached artwork of an app: {kind: path} for capsule, header, hero, logo, icon."""
+    cache = os.path.join(STEAM_ROOT, "appcache", "librarycache", str(appid))
+    found = {}
+    if not os.path.isdir(cache):
+        return found
+    for dirpath, _, files in os.walk(cache):
+        for f in files:
+            kind = {"library_capsule": "capsule", "library_600x900": "capsule", "library_header": "header",
+                    "header": "header", "library_hero": "hero", "logo": "logo"}.get(os.path.splitext(f)[0])
+            if kind and (kind not in found or "600x900" in f):
+                found[kind] = os.path.join(dirpath, f)
+            elif dirpath == cache and f.endswith(".jpg") and "icon" not in found:
+                found["icon"] = os.path.join(dirpath, f)
+    return found
+
+
+# ---------------------------------------------------------------- commands
+
+def cmd_list():
+    for appid, name, lib, folder in windows_games():
+        print("%-9d %s  (%s)" % (appid, name, folder))
+
+
+def steam_running():
+    return subprocess.run(["pgrep", "-f", "steam_osx"], stdout=subprocess.DEVNULL).returncode == 0
+
+
+def cmd_sync(dry_run):
+    if not os.path.isdir(STEAMPLAY_APP):
+        die("no %s: make it with macos/make-steamplay-app.sh" % STEAMPLAY_APP)
+    if not dry_run and steam_running():
+        die("quit Steam first: it rewrites its shortcuts when it quits")
+    cfg = steam_user_config()
+    path = os.path.join(cfg, "shortcuts.vdf")
+    kept = [s for s in read_shortcuts(path) if TAG not in s.get("tags", {}).values()]
+    exe = '"%s"' % OPEN
+    made = []
+    for appid, name, _, folder in windows_games():
+        sid = shortcut_id(exe, name)
+        art = artwork(appid)
+        made.append({
+            "appid": struct.unpack("<i", struct.pack("<I", sid))[0],
+            "AppName": name,
+            "Exe": exe,
+            "StartDir": '"%s"' % os.path.dirname(OPEN),
+            "icon": art.get("icon", ""),
+            "ShortcutPath": "",
+            "LaunchOptions": '-a "%s" --args %d' % (STEAMPLAY_APP, appid),
+            "IsHidden": 0, "AllowDesktopConfig": 1, "AllowOverlay": 1, "OpenVR": 0,
+            "Devkit": 0, "DevkitGameID": "", "DevkitOverrideAppID": 0, "LastPlayTime": 0,
+            "FlatpakAppID": "",
+            "tags": {"0": TAG},
+        })
+        print("%s %-9d %s%s" % ("would add" if dry_run else "add", appid, name,
+                                ("  (artwork: %s)" % ", ".join(sorted(art))) if art else "  (no artwork cached)"))
+        if dry_run:
+            continue
+        grid = os.path.join(cfg, "grid")
+        os.makedirs(grid, exist_ok=True)
+        for kind, suffix in (("capsule", "p"), ("header", ""), ("hero", "_hero"), ("logo", "_logo")):
+            if kind in art:
+                shutil.copyfile(art[kind], os.path.join(grid, "%d%s%s" % (sid, suffix, os.path.splitext(art[kind])[1])))
+    if dry_run:
+        return
+    os.makedirs(BACKUPS, exist_ok=True)
+    if os.path.exists(path):
+        shutil.copy2(path, os.path.join(BACKUPS, "shortcuts.vdf.%s" % time.strftime("%Y%m%d-%H%M%S")))
+    write_shortcuts(path, kept + made)
+    print("%d shortcut(s) written to %s, %d other shortcut(s) kept; start Steam to see them" % (len(made), path, len(kept)))
+
+
+def cmd_play(appid):
+    subprocess.run([OPEN, "-a", STEAMPLAY_APP, "--args", str(appid)], check=True)
+
+
+def main(argv):
+    if len(argv) >= 1 and argv[0] == "list":
+        cmd_list()
+    elif len(argv) >= 1 and argv[0] == "sync":
+        cmd_sync("--dry-run" in argv[1:])
+    elif len(argv) == 2 and argv[0] == "play" and argv[1].isdigit():
+        cmd_play(int(argv[1]))
+    else:
+        sys.exit(__doc__)
+
+
+if __name__ == "__main__":
+    main(sys.argv[1:])
