@@ -124,7 +124,7 @@ if want build; then
     blog=$EVIDENCE_DIR/build.log
     {
         "$PROTON_DIR/macos/build-gstreamer.sh" && \
-        EVIDENCE_DIR=$EVIDENCE_DIR/wave4-build CHECK_ITEMS="build" LOADER_PROFILE=$LOADER_PROFILE \
+        CHECK_ITEMS="build" LOADER_PROFILE=$LOADER_PROFILE \
             "$PROTON_DIR/macos/tests/check-wave4.sh" && \
         "$PROTON_DIR/macos/build-steam-bridge.sh" && \
         BUILD_DIR=$BUILD_DIR LOADER_PROFILE=$LOADER_PROFILE "$PROTON_DIR/macos/bundle-wine.sh"
@@ -306,10 +306,11 @@ if want 11; then
 fi
 
 if want 12 && needs_unlocked 12; then
-    R=$EVIDENCE_DIR/regression-wave4
-    rm -rf "$R"; mkdir -p "$R"
-    EVIDENCE_DIR=$R CHECK_ITEMS="1 2 3 4 5 6 7 8 9 10 11" LOADER_PROFILE=$LOADER_PROFILE \
-        "$PROTON_DIR/macos/tests/check-wave4.sh" >"$R/check-wave4.out" 2>&1
+    # in check-wave4.sh's own evidence folder: its test programs are compiled by its build step,
+    # which this check's build step runs there
+    R=$BUILD_ROOT/evidence/wave4
+    CHECK_ITEMS="1 2 3 4 5 6 7 8 9 10 11" LOADER_PROFILE=$LOADER_PROFILE \
+        "$PROTON_DIR/macos/tests/check-wave4.sh" >"$EVIDENCE_DIR/regression-wave4.out" 2>&1
     if [ -s "$R/check-summary.txt" ] && ! grep -q '^FAIL' "$R/check-summary.txt"; then
         pass 12 "check-wave4.sh: no FAIL ($R/check-summary.txt)"
     else
