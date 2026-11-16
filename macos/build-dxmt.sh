@@ -4,6 +4,8 @@
 #
 #   lib/wine/aarch64-windows/{dxgi,d3d10core,d3d11,winemetal}.dll   ARM64X
 #   lib/wine/aarch64-unix/winemetal.so                              arm64
+#   lib/wine/i386-windows/{dxgi,d3d10core,d3d11,winemetal}.dll      i386, when the Wine build
+#                                                                   has a 32-bit side
 #
 # under $DXMT_DIST. The DLLs are ARM64X: an x86_64 game runs as an ARM64EC process and loads
 # their ARM64EC half, so DXMT's own code runs natively and only the game's code goes through
@@ -11,6 +13,12 @@
 # build tree (its libwinecrt0.a, libntdll.a and winebuild, which marks them as Wine builtins),
 # and winemetal.so against that tree's winemac.so and ntdll.so, so they belong to that Wine
 # build. winemetal.so also links LLVM 15 (macos/build-llvm15.sh) for DXMT's shader converter.
+#
+# A 32-bit game runs under WoW64 and loads the i386 DLLs, which reach the same winemetal.so
+# through its __wine_unix_call_wow64_funcs. Without them its Direct3D 11 would go to Wine's
+# wined3d and its Vulkan renderer instead. They are built with llvm-mingw's i686 compilers; the
+# cross file for that is written into the build directory, since DXMT's build-win32.txt names
+# MinGW-w64 GCC.
 #
 # The source is the macos-patched branch of github.com/athei/dxmt at a fixed commit, built as
 # it is, the way github.com/athei/mach9 builds it. DXMT does not take AI-generated code (its
@@ -46,6 +54,7 @@ MIN_FREE_GB=${MIN_FREE_GB:-10}
 MESON_VERSION=1.11.2
 DLLS="dxgi d3d10core d3d11 winemetal"
 BLD=$BUILD_ROOT/dxmt-build/arm64x
+BLD32=$BUILD_ROOT/dxmt-build/i386
 
 log() { echo ":: $*" >&2; }
 die() { echo "build-dxmt.sh: error: $*" >&2; exit 1; }
@@ -115,6 +124,43 @@ ninja -C "$BLD" src/dxgi/dxgi.dll.postproc src/d3d10/d3d10core.dll.postproc src/
 ########################################################################
 # 4. Stage and check
 ########################################################################
+# The 32-bit DLLs, when the Wine build has an i386 side to link against
+build32=
+if [ -e "$BUILD_DIR/dlls/winecrt0/i386-windows/libwinecrt0.a" ]; then
+    build32=1
+    [ -x "$MINGW_BIN/i686-w64-mingw32-clang++" ] || die "llvm-mingw (i686) not found in $TOOLCHAIN_DIR"
+    if [ "$(cat "$BLD32/.build-dxmt-key" 2>/dev/null)" != "$key" ]; then
+        log "configuring $BLD32"
+        rm -rf "$BLD32"
+        mkdir -p "$BLD32"
+        cat >"$BLD32/cross-i686.txt" <<CROSS
+[binaries]
+c = '$MINGW_BIN/i686-w64-mingw32-clang'
+cpp = '$MINGW_BIN/i686-w64-mingw32-clang++'
+ar = '$MINGW_BIN/i686-w64-mingw32-ar'
+strip = '$MINGW_BIN/i686-w64-mingw32-strip'
+windres = '$MINGW_BIN/i686-w64-mingw32-windres'
+
+[properties]
+needs_exe_wrapper = true
+
+[host_machine]
+system = 'windows'
+cpu_family = 'x86'
+cpu = 'x86'
+endian = 'little'
+CROSS
+        meson setup "$BLD32/build" "$DXMT_SRC" --cross-file "$BLD32/cross-i686.txt" --buildtype release \
+            -Dnative_llvm_path="$LLVM15_DIST" -Dwine_build_path="$BUILD_DIR" -Denable_d3d12=false >"$BUILD_ROOT/dxmt-build-i386.setup.log" 2>&1 \
+            || die "meson setup (i386) failed, see $BUILD_ROOT/dxmt-build-i386.setup.log"
+        echo "$key" >"$BLD32/.build-dxmt-key"
+    fi
+    log "building the 32-bit DLLs"
+    ninja -C "$BLD32/build" src/dxgi/dxgi.dll.postproc src/d3d10/d3d10core.dll.postproc src/d3d11/d3d11.dll.postproc \
+        src/winemetal/winemetal.dll.postproc >"$BUILD_ROOT/dxmt-build-i386.ninja.log" 2>&1 \
+        || die "ninja (i386) failed, see $BUILD_ROOT/dxmt-build-i386.ninja.log"
+fi
+
 pe=$DXMT_DIST/lib/wine/aarch64-windows
 unix=$DXMT_DIST/lib/wine/aarch64-unix
 rm -rf "$DXMT_DIST"
@@ -129,8 +175,19 @@ for dll in $DLLS; do
     head -c 128 "$pe/$dll.dll" | grep -qa "Wine builtin DLL" || die "$dll.dll is not marked as a Wine builtin"
 done
 cp "$BLD/src/winemetal/unix/winemetal.so" "$unix/winemetal.so"
+if [ -n "$build32" ]; then
+    pe32=$DXMT_DIST/lib/wine/i386-windows
+    mkdir -p "$pe32"
+    for dll in $DLLS; do
+        dir=$dll; [ $dll = d3d10core ] && dir=d3d10
+        cp "$BLD32/build/src/$dir/$dll.dll" "$pe32/$dll.dll"
+        [ "$("$READOBJ" --file-headers "$pe32/$dll.dll" | sed -n 's/^Format: //p' | head -1)" = COFF-i386 ] \
+            || die "$dll.dll (32-bit) is not an i386 DLL"
+        head -c 128 "$pe32/$dll.dll" | grep -qa "Wine builtin DLL" || die "$dll.dll (32-bit) is not marked as a Wine builtin"
+    done
+fi
 [ "$(lipo -archs "$unix/winemetal.so")" = arm64 ] || die "winemetal.so is not an arm64-only Mach-O"
 echo "$describe" >"$DXMT_DIST/DESCRIBE"
 echo "$key" >"$DXMT_DIST/KEY"
 log "done: $DXMT_DIST ($describe)"
-ls -l "$pe" "$unix" >&2
+ls -l "$pe" "$unix" ${build32:+"$pe32"} >&2
