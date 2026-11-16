@@ -13,8 +13,8 @@
 #      on one secret between two ECDH P-256 keys (GnuTLS and libgcrypt)
 #   3  video: mf_video_test.exe, x86_64 and i386, decodes one second of H.264/AAC in MP4 and of
 #      VP9/Opus in WebM through Media Foundation (winedmo and winegstreamer on the bundle's
-#      GStreamer and FFmpeg): video frames, the first one's centre within 6 of #3366cc in each
-#      channel, and audio. The H.264 file gives fewer frames than its 30, see the TODO below.
+#      GStreamer and FFmpeg): all 30 video frames, the first one's centre within 6 of #3366cc in
+#      each channel, and audio
 #   4  cursor clip: cursor_clip_test.exe clips the cursor to a point and releases it 2000 times
 #      and finds it where it should be every time. It shows two windows and moves the pointer.
 #   5  fullscreen: fullscreen_test.exe switches a Direct3D 11 swap chain to fullscreen and back
@@ -42,8 +42,7 @@
 # Items 4, 5 and 9 show windows that take the focus; run them while nobody is using the Mac.
 # They and item 12 need the screen unlocked.
 #
-# NOT YET CHECKED: H.264 video loses its last frames (as many as FFmpeg has decoding threads)
-# when the stream ends; AV1 video (Proton's dav1d plugin is not built); OpenGL above 2.1 and
+# NOT YET CHECKED: AV1 video (Proton's dav1d plugin is not built); OpenGL above 2.1 and
 # Proton's fullscreen hack, whose shader needs GLSL 3.30; the stuck cursor seen once in IRON NEST.
 # Exit status: 1 when an item failed, 3 when none failed but some are TODO, 0 when all passed.
 # Logs go to $EVIDENCE_DIR.
@@ -68,9 +67,10 @@ WINE_DIR=$PROTON_DIR/wine
 WINE_WAVE_BASE=${WINE_WAVE_BASE:-23cb2615}
 SUPER_WAVE_BASE=${SUPER_WAVE_BASE:-43acb634}
 # Wine files this wave changes: ntdll's dlopen of a builtin's Unix library and its steamclient
-# trampolines, winemac.drv's update of DXMT's client surfaces, ntdll's GStreamer paths, and an
-# include in winegstreamer's media converter
-WAVE_FILES="dlls/ntdll/unix/virtual.c dlls/ntdll/unix/loader.c dlls/winemac.drv/window.c dlls/winegstreamer/media-converter/media-converter.h dlls/winebus.sys/bus_iohid.c"
+# trampolines, winemac.drv's update of DXMT's client surfaces, ntdll's GStreamer paths, an include
+# in winegstreamer's media converter, winebus's IOHID game controllers, and the source reader's
+# drain of a decoder, which is PE code and so is guarded by configure's WINE_MACOS_AARCH64
+WAVE_FILES="dlls/ntdll/unix/virtual.c dlls/ntdll/unix/loader.c dlls/winemac.drv/window.c dlls/winegstreamer/media-converter/media-converter.h dlls/winebus.sys/bus_iohid.c dlls/mfreadwrite/reader.c configure.ac"
 SUPER_FILES="lsteamclient/unixlib.cpp lsteamclient/unix_steam_input_manual.cpp"
 export MIN_FREE_GB=${MIN_FREE_GB:-4}
 export WINEDLLOVERRIDES=${WINEDLLOVERRIDES:-mscoree,mshtml=}
@@ -200,7 +200,7 @@ if want 3; then
             frames=$(echo "$line" | sed -n 's/^mf video: \([0-9]*\) frames.*/\1/p')
             audio=$(echo "$line" | sed -n 's/.*audio \([0-9]*\) bytes.*/\1/p')
             close=$(perl -e '$c = hex shift; $w = 0x3366cc; for $s (0, 8, 16) { exit 1 if abs((($c >> $s) & 255) - (($w >> $s) & 255)) > 6 } exit 0' "${c:-0}" && echo yes || echo no)
-            [ "${frames:-0}" -gt 0 ] && [ "${audio:-0}" -gt 0 ] && [ "$close" = yes ] || ok=no
+            [ "${frames:-0}" -eq 30 ] && [ "${audio:-0}" -gt 0 ] && [ "$close" = yes ] || ok=no
         done
     done
     [ $ok = yes ] && pass 3 "Media Foundation decodes H.264/AAC and VP9/Opus:$lines" || fail 3 "$lines ($EVIDENCE_DIR/item3-*)"
@@ -287,9 +287,16 @@ if want 11; then
         case " $WAVE_FILES " in *" $f "*) ;; *) bad="$bad wine:$f" ;; esac
     done
     for f in $WAVE_FILES; do
-        a=$(git -C "$WINE_DIR" show "$WINE_WAVE_BASE:$f" | unifdef -U__APPLE__ 2>/dev/null | shasum)
-        b=$(git -C "$WINE_DIR" show "HEAD:$f" | unifdef -U__APPLE__ 2>/dev/null | shasum)
-        [ "$a" = "$b" ] || bad="$bad unguarded:$f"
+        if [ "$f" = configure.ac ]; then
+            # configure.ac is no C: every line it gained must be about the macOS arm64 define
+            other=$(git -C "$WINE_DIR" diff -U0 "$WINE_WAVE_BASE" HEAD -- "$f" | grep '^+[^+]' \
+                | grep -v -E 'wine_macos_aarch64_cflags|WINE_MACOS_AARCH64|darwin\*-aarch64|^\+case "\$host_os-\$HOST_ARCH" in$|^\+(dnl|\s*esac|\s*then|\s*fi)\b|^\+\s*$')
+            [ -z "$other" ] || bad="$bad unguarded:$f"
+        else
+            a=$(git -C "$WINE_DIR" show "$WINE_WAVE_BASE:$f" | unifdef -U__APPLE__ -UWINE_MACOS_AARCH64 2>/dev/null | shasum)
+            b=$(git -C "$WINE_DIR" show "HEAD:$f" | unifdef -U__APPLE__ -UWINE_MACOS_AARCH64 2>/dev/null | shasum)
+            [ "$a" = "$b" ] || bad="$bad unguarded:$f"
+        fi
         n=$((n + $(git -C "$WINE_DIR" diff "$WINE_WAVE_BASE" HEAD -- "$f" | grep -c '^+[^+]')))
     done
     for f in $(git -C "$PROTON_DIR" diff --name-only "$SUPER_WAVE_BASE" HEAD | grep -v '^macos/'); do
@@ -301,7 +308,7 @@ if want 11; then
         esac
     done
     [ -n "$(git -C "$PROTON_DIR" diff --raw "$SUPER_WAVE_BASE" HEAD -- wine)" ] && bad="$bad wine(pointer)"
-    [ -z "$bad" ] && pass 11 "$n lines added in $WAVE_FILES since $WINE_WAVE_BASE and the two lsteamclient files, all gone with __APPLE__ undefined" \
+    [ -z "$bad" ] && pass 11 "$n lines added in $WAVE_FILES since $WINE_WAVE_BASE and the two lsteamclient files, all gone with __APPLE__ and WINE_MACOS_AARCH64 undefined (configure.ac: only the define)" \
         || fail 11 "$bad"
 fi
 
@@ -318,7 +325,7 @@ if want 12 && needs_unlocked 12; then
     fi
 fi
 
-todo "H.264 video loses its last frames at the end of a stream, AV1 video, OpenGL above 2.1 and Proton's fullscreen hack, and the cursor once stuck in IRON NEST have no items yet; Wave 5 is not done"
+todo "AV1 video, OpenGL above 2.1 and Proton's fullscreen hack, and the cursor once stuck in IRON NEST have no items yet; Wave 5 is not done"
 
 echo
 echo "== summary"
