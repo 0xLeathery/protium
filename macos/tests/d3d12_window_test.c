@@ -2,7 +2,7 @@
  * Presents Direct3D 12 frames in a window: a flip-model swap chain on a window of its own,
  * each back buffer cleared to a colour and presented, a number of times.
  *
- *   d3d12_window_test.exe [frames, default 60]
+ *   d3d12_window_test.exe [frames, default 60] [resizable]
  *
  * Prints one line, e.g.
  *   d3d12 window: vkd3d 1, swap chain 0, 640x360, presented 60/60, back buffer 33cc66
@@ -10,7 +10,9 @@
  * buffer read back as the colour it was cleared to. That shows the path up to the hand-over of a
  * frame; whether the frame is on the screen is for someone looking at it, or for a check
  * outside Wine. The colour is not the one of d3d11_window_test.exe, so that the two windows can
- * be told apart.
+ * be told apart. With "resizable" the window is an ordinary one, which can be resized from outside
+ * while the frames are presented; the swap chain keeps its size, so the picture should be
+ * stretched to the window.
  *
  * Built for x86_64 with the mingw compiler: -ld3d12 -ldxgi -ldxguid -luuid -luser32.
  */
@@ -99,7 +101,8 @@ int main( int argc, char **argv )
     cls.hCursor = LoadCursorA( 0, (const char *)IDC_ARROW );
     cls.lpszClassName = "d3d12_window_test";
     RegisterClassA( &cls );
-    hwnd = CreateWindowExA( 0, "d3d12_window_test", "d3d12_window_test", WS_POPUP | WS_VISIBLE,
+    hwnd = CreateWindowExA( 0, "d3d12_window_test", "d3d12_window_test",
+                            (argc > 2 && !strcmp( argv[2], "resizable" ) ? WS_OVERLAPPEDWINDOW : WS_POPUP) | WS_VISIBLE,
                             200, 200, WIDTH, HEIGHT, 0, 0, cls.hInstance, NULL );
     if (!hwnd)
     {
