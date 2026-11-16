@@ -48,6 +48,9 @@
 #   VKD3D_DIST      output of build-vkd3d-proton.sh (default $BUILD_ROOT/vkd3d-proton-dist); when
 #                   it is there, its d3d12 and d3d12core take the place of Wine's own. Direct3D
 #                   12 then needs the Vulkan driver of MESA_DIST.
+#   BRIDGE_DIST     output of build-steam-bridge.sh (default $BUILD_ROOT/steam-bridge-dist); when
+#                   it is there, Proton's lsteamclient and steam.exe are installed, so a game
+#                   reaches Mac Steam's steamclient.dylib
 #   HOST_DYLIBS     Homebrew libraries that Wine opens by name at run time (default
 #                   libfreetype.6.dylib, without which Wine has no TrueType fonts). They are
 #                   copied with the Homebrew libraries they need into lib/external.
@@ -68,6 +71,7 @@ BUNDLE_ID=${BUNDLE_ID:-}
 FEX_DIST=${FEX_DIST:-$BUILD_ROOT/fex-dist}
 DXMT_DIST=${DXMT_DIST:-$BUILD_ROOT/dxmt-dist}
 VKD3D_DIST=${VKD3D_DIST:-$BUILD_ROOT/vkd3d-proton-dist}
+BRIDGE_DIST=${BRIDGE_DIST:-$BUILD_ROOT/steam-bridge-dist}
 HOST_DYLIBS=${HOST_DYLIBS:-libfreetype.6.dylib}
 WOW64=${WOW64:-auto}
 VULKAN_DIST=${VULKAN_DIST:-$BUILD_ROOT/vulkan-dist}
@@ -246,6 +250,20 @@ if [ -f "$VKD3D_DIST/lib/wine/aarch64-windows/d3d12.dll" ] && [ -f "$VKD3D_DIST/
     log "installed vkd3d-proton $(cat "$VKD3D_DIST/DESCRIBE" 2>/dev/null) from $VKD3D_DIST in place of Wine's d3d12 and d3d12core"
 else
     log "no vkd3d-proton in $VKD3D_DIST (macos/build-vkd3d-proton.sh builds it): Direct3D 12 stays Wine's own"
+fi
+
+# Proton's Steam bridge: lsteamclient, which ntdll puts behind Valve's Windows steamclient DLLs
+# and which passes their calls to Mac Steam's steamclient.dylib, and Proton's steam.exe. The
+# i386 files go in only with the 32-bit side.
+if [ -f "$BRIDGE_DIST/lib/wine/aarch64-windows/lsteamclient.dll" ] && [ -f "$BRIDGE_DIST/lib/wine/$UNIX_DIR/lsteamclient.so" ]; then
+    for f in lsteamclient.dll steam.exe; do cp "$BRIDGE_DIST/lib/wine/aarch64-windows/$f" "$pedir/$f"; done
+    cp "$BRIDGE_DIST/lib/wine/$UNIX_DIR/lsteamclient.so" "$unixdir/lsteamclient.so"
+    if [ $wow64 = yes ] && [ -d "$i386dir" ]; then
+        for f in lsteamclient.dll steam.exe; do cp "$BRIDGE_DIST/lib/wine/i386-windows/$f" "$i386dir/$f"; done
+    fi
+    log "installed Proton's lsteamclient and steam.exe from $BRIDGE_DIST"
+else
+    log "no Steam bridge in $BRIDGE_DIST (macos/build-steam-bridge.sh builds it): games cannot reach Steam"
 fi
 
 ########################################################################
