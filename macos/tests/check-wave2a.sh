@@ -37,6 +37,9 @@ WINEBOOT_TIMEOUT=${WINEBOOT_TIMEOUT:-120}
 # Wave 3b: the loader in an app bundle and the ARM64 ID registers, see check-wave3b.sh item 6;
 # Wave 4: winemac.drv's table for DXMT, see check-wave4.sh item 7).
 WAVE_FILES="configure.ac include/ddk/wdm.h dlls/ntdll/unix/virtual.c dlls/ntdll/thread.c dlls/kernelbase/sync.c dlls/kernel32/process.c dlls/kernel32/sync.c dlls/win32u/message.c include/winnt.h dlls/ntdll/signal_arm64.c dlls/ntdll/unix/signal_arm64.c include/minwindef.h dlls/ntdll/unix/unix_private.h dlls/ntdll/unix/file.c dlls/ntdll/unix/loader.c dlls/ntdll/unix/server.c loader/main.c dlls/ntdll/unix/system.c dlls/winemac.drv/macdrv.h dlls/winemac.drv/window.c dlls/uiautomationcore/uia_client.c dlls/winegstreamer/media-converter/media-converter.h dlls/winebus.sys/bus_iohid.c"
+# Wine files that later waves change, which check-wave5.sh checks the guards of (PE code, guarded
+# by configure's WINE_MACOS_AARCH64, and configure.ac itself)
+LATER_WAVE_FILES="dlls/mfreadwrite/reader.c configure.ac"
 WAVE1_FILES="configure.ac dlls/ntdll/unix/fsync.c dlls/ntdll/unix/loader.c dlls/ntdll/unix/sync.c dlls/win32u/opengl.c server/fsync.c server/inproc_sync.c dlls/ntdll/unix/system.c"
 # Definition sites of the shared user data address compiled for aarch64: object -> source
 DEF_SITES="dlls/ntdll/aarch64-windows/thread.o:dlls/ntdll/thread.c
@@ -605,7 +608,7 @@ dlog=$EVIDENCE_DIR/item6-diff.log
 } >"$dlog" 2>&1
 wbad=""
 for f in $(git -C "$WINE_DIR" diff --name-only "$WINE_WAVE_BASE"); do
-    case " $WAVE_FILES " in *" $f "*) ;; *) wbad="$wbad $f" ;; esac
+    case " $WAVE_FILES $LATER_WAVE_FILES " in *" $f "*) ;; *) wbad="$wbad $f" ;; esac
 done
 wuntracked=$(git -C "$WINE_DIR" status --porcelain --untracked-files=all | grep -v '^ M\|^M ' | head -5)
 sbad=$(git -C "$PROTON_DIR" diff --name-only "$SUPER_WAVE_BASE" HEAD | grep -v '^macos/' | grep -v -x -F -e lsteamclient/unixlib.cpp -e lsteamclient/unix_steam_input_manual.cpp)

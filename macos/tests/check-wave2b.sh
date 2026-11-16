@@ -50,6 +50,9 @@ PROBE_RUNS=${PROBE_RUNS:-10}
 # check-wave3a.sh item 9) and Wave 3b (the loader in an app bundle and the ARM64 ID registers, see check-wave3b.sh item 6)
 # and Wave 4 (winemac.drv's table for DXMT, see check-wave4.sh item 7).
 WAVE_FILES="configure.ac include/winnt.h dlls/ntdll/signal_arm64.c dlls/ntdll/unix/signal_arm64.c include/minwindef.h dlls/ntdll/unix/unix_private.h dlls/ntdll/unix/file.c dlls/ntdll/unix/loader.c dlls/ntdll/unix/virtual.c dlls/ntdll/unix/server.c loader/main.c dlls/ntdll/unix/system.c dlls/winemac.drv/macdrv.h dlls/winemac.drv/window.c dlls/uiautomationcore/uia_client.c dlls/winegstreamer/media-converter/media-converter.h dlls/winebus.sys/bus_iohid.c"
+# Wine files that later waves change, which check-wave5.sh checks the guards of (PE code, guarded
+# by configure's WINE_MACOS_AARCH64, and configure.ac itself)
+LATER_WAVE_FILES="dlls/mfreadwrite/reader.c configure.ac"
 # PE sources whose objects item 7 compares without the define: the PE file this wave changes, and
 # users of NtCurrentTeb() (include/winnt.h) in several modules. object:source
 PE_COMPARE="dlls/ntdll/aarch64-windows/signal_arm64.o:dlls/ntdll/signal_arm64.c
@@ -673,7 +676,7 @@ done
 } >"$dlog" 2>&1
 wbad=""
 for f in $(git -C "$WINE_DIR" diff --name-only "$WINE_WAVE_BASE" HEAD); do
-    case " $WAVE_FILES " in *" $f "*) ;; *) wbad="$wbad $f" ;; esac
+    case " $WAVE_FILES $LATER_WAVE_FILES " in *" $f "*) ;; *) wbad="$wbad $f" ;; esac
 done
 [ -z "$(git -C "$WINE_DIR" diff --name-only "$WINE_WAVE_BASE" HEAD)" ] && { ok=no; wbad="$wbad (no wine changes)"; }
 sbad=$(git -C "$PROTON_DIR" diff --name-only "$SUPER_WAVE_BASE" HEAD | grep -v '^macos/' | grep -v -x -F -e lsteamclient/unixlib.cpp -e lsteamclient/unix_steam_input_manual.cpp)

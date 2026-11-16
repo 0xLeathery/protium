@@ -108,6 +108,9 @@ SUPER_WAVE_BASE=${SUPER_WAVE_BASE:-acfe76e00fbbbf49b10ef781d58e2bfdabb76ec5}
 # process, and uiautomationcore's use of results that a provider did not set. virtual.c is
 # Wave 3b's: its work for the provisioning profile was done after this wave had begun.
 WAVE_FILES="dlls/winemac.drv/macdrv.h dlls/winemac.drv/window.c dlls/ntdll/unix/loader.c dlls/uiautomationcore/uia_client.c dlls/winegstreamer/media-converter/media-converter.h dlls/winebus.sys/bus_iohid.c dlls/ntdll/unix/virtual.c"
+# Wine files that later waves change, which check-wave5.sh checks the guards of (PE code, guarded
+# by configure's WINE_MACOS_AARCH64, and configure.ac itself)
+LATER_WAVE_FILES="dlls/mfreadwrite/reader.c configure.ac"
 UNIX_DIR=aarch64-unix
 export MIN_FREE_GB=${MIN_FREE_GB:-10}
 # A new prefix would otherwise wait on the Mono and Gecko install dialogs.
@@ -563,7 +566,7 @@ done
 } >"$dlog" 2>&1
 wbad=""
 for f in $(git -C "$WINE_DIR" diff --name-only "$WINE_WAVE_BASE" HEAD); do
-    case " $WAVE_FILES " in *" $f "*) ;; *) wbad="$wbad $f" ;; esac
+    case " $WAVE_FILES $LATER_WAVE_FILES " in *" $f "*) ;; *) wbad="$wbad $f" ;; esac
 done
 wdirty=$(git -C "$WINE_DIR" status --porcelain --untracked-files=all | head -5)
 sbad=$(git -C "$PROTON_DIR" diff --name-only "$SUPER_WAVE_BASE" HEAD | grep -v '^macos/' | grep -v -x -F -e lsteamclient/unixlib.cpp -e lsteamclient/unix_steam_input_manual.cpp)

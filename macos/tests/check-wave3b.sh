@@ -106,6 +106,9 @@ CROSS_ARCH_ENTITLEMENT=com.apple.developer.cross-architecture-support
 # takes the CPU features of x86 code from, and the end of the host address space; plus those of
 # Wave 4 (winemac.drv's table for DXMT, see check-wave4.sh item 7).
 WAVE_FILES="loader/main.c dlls/ntdll/unix/loader.c dlls/ntdll/unix/system.c dlls/ntdll/unix/virtual.c dlls/winemac.drv/macdrv.h dlls/winemac.drv/window.c dlls/uiautomationcore/uia_client.c dlls/winegstreamer/media-converter/media-converter.h dlls/winebus.sys/bus_iohid.c"
+# Wine files that later waves change, which check-wave5.sh checks the guards of (PE code, guarded
+# by configure's WINE_MACOS_AARCH64, and configure.ac itself)
+LATER_WAVE_FILES="dlls/mfreadwrite/reader.c configure.ac"
 # The build scripts stop below 20 GB free by default; 10 GB is the limit agreed for this work.
 export MIN_FREE_GB=${MIN_FREE_GB:-10}
 # A new prefix would otherwise wait on the Mono and Gecko install dialogs.
@@ -602,7 +605,7 @@ done
 } >"$dlog" 2>&1
 wbad=""
 for f in $(git -C "$WINE_DIR" diff --name-only "$WINE_WAVE_BASE" HEAD); do
-    case " $WAVE_FILES " in *" $f "*) ;; *) wbad="$wbad $f" ;; esac
+    case " $WAVE_FILES $LATER_WAVE_FILES " in *" $f "*) ;; *) wbad="$wbad $f" ;; esac
 done
 wdirty=$(git -C "$WINE_DIR" status --porcelain --untracked-files=all | head -5)
 sbad=$(git -C "$PROTON_DIR" diff --name-only "$SUPER_WAVE_BASE" HEAD | grep -v '^macos/' | grep -v -x -F -e lsteamclient/unixlib.cpp -e lsteamclient/unix_steam_input_manual.cpp)
