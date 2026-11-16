@@ -192,6 +192,54 @@ uint32_t manual_convert_nNativeKeyCode( uint32_t win_vk )
         return vk_to_xkeysym[win_vk];
     return 0;
 }
+#elif defined(__APPLE__) && defined(__aarch64__)
+#include <winuser.h>
+
+/* Steam's HTML surface on macOS takes Mac virtual key codes (kVK_* from HIToolbox/Events.h).
+ * kVK_ANSI_A is 0, so a key without a Mac equivalent gets 0xffff instead. */
+uint32_t manual_convert_nNativeKeyCode( uint32_t win_vk )
+{
+    switch (win_vk)
+    {
+    case 'A': return 0x00; case 'S': return 0x01; case 'D': return 0x02; case 'F': return 0x03;
+    case 'H': return 0x04; case 'G': return 0x05; case 'Z': return 0x06; case 'X': return 0x07;
+    case 'C': return 0x08; case 'V': return 0x09; case 'B': return 0x0b; case 'Q': return 0x0c;
+    case 'W': return 0x0d; case 'E': return 0x0e; case 'R': return 0x0f; case 'Y': return 0x10;
+    case 'T': return 0x11; case '1': return 0x12; case '2': return 0x13; case '3': return 0x14;
+    case '4': return 0x15; case '6': return 0x16; case '5': return 0x17; case '9': return 0x19;
+    case '7': return 0x1a; case '8': return 0x1c; case '0': return 0x1d; case 'O': return 0x1f;
+    case 'U': return 0x20; case 'I': return 0x22; case 'P': return 0x23; case 'L': return 0x25;
+    case 'J': return 0x26; case 'K': return 0x28; case 'N': return 0x2d; case 'M': return 0x2e;
+    case VK_OEM_PLUS: return 0x18;   case VK_OEM_MINUS: return 0x1b;  case VK_OEM_6: return 0x1e;
+    case VK_OEM_4: return 0x21;      case VK_OEM_7: return 0x27;      case VK_OEM_1: return 0x29;
+    case VK_OEM_5: return 0x2a;      case VK_OEM_COMMA: return 0x2b;  case VK_OEM_2: return 0x2c;
+    case VK_OEM_PERIOD: return 0x2f; case VK_OEM_3: return 0x32;      case VK_OEM_102: return 0x0a;
+    case VK_RETURN: return 0x24;     case VK_TAB: return 0x30;        case VK_SPACE: return 0x31;
+    case VK_BACK: return 0x33;       case VK_ESCAPE: return 0x35;     case VK_LWIN: return 0x37;
+    case VK_RWIN: return 0x36;       case VK_SHIFT: case VK_LSHIFT: return 0x38;
+    case VK_RSHIFT: return 0x3c;     case VK_CAPITAL: return 0x39;    case VK_MENU: case VK_LMENU: return 0x3a;
+    case VK_RMENU: return 0x3d;      case VK_CONTROL: case VK_LCONTROL: return 0x3b;
+    case VK_RCONTROL: return 0x3e;   case VK_DECIMAL: return 0x41;    case VK_MULTIPLY: return 0x43;
+    case VK_ADD: return 0x45;        case VK_CLEAR: case VK_NUMLOCK: return 0x47;
+    case VK_DIVIDE: return 0x4b;     case VK_SUBTRACT: return 0x4e;   case VK_OEM_NEC_EQUAL: return 0x51;
+    case VK_NUMPAD0: return 0x52;    case VK_NUMPAD1: return 0x53;    case VK_NUMPAD2: return 0x54;
+    case VK_NUMPAD3: return 0x55;    case VK_NUMPAD4: return 0x56;    case VK_NUMPAD5: return 0x57;
+    case VK_NUMPAD6: return 0x58;    case VK_NUMPAD7: return 0x59;    case VK_NUMPAD8: return 0x5b;
+    case VK_NUMPAD9: return 0x5c;    case VK_F1: return 0x7a;         case VK_F2: return 0x78;
+    case VK_F3: return 0x63;         case VK_F4: return 0x76;         case VK_F5: return 0x60;
+    case VK_F6: return 0x61;         case VK_F7: return 0x62;         case VK_F8: return 0x64;
+    case VK_F9: return 0x65;         case VK_F10: return 0x6d;        case VK_F11: return 0x67;
+    case VK_F12: return 0x6f;        case VK_F13: return 0x69;        case VK_F14: return 0x6b;
+    case VK_F15: return 0x71;        case VK_F16: return 0x6a;        case VK_F17: return 0x40;
+    case VK_F18: return 0x4f;        case VK_F19: return 0x50;        case VK_F20: return 0x5a;
+    case VK_HELP: case VK_INSERT: return 0x72;
+    case VK_HOME: return 0x73;       case VK_PRIOR: return 0x74;      case VK_DELETE: return 0x75;
+    case VK_END: return 0x77;        case VK_NEXT: return 0x79;       case VK_LEFT: return 0x7b;
+    case VK_RIGHT: return 0x7c;      case VK_DOWN: return 0x7d;       case VK_UP: return 0x7e;
+    case VK_VOLUME_UP: return 0x48;  case VK_VOLUME_DOWN: return 0x49; case VK_VOLUME_MUTE: return 0x4a;
+    }
+    return 0xffff;
+}
 #else
 #error You must implement VK<->Native keysym conversion for this platform.
 #endif
