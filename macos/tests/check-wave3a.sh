@@ -586,7 +586,7 @@ wbad=""
 for f in $(git -C "$WINE_DIR" diff --name-only "$WINE_WAVE_BASE" HEAD); do
     case " $WAVE_FILES " in *" $f "*) ;; *) wbad="$wbad $f" ;; esac
 done
-sbad=$(git -C "$PROTON_DIR" diff --name-only "$SUPER_WAVE_BASE" HEAD | grep -v '^macos/')
+sbad=$(git -C "$PROTON_DIR" diff --name-only "$SUPER_WAVE_BASE" HEAD | grep -v '^macos/' | grep -v -x -F -e lsteamclient/unixlib.cpp -e lsteamclient/unix_steam_input_manual.cpp)
 [ -n "$(git -C "$PROTON_DIR" diff --raw "$SUPER_WAVE_BASE" HEAD -- wine)" ] && sbad="$sbad wine(pointer)"
 [ -n "$wbad" ] && ok=no
 [ -n "$sbad" ] && ok=no

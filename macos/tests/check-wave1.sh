@@ -246,7 +246,9 @@ dlog=$EVIDENCE_DIR/diffstat.log
     git -C "$PROTON_DIR/wine" status --porcelain
 } >"$dlog" 2>&1
 # Committed changes only; gitlink changes (wine or any other submodule) are listed by path and fail too.
-bad=$(git -C "$PROTON_DIR" diff --name-only "$BASE_BRANCH...$SUPER_HEAD" | grep -v '^macos/')
+# Two lsteamclient files take Mac Steam's client library (Wave 5); their changes are under
+# defined(__APPLE__) && defined(__aarch64__), which check-wave5.sh verifies.
+bad=$(git -C "$PROTON_DIR" diff --name-only "$BASE_BRANCH...$SUPER_HEAD" | grep -v '^macos/' | grep -v -x -F -e lsteamclient/unixlib.cpp -e lsteamclient/unix_steam_input_manual.cpp)
 wbad=""
 for f in $(git -C "$PROTON_DIR/wine" diff --name-only "$WINE_BASE"); do
     case " $WINE_ALLOWED_FILES " in *" $f "*) ;; *) wbad="$wbad $f" ;; esac

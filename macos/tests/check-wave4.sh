@@ -564,7 +564,7 @@ for f in $(git -C "$WINE_DIR" diff --name-only "$WINE_WAVE_BASE" HEAD); do
     case " $WAVE_FILES " in *" $f "*) ;; *) wbad="$wbad $f" ;; esac
 done
 wdirty=$(git -C "$WINE_DIR" status --porcelain --untracked-files=all | head -5)
-sbad=$(git -C "$PROTON_DIR" diff --name-only "$SUPER_WAVE_BASE" HEAD | grep -v '^macos/')
+sbad=$(git -C "$PROTON_DIR" diff --name-only "$SUPER_WAVE_BASE" HEAD | grep -v '^macos/' | grep -v -x -F -e lsteamclient/unixlib.cpp -e lsteamclient/unix_steam_input_manual.cpp)
 [ -n "$(git -C "$PROTON_DIR" diff --raw "$SUPER_WAVE_BASE" HEAD -- wine)" ] && sbad="$sbad wine(pointer)"
 [ -z "$wbad" ] && [ -z "$wdirty" ] && [ -z "$sbad" ] || ok=no
 if [ $ok = yes ]; then

@@ -608,7 +608,7 @@ for f in $(git -C "$WINE_DIR" diff --name-only "$WINE_WAVE_BASE"); do
     case " $WAVE_FILES " in *" $f "*) ;; *) wbad="$wbad $f" ;; esac
 done
 wuntracked=$(git -C "$WINE_DIR" status --porcelain --untracked-files=all | grep -v '^ M\|^M ' | head -5)
-sbad=$(git -C "$PROTON_DIR" diff --name-only "$SUPER_WAVE_BASE" HEAD | grep -v '^macos/')
+sbad=$(git -C "$PROTON_DIR" diff --name-only "$SUPER_WAVE_BASE" HEAD | grep -v '^macos/' | grep -v -x -F -e lsteamclient/unixlib.cpp -e lsteamclient/unix_steam_input_manual.cpp)
 if [ -z "$wbad" ] && [ -z "$wuntracked" ] && [ -z "$sbad" ]; then
     pass 6 "wine changes only in: $(git -C "$WINE_DIR" diff --name-only "$WINE_WAVE_BASE" | tr '\n' ' ')superproject commits only under macos/ ($dlog)"
 else
