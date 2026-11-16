@@ -49,7 +49,15 @@ dlls/win32u/message.o:dlls/win32u/message.c"
 ALLOWED_LITERALS="include/ddk/wdm.h|define WINE_USER_SHARED_DATA_ADDR 0x7ffe0000|the Windows default the macro falls back to
 dlls/ntdll/unix/virtual.c|char \*user_space_limit = \(char \*\)0x7ffe0000;|inside #ifndef _WIN64 in mmap_init (32-bit hosts only)
 dlls/ntdll/unix/virtual.c|free_reserved_memory\( 0, \(char \*\)0x7ffe0000 \);|inside #ifndef __APPLE__ in virtual_set_large_address_space
-dlls/ntoskrnl.exe/instr.c|wine_user_shared_data = \(BYTE \*\)0x7ffe0000;|inside #elif defined(__x86_64__) (x86_64 instruction emulation)"
+dlls/ntoskrnl.exe/instr.c|wine_user_shared_data = \(BYTE \*\)0x7ffe0000;|inside #elif defined(__x86_64__) (x86_64 instruction emulation)
+dlls/ntdll/unix/virtual.c|mmap_is_in_reserved_area\( \(void \*\)0x7ffe0000, page_size \)|the second mapping of the page, at its Windows address, made only where the loader could reserve the low 4 GB
+dlls/ntdll/unix/virtual.c|void \*low = \(void \*\)0x7ffe0000;|the same second mapping
+dlls/ntdll/unix/virtual.c|A second mapping of the page at its Windows address, 0x7ffe0000,|the comment on that second mapping"
+# The second mapping is the one place where aarch64 macOS code names the Windows address: with
+# the cross-architecture entitlement the low 4 GB can be mapped, and programs and Wine's 32-bit
+# code read the page there. The definitions that Wine's own 64-bit code is built with stay
+# relocated, which is what this item is about. So virtual.o may hold these two uses and no more.
+ALLOWED_PREPROCESSED_VIRTUAL=2
 
 mkdir -p "$EVIDENCE_DIR"
 RESULTS=()
@@ -142,8 +150,9 @@ for site in $DEF_SITES "dlls/ntoskrnl.exe/aarch64-windows/instr.o:dlls/ntoskrnl.
     (cd "$BUILD_DIR" && eval "${cmd/-c -o $obj /-E -o $out }") >>"$plog" 2>&1 || { ok=no; echo "$obj: preprocessing failed" >>"$plog"; continue; }
     def=$(grep -E 'user_shared_data *= *\(' "$out" | head -1 | sed 's/^ *//')
     n=$(grep -cw '0x7ffe0000' "$out")
-    echo "aarch64-darwin $obj: ${def:-<no definition>} | 0x7ffe0000 occurrences: $n" >>"$plog"
-    [ "$n" = 0 ] || ok=no
+    nallowed=0; [ "$obj" = dlls/ntdll/unix/virtual.o ] && nallowed=$ALLOWED_PREPROCESSED_VIRTUAL
+    echo "aarch64-darwin $obj: ${def:-<no definition>} | 0x7ffe0000 occurrences: $n (allowed: $nallowed)" >>"$plog"
+    [ "$n" = "$nallowed" ] || ok=no
     case $src in
         dlls/ntoskrnl.exe/*) ;;
         *) echo "$def" | grep -qi "${USD:-none}" || ok=no ;;
@@ -230,7 +239,7 @@ for site in "dlls/ntdll/unix/virtual.o:dlls/ntdll/unix/virtual.c" "dlls/win32u/m
     fi
 done
 if [ $ok = yes ]; then
-    pass 1 "aarch64 sites use WINE_USER_SHARED_DATA_ADDR=$USD, no 0x7ffe0000 in their preprocessed output; without the define every target resolves to 0x7ffe0000 and PE code is unchanged ($slog, $plog, $clog)"
+    pass 1 "aarch64 sites use WINE_USER_SHARED_DATA_ADDR=$USD, no 0x7ffe0000 in their preprocessed output but the second mapping in virtual.o; without the define every target resolves to 0x7ffe0000 and PE code is unchanged ($slog, $plog, $clog)"
 else
     fail 1 "see $slog, $plog, $clog"
 fi
