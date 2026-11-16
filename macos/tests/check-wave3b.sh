@@ -59,15 +59,16 @@
 #      tree, which has the 32-bit side, and wants ntdll to refuse it by saying what is missing
 #      and not to end on the assertion in build_wow64_parameters(), which left a crash report
 #      for every 32-bit program that anything tried to start.
+#  11  memory below 4 GB: shared_data_test.exe, for 32-bit x86 and for x86_64, finds
+#      KUSER_SHARED_DATA at its Windows address, 0x7ffe0000, as a read-only page of its own
+#      with a tick count in it, when there is a profile. Without one nothing can be mapped
+#      there and the item is a TODO.
 # The build (macos/build-wine.sh, macos/build-fex.sh, macos/bundle-wine.sh) and the test programs
 # come first ("build").
 #
-# NOT YET CHECKED, so this check passing does not make Wave 3b done: 4K pages, memory below 4 GB
-# (shared user data back at 0x7ffe0000) and hardware TSO. They need the profile. The loader's
-# code for the first two is in Wine (it execs itself with 4K pages and reserves the low 4GB when
-# it can map there) but has never run: without the profile it goes on as before, which is what
-# items 2 to 4 see. The summary lists all three as TODO and the exit status is 3 while they are
-# open and nothing failed (1 when an item failed, 0 only when all of it passed).
+# What the profile gates: 4K pages (item 9 needs them), memory below 4 GB (items 10 and 11) and
+# hardware TSO, which has no item yet. Without LOADER_PROFILE those items are TODO lines and the
+# exit status is 3 when nothing failed (1 when an item failed, 0 only when all of it passed).
 # Logs go to $EVIDENCE_DIR.
 
 set -u
@@ -115,7 +116,7 @@ RESULTS=()
 FAILED=0
 TODO=0
 # CHECK_ITEMS limits the run to some items ("build" rebuilds Wine, the bundle and the test programs).
-CHECK_ITEMS=${CHECK_ITEMS:-"build 1 2 3 4 5 6 7 8 9 10"}
+CHECK_ITEMS=${CHECK_ITEMS:-"build 1 2 3 4 5 6 7 8 9 10 11"}
 want() { case " $CHECK_ITEMS " in *" $1 "*) return 0 ;; esac; return 1; }
 pass() { RESULTS+=("PASS  item $1: $2"); echo "PASS  item $1: $2"; }
 fail() { RESULTS+=("FAIL  item $1: $2"); echo "FAIL  item $1: $2"; FAILED=1; }
@@ -297,6 +298,17 @@ rm -f "$TESTS_OUT/hello_x86.exe"
     "$READOBJ" --file-headers "$TESTS_OUT/hello_x86.exe" | grep -E 'Format|Machine'
 } >"$hlog" 2>&1
 if [ -f "$TESTS_OUT/hello_x86.exe" ] && grep -q '^Format: COFF-i386$' "$hlog"; then pass build "hello_x86.exe built, COFF-i386 ($hlog)"; else fail build "hello_x86.exe did not build as COFF-i386 ($hlog)"; fi
+sdlog=$TESTS_OUT/shared_data_test.build.log
+rm -f "$TESTS_OUT/shared_data_test_x86.exe" "$TESTS_OUT/shared_data_test_x64.exe"
+{
+    echo "\$ i686-w64-mingw32-clang and x86_64-w64-mingw32-clang shared_data_test.c"
+    "$MINGW_BIN/i686-w64-mingw32-clang" -O2 -Wall -o "$TESTS_OUT/shared_data_test_x86.exe" "$SCRIPT_DIR/shared_data_test.c"
+    echo "exit=$?"
+    "$MINGW_BIN/x86_64-w64-mingw32-clang" -O2 -Wall -o "$TESTS_OUT/shared_data_test_x64.exe" "$SCRIPT_DIR/shared_data_test.c"
+    echo "exit=$?"
+    "$READOBJ" --file-headers "$TESTS_OUT/shared_data_test_x86.exe" "$TESTS_OUT/shared_data_test_x64.exe" | grep -E 'Format'
+} >"$sdlog" 2>&1
+if grep -q '^Format: COFF-i386$' "$sdlog" && grep -q '^Format: COFF-x86-64$' "$sdlog"; then pass build "shared_data_test.exe built, COFF-i386 and COFF-x86-64 ($sdlog)"; else fail build "shared_data_test.exe did not build for both ($sdlog)"; fi
 ilog=$TESTS_OUT/cpuid_x64.build.log
 rm -f "$TESTS_OUT/cpuid_x64.exe"
 {
@@ -772,7 +784,8 @@ else
     PREFIX=$BUILD_ROOT/wave3b-prefix-x86
     rm -rf "$PREFIX"; mkdir -p "$PREFIX"
     hold_server "$PREFIX"
-    X86_LINE='hello from 32-bit x86 code on macOS: 6*7=42, pointer size 4, processor architecture 0, native 12, wow64 1'
+    # "native 9": Wine tells 32-bit code that the machine underneath is x86-64
+    X86_LINE='hello from 32-bit x86 code on macOS: 6*7=42, pointer size 4, processor architecture 0, native 9, wow64 1'
     x86pass=0; t=$WINEBOOT_TIMEOUT   # the first run sets the prefix up
     for i in $(seq 1 "$FEX_RUNS"); do
         dbg=; [ $i = 1 ] && dbg=+loaddll
@@ -795,7 +808,40 @@ else
 fi
 fi  # item 10
 
-todo "4K pages, memory below 4 GB and hardware TSO have no items yet (they need LOADER_PROFILE; the loader's code for the first two is written and has never run); Wave 3b is not done"
+########################################################################
+# Item 11: memory below 4 GB
+########################################################################
+if want 11; then
+echo "== item 11: KUSER_SHARED_DATA at its Windows address, 32-bit and x86_64"
+mdir=$EVIDENCE_DIR/item11-shared-data
+rm -rf "$mdir"; mkdir -p "$mdir"
+if [ -z "$LOADER_PROFILE" ]; then
+    todo "item 11: shared_data_test.exe was not run: nothing can be mapped at 0x7ffe0000 without LOADER_PROFILE"
+else
+    PREFIX=$BUILD_ROOT/wave3b-prefix-shared-data
+    rm -rf "$PREFIX"; mkdir -p "$PREFIX"
+    hold_server "$PREFIX"
+    SD_LINE='shared data: base 7ffe0000, allocation base 7ffe0000, size 1000, protect 2, tick [1-9][0-9]*'
+    sdpass=0; t=$WINEBOOT_TIMEOUT   # the first run sets the prefix up
+    for p in shared_data_test_x86 shared_data_test_x64; do
+        WINEPREFIX=$PREFIX run_timeout "$t" "$WINE" "$TESTS_OUT/$p.exe" >"$mdir/$p.stdout" 2>"$mdir/$p.stderr"
+        rc=$?
+        t=$RUN_TIMEOUT
+        out=$(tr -d '\r' <"$mdir/$p.stdout" | head -1)
+        line=no; echo "$out" | grep -Eqx "$SD_LINE" && line=yes
+        [ "$rc" = 0 ] && [ $line = yes ] && sdpass=$((sdpass + 1))
+        echo "$p.exe: exit=$rc line=$line ($out)" >>"$mdir/summary.txt"
+    done
+    cleanup_prefix "$PREFIX"
+    if [ "$sdpass" = 2 ]; then
+        pass 11 "a 32-bit and an x86_64 program find KUSER_SHARED_DATA at 0x7ffe0000, read-only, with a tick count: '$out' ($mdir/summary.txt)"
+    else
+        fail 11 "$sdpass of 2 programs found the page as it should be ($mdir/summary.txt)"
+    fi
+fi
+fi  # item 11
+
+todo "hardware TSO has no item yet; Wave 3b is not done"
 
 echo
 echo "== summary"

@@ -3,7 +3,7 @@
  * (libwow64fex.dll) translates. Everything of such a process lives below 4 GB.
  *
  * Prints one line, e.g.
- *   hello from 32-bit x86 code on macOS: 6*7=42, pointer size 4, processor architecture 0, native 12, wow64 1
+ *   hello from 32-bit x86 code on macOS: 6*7=42, pointer size 4, processor architecture 0, native 9, wow64 1
  * and exits 0.
  *
  * Built for i686 with the mingw compiler.
