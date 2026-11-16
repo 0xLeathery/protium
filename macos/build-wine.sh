@@ -24,6 +24,9 @@
 #                  A build directory keeps the mode it was first built with.
 #   VULKAN_DIST    output of macos/build-vulkan.sh; when set, Wine is built with Vulkan and finds
 #                  the loader's name there (default: none, Wine is built without Vulkan)
+#   GST_DIST       output of macos/build-gstreamer.sh; when set, winegstreamer is built against its
+#                  GStreamer and winedmo against its FFmpeg (default: none, Wine is built without
+#                  either and plays no video)
 #   JOBS           make parallelism (default 12)
 #   MIN_FREE_GB    abort if less free disk space than this (default 20)
 
@@ -39,6 +42,7 @@ TOOLCHAIN_DIR=${TOOLCHAIN_DIR:-/Users/annon/projects/proton-macos-toolchain/llvm
 WINE_ARCHS=${WINE_ARCHS:-aarch64}
 PE_MODE=${PE_MODE:-mingw}
 VULKAN_DIST=${VULKAN_DIST:-}
+GST_DIST=${GST_DIST:-}
 JOBS=${JOBS:-12}
 MIN_FREE_GB=${MIN_FREE_GB:-20}
 
@@ -155,6 +159,14 @@ if [ -n "$VULKAN_DIST" ]; then
 else
     vulkan_args=(--without-vulkan)
 fi
+# winegstreamer links GStreamer and finds it with pkg-config; Homebrew's directory stays in the
+# path for glib, which GStreamer needs
+if [ -n "$GST_DIST" ]; then
+    [ -f "$GST_DIST/lib/pkgconfig/gstreamer-1.0.pc" ] || die "no GStreamer in $GST_DIST (run macos/build-gstreamer.sh)"
+    gst_args=(--with-gstreamer --with-ffmpeg "PKG_CONFIG_PATH=$GST_DIST/lib/pkgconfig:$(brew --prefix)/lib/pkgconfig")
+else
+    gst_args=(--without-gstreamer --without-ffmpeg --disable-winedmo)
+fi
 
 CONFIGURE_ARGS=(
     --prefix="$BUILD_ROOT/install-aarch64"
@@ -172,14 +184,15 @@ CONFIGURE_ARGS=(
     --without-opengl --without-x --without-wayland --without-xcomposite --without-xcursor --without-xfixes
     --without-xinerama --without-xinput --without-xinput2 --without-xrandr --without-xrender
     --without-xshape --without-xshm --without-xxf86vm
-    --without-alsa --without-oss --without-pulse --without-gstreamer --without-ffmpeg
+    --without-alsa --without-oss --without-pulse
     --without-capi --without-cups --without-dbus --without-fontconfig
     --without-gettext --without-gettextpo --without-gphoto --without-gssapi
     --without-hwloc --without-inotify --without-krb5 --without-netapi --without-pcap
     --without-pcsclite --without-piper --without-sane --without-sdl --without-udev --without-usb
-    --without-v4l2 --without-vosk "${vulkan_args[@]}"
-    # Proton modules that need Linux-only libraries absent here (libdrm for amd_ags_x64, ffmpeg for winedmo)
-    --disable-amd_ags_x64 --disable-winedmo
+    --without-v4l2 --without-vosk "${vulkan_args[@]}" "${gst_args[@]}"
+    # Proton modules that need Linux-only libraries absent here (libdrm for amd_ags_x64); winedmo
+    # goes with GST_DIST's FFmpeg, above
+    --disable-amd_ags_x64
     BISON="$BISON_BIN/bison"
     "${pe_cc_vars[@]}"
 )

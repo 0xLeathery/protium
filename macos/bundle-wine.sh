@@ -48,6 +48,9 @@
 #   VKD3D_DIST      output of build-vkd3d-proton.sh (default $BUILD_ROOT/vkd3d-proton-dist); when
 #                   it is there, its d3d12 and d3d12core take the place of Wine's own. Direct3D
 #                   12 then needs the Vulkan driver of MESA_DIST.
+#   GST_DIST        output of build-gstreamer.sh (default $BUILD_ROOT/gst-dist); when Wine was
+#                   built with it, the GStreamer libraries winegstreamer links, its plugins and its
+#                   plugin scanner go into lib/external, where ntdll.so points GStreamer
 #   BRIDGE_DIST     output of build-steam-bridge.sh (default $BUILD_ROOT/steam-bridge-dist); when
 #                   it is there, Proton's lsteamclient and steam.exe are installed, so a game
 #                   reaches Mac Steam's steamclient.dylib
@@ -75,6 +78,7 @@ FEX_DIST=${FEX_DIST:-$BUILD_ROOT/fex-dist}
 DXMT_DIST=${DXMT_DIST:-$BUILD_ROOT/dxmt-dist}
 VKD3D_DIST=${VKD3D_DIST:-$BUILD_ROOT/vkd3d-proton-dist}
 BRIDGE_DIST=${BRIDGE_DIST:-$BUILD_ROOT/steam-bridge-dist}
+GST_DIST=${GST_DIST:-$BUILD_ROOT/gst-dist}
 HOST_DYLIBS=${HOST_DYLIBS:-libfreetype.6.dylib libgnutls.30.dylib libgmp.10.dylib libgcrypt.20.dylib}
 WOW64=${WOW64:-auto}
 VULKAN_DIST=${VULKAN_DIST:-$BUILD_ROOT/vulkan-dist}
@@ -289,8 +293,8 @@ copy_host_dylib() {
     cp -L "$src" "$extdir/$name"
     chmod u+w "$extdir/$name"
     install_name_tool -id "@loader_path/$name" "$extdir/$name" 2>/dev/null || die "install_name_tool -id failed for $name"
-    # the libraries it needs from Homebrew (the system's own stay where they are)
-    for dep in $(otool -L "$src" | awk 'NR > 1 { print $1 }' | grep -E "^($brew_prefix|@rpath|@loader_path)/" || true); do
+    # the libraries it needs from Homebrew or GST_DIST (the system's own stay where they are)
+    for dep in $(otool -L "$src" | awk 'NR > 1 { print $1 }' | grep -E "^($brew_prefix|$GST_DIST|@rpath|@loader_path)/" || true); do
         case "$dep" in
             @rpath/*|@loader_path/*) dep_src=$(dirname "$(realpath "$src")")/$(basename "$dep") ;;
             *) dep_src=$dep ;;
@@ -306,6 +310,35 @@ for lib in $HOST_DYLIBS; do
     copy_host_dylib "$brew_prefix/lib/$lib"
     ln -sf "../../external/$lib" "$unixdir/$lib"
 done
+# GStreamer, which winegstreamer.so links by the absolute paths of GST_DIST: its libraries go into
+# lib/external like the host libraries, the plugins into lib/external/gstreamer-1.0 and the plugin
+# scanner, a program that GStreamer starts to read new plugins, into lib/external
+relink() {  # file, the path of lib/external relative to it: copy what it needs and point it there
+    local file=$1 rel=$2 dep
+    for dep in $(otool -L "$file" | awk 'NR > 1 { print $1 }' | grep -E "^($brew_prefix|$GST_DIST)/" || true); do
+        copy_host_dylib "$dep"
+        install_name_tool -change "$dep" "$rel/$(basename "$dep")" "$file" 2>/dev/null || die "install_name_tool -change failed for $file ($dep)"
+    done
+    codesign --force --sign - "$file" 2>/dev/null || die "codesign failed for $file"
+}
+if [ -f "$unixdir/winegstreamer.so" ] && otool -L "$unixdir/winegstreamer.so" | grep -q "libgstreamer-1.0"; then
+    [ -d "$GST_DIST/lib/gstreamer-1.0" ] || die "winegstreamer.so links GStreamer but there is no $GST_DIST"
+    # winegstreamer.so, and winedmo.so with GST_DIST's FFmpeg
+    for so in "$unixdir"/*.so; do
+        otool -L "$so" | grep -q "$GST_DIST/" && relink "$so" "@loader_path/../../external"
+    done
+    mkdir -p "$extdir/gstreamer-1.0"
+    for plugin in "$GST_DIST"/lib/gstreamer-1.0/*.dylib; do
+        cp "$plugin" "$extdir/gstreamer-1.0/"
+        chmod u+w "$extdir/gstreamer-1.0/$(basename "$plugin")"
+        install_name_tool -id "@loader_path/$(basename "$plugin")" "$extdir/gstreamer-1.0/$(basename "$plugin")" 2>/dev/null
+        relink "$extdir/gstreamer-1.0/$(basename "$plugin")" "@loader_path/.."
+    done
+    cp "$GST_DIST/libexec/gstreamer-1.0/gst-plugin-scanner" "$extdir/gst-plugin-scanner"
+    chmod u+w "$extdir/gst-plugin-scanner"
+    relink "$extdir/gst-plugin-scanner" "@loader_path"
+    log "installed GStreamer $(sed -n "s/^Version: //p" "$GST_DIST/lib/pkgconfig/gstreamer-1.0.pc") with $(ls "$extdir/gstreamer-1.0" | wc -l | tr -d ' ') plugins in lib/external"
+fi
 # the Vulkan loader, which win32u.so opens when Wine was built with Vulkan
 if [ -f "$VULKAN_DIST/lib/libvulkan.1.dylib" ]; then
     copy_host_dylib "$VULKAN_DIST/lib/libvulkan.1.dylib"
