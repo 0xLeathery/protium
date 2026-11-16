@@ -143,11 +143,13 @@ if [ -n "$LOADER_PROFILE" ]; then
         certs="$certs$(printf '%s' "$cert" | base64 --decode | shasum -a 1 | cut -d' ' -f1 | tr a-f A-F) "
         i=$((i + 1))
     done
-    for id in $(security find-identity -v -p codesigning | awk -v team="($LOADER_TEAM)\"" 'index($0, team) { print $2 }'); do
+    # Every valid identity is tried: the name of an Apple Development certificate ends in an
+    # ID of the person, not of the team, so the name cannot pick the candidates.
+    for id in $(security find-identity -v -p codesigning | awk '$2 ~ /^[0-9A-F]+$/ && length($2) == 40 { print $2 }'); do
         case "$certs" in *" $id "*) LOADER_IDENTITY=$id; break ;; esac
     done
     [ -n "$LOADER_IDENTITY" ] \
-        || die "no valid code signing identity of team $LOADER_TEAM in the keychain is one of the $i certificates the profile lists"
+        || die "no valid code signing identity in the keychain is one of the $i certificates the profile lists"
     log "profile: $BUNDLE_ID, team $LOADER_TEAM, expires $expires, identity $LOADER_IDENTITY"
 else
     BUNDLE_ID=${BUNDLE_ID:-org.winehq.wine}
@@ -187,7 +189,8 @@ if [ -d "$i386dir" ]; then
         log "32-bit side: $(ls "$i386dir" | wc -l | tr -d ' ') files in lib/wine/i386-windows"
     else
         rm -rf "$i386dir"
-        log "32-bit side left out (no LOADER_PROFILE: nothing can be mapped below 4 GB, where a 32-bit process lives)"
+        if [ -n "$LOADER_PROFILE" ]; then log "32-bit side left out (WOW64=$WOW64)"
+        else log "32-bit side left out (no LOADER_PROFILE: nothing can be mapped below 4 GB, where a 32-bit process lives)"; fi
     fi
 elif [ $wow64 = yes ]; then
     log "no 32-bit side in this build (WINE_ARCHS without i386)"
