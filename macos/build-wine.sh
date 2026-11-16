@@ -25,8 +25,8 @@
 #   VULKAN_DIST    output of macos/build-vulkan.sh; when set, Wine is built with Vulkan and finds
 #                  the loader's name there (default: none, Wine is built without Vulkan)
 #   GST_DIST       output of macos/build-gstreamer.sh; when set, winegstreamer is built against its
-#                  GStreamer and winedmo against its FFmpeg (default: none, Wine is built without
-#                  either and plays no video)
+#                  GStreamer and winedmo against its FFmpeg (default: $BUILD_ROOT/gst-dist when it
+#                  is there, else none, and Wine is built without either and plays no video)
 #   JOBS           make parallelism (default 12)
 #   MIN_FREE_GB    abort if less free disk space than this (default 20)
 
@@ -42,7 +42,10 @@ TOOLCHAIN_DIR=${TOOLCHAIN_DIR:-/Users/annon/projects/proton-macos-toolchain/llvm
 WINE_ARCHS=${WINE_ARCHS:-aarch64}
 PE_MODE=${PE_MODE:-mingw}
 VULKAN_DIST=${VULKAN_DIST:-}
-GST_DIST=${GST_DIST:-}
+GST_DIST=${GST_DIST-}
+# the GStreamer that macos/build-gstreamer.sh made, when there is one and none is named
+[ -n "${GST_DIST}" ] || [ ! -f "${BUILD_ROOT:-/Users/annon/projects/proton-macos-build}/gst-dist/lib/pkgconfig/gstreamer-1.0.pc" ] \
+    || GST_DIST=${BUILD_ROOT:-/Users/annon/projects/proton-macos-build}/gst-dist
 JOBS=${JOBS:-12}
 MIN_FREE_GB=${MIN_FREE_GB:-20}
 
