@@ -52,7 +52,7 @@ PROBE_RUNS=${PROBE_RUNS:-10}
 WAVE_FILES="configure.ac include/winnt.h dlls/ntdll/signal_arm64.c dlls/ntdll/unix/signal_arm64.c include/minwindef.h dlls/ntdll/unix/unix_private.h dlls/ntdll/unix/file.c dlls/ntdll/unix/loader.c dlls/ntdll/unix/virtual.c dlls/ntdll/unix/server.c loader/main.c dlls/ntdll/unix/system.c dlls/winemac.drv/macdrv.h dlls/winemac.drv/window.c dlls/uiautomationcore/uia_client.c dlls/winegstreamer/media-converter/media-converter.h dlls/winebus.sys/bus_iohid.c"
 # Wine files that later waves change, which check-wave5.sh checks the guards of (PE code, guarded
 # by configure's WINE_MACOS_AARCH64, and configure.ac itself)
-LATER_WAVE_FILES="dlls/mfreadwrite/reader.c configure.ac"
+LATER_WAVE_FILES="dlls/mfreadwrite/reader.c configure.ac dlls/winegstreamer/video_decoder.c dlls/winegstreamer/video_processor.c"
 # PE sources whose objects item 7 compares without the define: the PE file this wave changes, and
 # users of NtCurrentTeb() (include/winnt.h) in several modules. object:source
 PE_COMPARE="dlls/ntdll/aarch64-windows/signal_arm64.o:dlls/ntdll/signal_arm64.c

@@ -251,7 +251,7 @@ dlog=$EVIDENCE_DIR/diffstat.log
 bad=$(git -C "$PROTON_DIR" diff --name-only "$BASE_BRANCH...$SUPER_HEAD" | grep -v '^macos/' | grep -v -x -F -e lsteamclient/unixlib.cpp -e lsteamclient/unix_steam_input_manual.cpp)
 wbad=""
 for f in $(git -C "$PROTON_DIR/wine" diff --name-only "$WINE_BASE"); do
-    case " $WINE_ALLOWED_FILES dlls/mfreadwrite/reader.c " in *" $f "*) ;; *) wbad="$wbad $f" ;; esac  # reader.c: Wave 5's, guarded by WINE_MACOS_AARCH64
+    case " $WINE_ALLOWED_FILES dlls/mfreadwrite/reader.c dlls/winegstreamer/video_decoder.c dlls/winegstreamer/video_processor.c " in *" $f "*) ;; *) wbad="$wbad $f" ;; esac  # reader.c: Wave 5's, guarded by WINE_MACOS_AARCH64
 done
 wdirty=$(git -C "$PROTON_DIR/wine" status --porcelain --untracked-files=all | grep -v '^ M\|^M ' | head -5)
 if [ -z "$bad" ] && [ -z "$wbad" ] && [ -z "$wdirty" ]; then
