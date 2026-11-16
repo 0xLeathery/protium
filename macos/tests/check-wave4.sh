@@ -107,7 +107,7 @@ SUPER_WAVE_BASE=${SUPER_WAVE_BASE:-acfe76e00fbbbf49b10ef781d58e2bfdabb76ec5}
 # loader to look for drivers, and what stopped real programs: ntdll's start of a 32-bit
 # process, and uiautomationcore's use of results that a provider did not set. virtual.c is
 # Wave 3b's: its work for the provisioning profile was done after this wave had begun.
-WAVE_FILES="dlls/winemac.drv/macdrv.h dlls/winemac.drv/window.c dlls/ntdll/unix/loader.c dlls/uiautomationcore/uia_client.c dlls/winegstreamer/media-converter/media-converter.h dlls/ntdll/unix/virtual.c"
+WAVE_FILES="dlls/winemac.drv/macdrv.h dlls/winemac.drv/window.c dlls/ntdll/unix/loader.c dlls/uiautomationcore/uia_client.c dlls/winegstreamer/media-converter/media-converter.h dlls/winebus.sys/bus_iohid.c dlls/ntdll/unix/virtual.c"
 UNIX_DIR=aarch64-unix
 export MIN_FREE_GB=${MIN_FREE_GB:-10}
 # A new prefix would otherwise wait on the Mono and Gecko install dialogs.

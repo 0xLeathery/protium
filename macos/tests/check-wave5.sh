@@ -70,7 +70,7 @@ SUPER_WAVE_BASE=${SUPER_WAVE_BASE:-43acb634}
 # Wine files this wave changes: ntdll's dlopen of a builtin's Unix library and its steamclient
 # trampolines, winemac.drv's update of DXMT's client surfaces, ntdll's GStreamer paths, and an
 # include in winegstreamer's media converter
-WAVE_FILES="dlls/ntdll/unix/virtual.c dlls/ntdll/unix/loader.c dlls/winemac.drv/window.c dlls/winegstreamer/media-converter/media-converter.h"
+WAVE_FILES="dlls/ntdll/unix/virtual.c dlls/ntdll/unix/loader.c dlls/winemac.drv/window.c dlls/winegstreamer/media-converter/media-converter.h dlls/winebus.sys/bus_iohid.c"
 SUPER_FILES="lsteamclient/unixlib.cpp lsteamclient/unix_steam_input_manual.cpp"
 export MIN_FREE_GB=${MIN_FREE_GB:-4}
 export WINEDLLOVERRIDES=${WINEDLLOVERRIDES:-mscoree,mshtml=}
