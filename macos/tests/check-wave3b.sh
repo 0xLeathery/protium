@@ -105,7 +105,7 @@ CROSS_ARCH_ENTITLEMENT=com.apple.developer.cross-architecture-support
 # Wine files this wave may change: the loader in an app bundle, the ARM64 ID registers that FEX
 # takes the CPU features of x86 code from, and the end of the host address space; plus those of
 # Wave 4 (winemac.drv's table for DXMT, see check-wave4.sh item 7).
-WAVE_FILES="loader/main.c dlls/ntdll/unix/loader.c dlls/ntdll/unix/system.c dlls/ntdll/unix/virtual.c dlls/winemac.drv/macdrv.h dlls/winemac.drv/window.c"
+WAVE_FILES="loader/main.c dlls/ntdll/unix/loader.c dlls/ntdll/unix/system.c dlls/ntdll/unix/virtual.c dlls/winemac.drv/macdrv.h dlls/winemac.drv/window.c dlls/uiautomationcore/uia_client.c"
 # The build scripts stop below 20 GB free by default; 10 GB is the limit agreed for this work.
 export MIN_FREE_GB=${MIN_FREE_GB:-10}
 # A new prefix would otherwise wait on the Mono and Gecko install dialogs.

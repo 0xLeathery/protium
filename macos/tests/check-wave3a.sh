@@ -54,7 +54,7 @@ X18_ENTITLEMENT=com.apple.security.custom-x18-abi-toggle
 # Wine files this wave may change: the reverted Wave 2b TSD slot files, and the x18 opt-in and
 # W^X page flipping; plus those of Wave 3b (the loader in an app bundle and the ARM64 ID registers, see check-wave3b.sh
 # item 6).
-WAVE_FILES="configure.ac include/winnt.h dlls/ntdll/signal_arm64.c dlls/ntdll/unix/signal_arm64.c dlls/ntdll/unix/virtual.c dlls/ntdll/unix/server.c dlls/ntdll/unix/unix_private.h dlls/ntdll/unix/loader.c loader/main.c dlls/ntdll/unix/system.c dlls/winemac.drv/macdrv.h dlls/winemac.drv/window.c"
+WAVE_FILES="configure.ac include/winnt.h dlls/ntdll/signal_arm64.c dlls/ntdll/unix/signal_arm64.c dlls/ntdll/unix/virtual.c dlls/ntdll/unix/server.c dlls/ntdll/unix/unix_private.h dlls/ntdll/unix/loader.c loader/main.c dlls/ntdll/unix/system.c dlls/winemac.drv/macdrv.h dlls/winemac.drv/window.c dlls/uiautomationcore/uia_client.c"
 # PE sources whose objects item 9 compares with the wave base (without the old slot define)
 PE_COMPARE="dlls/ntdll/aarch64-windows/signal_arm64.o:dlls/ntdll/signal_arm64.c
 dlls/ntdll/aarch64-windows/thread.o:dlls/ntdll/thread.c

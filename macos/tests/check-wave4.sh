@@ -103,9 +103,11 @@ WINE_DIR=$PROTON_DIR/wine
 # wine and superproject commits this wave starts from (the tips after Wave 3b's last change)
 WINE_WAVE_BASE=${WINE_WAVE_BASE:-367c1ae9b0468f5d8b60b32be12cefe91eba0ffb}
 SUPER_WAVE_BASE=${SUPER_WAVE_BASE:-acfe76e00fbbbf49b10ef781d58e2bfdabb76ec5}
-# Wine files this wave may change: winemac.drv's table for DXMT, and where ntdll tells the
-# Vulkan loader to look for drivers.
-WAVE_FILES="dlls/winemac.drv/macdrv.h dlls/winemac.drv/window.c dlls/ntdll/unix/loader.c"
+# Wine files this wave may change: winemac.drv's table for DXMT, where ntdll tells the Vulkan
+# loader to look for drivers, and what stopped real programs: ntdll's start of a 32-bit
+# process, and uiautomationcore's use of results that a provider did not set. virtual.c is
+# Wave 3b's: its work for the provisioning profile was done after this wave had begun.
+WAVE_FILES="dlls/winemac.drv/macdrv.h dlls/winemac.drv/window.c dlls/ntdll/unix/loader.c dlls/uiautomationcore/uia_client.c dlls/ntdll/unix/virtual.c"
 UNIX_DIR=aarch64-unix
 export MIN_FREE_GB=${MIN_FREE_GB:-10}
 # A new prefix would otherwise wait on the Mono and Gecko install dialogs.
