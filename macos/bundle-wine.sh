@@ -51,6 +51,10 @@
 #   GST_DIST        output of build-gstreamer.sh (default $BUILD_ROOT/gst-dist); when Wine was
 #                   built with it, the GStreamer libraries winegstreamer links, its plugins and its
 #                   plugin scanner go into lib/external, where ntdll.so points GStreamer
+#   MTLD3D_TARBALL  mtld3d's release, Direct3D 9 on Metal (default
+#                   $BUILD_ROOT/third-party/mtld3d/mtld3d-v0.15.3.tar.xz, from
+#                   github.com/athei/mtld3d at the version and SHA-256 that Mach9 pins); when it is
+#                   there, its d3d9 and mtld3d take the place of Wine's d3d9
 #   BRIDGE_DIST     output of build-steam-bridge.sh (default $BUILD_ROOT/steam-bridge-dist); when
 #                   it is there, Proton's lsteamclient and steam.exe are installed, so a game
 #                   reaches Mac Steam's steamclient.dylib
@@ -79,6 +83,8 @@ DXMT_DIST=${DXMT_DIST:-$BUILD_ROOT/dxmt-dist}
 VKD3D_DIST=${VKD3D_DIST:-$BUILD_ROOT/vkd3d-proton-dist}
 BRIDGE_DIST=${BRIDGE_DIST:-$BUILD_ROOT/steam-bridge-dist}
 GST_DIST=${GST_DIST:-$BUILD_ROOT/gst-dist}
+MTLD3D_TARBALL=${MTLD3D_TARBALL:-$BUILD_ROOT/third-party/mtld3d/mtld3d-v0.15.3.tar.xz}
+MTLD3D_SHA256=038f00c9d868a2fcb71034dac645df1fa1500a4b4056f845e400e777e7a4a294
 HOST_DYLIBS=${HOST_DYLIBS:-libfreetype.6.dylib libgnutls.30.dylib libgmp.10.dylib libgcrypt.20.dylib}
 WOW64=${WOW64:-auto}
 VULKAN_DIST=${VULKAN_DIST:-$BUILD_ROOT/vulkan-dist}
@@ -257,6 +263,25 @@ if [ -f "$VKD3D_DIST/lib/wine/aarch64-windows/d3d12.dll" ] && [ -f "$VKD3D_DIST/
     log "installed vkd3d-proton $(cat "$VKD3D_DIST/DESCRIBE" 2>/dev/null) from $VKD3D_DIST in place of Wine's d3d12 and d3d12core"
 else
     log "no vkd3d-proton in $VKD3D_DIST (macos/build-vkd3d-proton.sh builds it): Direct3D 12 stays Wine's own"
+fi
+
+# mtld3d, Direct3D 9 on Metal, from Mach9's author, installed as builtins the way its INSTALL.md
+# describes for a Wine tree one owns: ARM64X d3d9.dll and mtld3d.dll for 64-bit processes, i386
+# ones for 32-bit games, and mtld3d.so, which presents through winemac.drv's macdrv_functions as
+# DXMT does. The release is used as it is, after its checksum is checked.
+if [ -f "$MTLD3D_TARBALL" ]; then
+    [ "$(shasum -a 256 "$MTLD3D_TARBALL" | cut -d' ' -f1)" = "$MTLD3D_SHA256" ] || die "$MTLD3D_TARBALL does not have the pinned SHA-256"
+    mtld3d_tmp=$(mktemp -d)
+    tar -C "$mtld3d_tmp" -xf "$MTLD3D_TARBALL"
+    for dll in d3d9 mtld3d; do cp "$mtld3d_tmp/wine/aarch64-windows/$dll.dll" "$pedir/$dll.dll"; done
+    cp "$mtld3d_tmp/wine/aarch64-unix/mtld3d.so" "$unixdir/mtld3d.so"
+    if [ $wow64 = yes ] && [ -d "$i386dir" ]; then
+        for dll in d3d9 mtld3d; do cp "$mtld3d_tmp/wine/i386-windows/$dll.dll" "$i386dir/$dll.dll"; done
+    fi
+    rm -rf "$mtld3d_tmp"
+    log "installed mtld3d $(basename "$MTLD3D_TARBALL" .tar.xz | sed 's/^mtld3d-//') in place of Wine's d3d9"
+else
+    log "no mtld3d release at $MTLD3D_TARBALL: Direct3D 9 stays Wine's own"
 fi
 
 # Proton's Steam bridge: lsteamclient, which ntdll puts behind Valve's Windows steamclient DLLs
