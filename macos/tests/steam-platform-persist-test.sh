@@ -34,13 +34,16 @@
 # "macos". So this tells Steam it is on Linux and lets two tools choose each game's build:
 # proton-macos (from windows) and macos-native (from macos), both in macos/steamplay-tools.
 #
-#   steam-platform-persist-test.sh setup-steamplay    Steam quit: put Kerbal Space Program back
-#                                                     (the canary with Windows, Mac and Linux
-#                                                     builds), switch to linux, install the tools,
-#                                                     map IRON NEST, Just Die Already and Left 4
-#                                                     Dead to proton-macos, Kerbal to macos-native,
-#                                                     all other games to proton-macos, and take the
-#                                                     steamplay-launch launch options out
+#   steam-platform-persist-test.sh setup-register     Steam quit: every game aside, install the
+#                                                     tools, switch to linux: does Steam register
+#                                                     the tools, with nothing to lose?
+#   steam-platform-persist-test.sh setup-steamplay    Steam quit: put the canaries back (IRON NEST,
+#                                                     Left 4 Dead, Kerbal Space Program), switch to
+#                                                     linux, install the tools, map IRON NEST, Left
+#                                                     4 Dead and Just Die Already to proton-macos,
+#                                                     Kerbal to macos-native, all other games to
+#                                                     proton-macos, and take the steamplay-launch
+#                                                     launch options out
 #
 # Reading "status" after experiment 3: "Registering tool proton-macos" and "macos-native" in the
 # compatibility log; no "config changed" for IRON NEST, Just Die Already or Left 4 Dead (they keep
@@ -56,6 +59,15 @@
 # Die Already all of its files, within four seconds of startup. Back on the windows switch, Steam
 # restored both at its next start. What starts the local tool scan on the Mac client
 # (CLoadLocalToolListJob, base folder from 0xa494e8 + "/compatibilitytools.d") is not known.
+#
+# Second attempt, setup-register (2026-11-17 12:02 and 12:07): Steam's tool scan looks in
+# /usr/local/share/steam/compatibilitytools.d (also /usr/share/steam, the folders of
+# $STEAM_EXTRA_COMPAT_TOOLS_PATHS and the folder of its client library inside the app bundle), and
+# reads steam_dev.cfg only next to its executables inside the app bundle: with the linux line in
+# the Steam root's copy alone it stayed on macos ("Ignoring tool proton-macos as it's for a
+# different target platform linux"). With the line in the bundle's copy and the tools in
+# /usr/local: "Registering tool macos-native, AppID 0", "Registering tool proton-macos, AppID 0",
+# "Loaded manifest for tool ..." for both, and Valve's tool list processed. Every game was aside.
 #
 # For all:
 #
@@ -103,6 +115,7 @@ BUILD_ROOT=${BUILD_ROOT:-/Users/annon/projects/proton-macos-build}
 STEAM_ROOT=${STEAM_ROOT:-$HOME/Library/Application Support/Steam}
 OVERRIDE_APPS=${OVERRIDE_APPS:-"500 979070 2950790"}
 CANARY=${CANARY:-500}
+CANARY_APPS=${CANARY_APPS:-"2950790 500 220200"}
 STATE_DIR=$BUILD_ROOT/steamplay/persist-test
 CFG_LINE='@sSteamCmdForcePlatformType windows'
 CFG_ANY='^@sSteamCmdForcePlatformType '
@@ -161,6 +174,28 @@ set_aside_except() {
     date '+%Y-%m-%d %H:%M:%S' > "$STATE_DIR/setup-time"
 }
 
+# Puts the manifests of the given app ids, and what was downloaded for them, back from aside
+put_back() {
+    local from to id mine
+    : > "$STATE_DIR/moved.tsv.new"
+    while IFS=$'\t' read -r from to; do
+        mine=
+        for id in "$@"; do
+            case $to in
+                */appmanifest_"$id".acf|*/downloading/"$id"|*/temp/"$id"|*/downloading/state_"$id"_*) mine=1 ;;
+            esac
+        done
+        if [ -n "$mine" ] && [ ! -e "$to" ]; then
+            mv "$from" "$to"
+            echo "put back   $to"
+        else
+            [ -z "$mine" ] || echo "kept aside $from: $to exists"
+            printf '%s\t%s\n' "$from" "$to" >> "$STATE_DIR/moved.tsv.new"
+        fi
+    done < "$STATE_DIR/moved.tsv"
+    mv "$STATE_DIR/moved.tsv.new" "$STATE_DIR/moved.tsv"
+}
+
 [ -f "$STEAM_ROOT/steamapps/libraryfolders.vdf" ] || die "no Steam library list in $STEAM_ROOT"
 
 case ${1:-} in
@@ -201,17 +236,10 @@ setup-cfg)
 setup-steamplay)
     steam_running && die "quit Steam first (Steam > Quit Steam)"
     [ -s "$STATE_DIR/moved.tsv" ] || die "run setup-overrides or setup-cfg first, so that the other games are aside"
-    # Kerbal Space Program back from aside, with what was downloaded for it
-    : > "$STATE_DIR/moved.tsv.new"
-    while IFS=$'\t' read -r from to; do
-        case $to in
-            */appmanifest_220200.acf|*/downloading/220200|*/temp/220200|*/downloading/state_220200_*)
-                if [ -e "$to" ]; then echo "kept aside $from: $to exists"; printf '%s\t%s\n' "$from" "$to" >> "$STATE_DIR/moved.tsv.new"
-                else mv "$from" "$to"; echo "put back   $to"; fi ;;
-            *) printf '%s\t%s\n' "$from" "$to" >> "$STATE_DIR/moved.tsv.new" ;;
-        esac
-    done < "$STATE_DIR/moved.tsv"
-    mv "$STATE_DIR/moved.tsv.new" "$STATE_DIR/moved.tsv"
+    # The canaries back from aside: IRON NEST (Windows only), Left 4 Dead (Windows and a 32-bit
+    # Mac build) and Kerbal Space Program (Windows, Mac and Linux builds)
+    # shellcheck disable=SC2086
+    put_back $CANARY_APPS
     for cfg in "${CFG_FILES[@]}"; do
         [ -d "$(dirname "$cfg")" ] || continue
         { grep -v "$CFG_ANY" "$cfg" 2>/dev/null || true; echo '@sSteamCmdForcePlatformType linux'; } > "$cfg.tmp"
@@ -231,12 +259,14 @@ setup-register)
     steam_running && die "quit Steam first (Steam > Quit Steam)"
     "$STEAMPLAY" tools || exit 1
     set_aside_except
-    printf '%s\n' '@sSteamCmdForcePlatformType linux' > "${CFG_FILES[0]}"
-    echo "linux in   ${CFG_FILES[0]} (only)"
-    if [ -f "${CFG_FILES[1]}" ]; then
-        mv "${CFG_FILES[1]}" "$STATE_DIR/steam_dev.cfg.bundle"
-        echo "moved      ${CFG_FILES[1]} to $STATE_DIR"
-    fi
+    # Steam reads only the steam_dev.cfg next to its executables, inside its app bundle: with the
+    # line in the Steam root's copy alone (2026-11-17 12:02), Steam stayed on macos.
+    for cfg in "${CFG_FILES[@]}"; do
+        [ -d "$(dirname "$cfg")" ] || continue
+        { grep -v "$CFG_ANY" "$cfg" 2>/dev/null || true; echo '@sSteamCmdForcePlatformType linux'; } > "$cfg.tmp"
+        mv "$cfg.tmp" "$cfg"
+        echo "linux in   $cfg"
+    done
     date '+%Y-%m-%d %H:%M:%S' > "$STATE_DIR/setup-time"
     echo "experiment: register" > "$STATE_DIR/experiment"
     echo "Now start Steam, wait a minute, and run: $0 status"

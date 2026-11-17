@@ -7,6 +7,15 @@ LOG=${STEAMPLAY_TOOL_LOG:-/Users/annon/projects/proton-macos-build/evidence/stea
   env | grep -E '^(STEAM|Steam|SteamApp|DYLD)' | sort; } >> "$LOG" 2>/dev/null
 verb=${1:-}; shift || true
 case $verb in
-    waitforexitandrun|run) exec "$@" ;;
+    waitforexitandrun|run)
+        # a Mac game's launch entry is its app bundle: start the program inside it, so that it
+        # keeps the environment Steam gives a game (its app id among it)
+        if [ -d "${1:-}" ] && [ -f "$1/Contents/Info.plist" ]; then
+            app=$1; shift
+            exe=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app/Contents/Info.plist" 2>/dev/null)
+            [ -n "$exe" ] && [ -x "$app/Contents/MacOS/$exe" ] && exec "$app/Contents/MacOS/$exe" "$@"
+            exec /usr/bin/open -W -a "$app" --args "$@"
+        fi
+        exec "$@" ;;
     *) exit 0 ;;
 esac
