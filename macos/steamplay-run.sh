@@ -82,6 +82,31 @@ if [ ! -f "$prefix/system.reg" ]; then
     log "creating the prefix in $prefix"
     "$WINE_INSTALL/bin/wine" wineboot -u >/dev/null 2>&1 || die "wineboot failed in $prefix"
 fi
+# Proton's wine.inf registers its fonts by file name (arial.ttf, tahoma.ttf, ...), and Proton's
+# script links the files into the prefix's Fonts folder. DirectWrite lists what it finds there
+# and nothing else: with the folder empty it had no Tahoma, and the browser of the Rockstar Games
+# Launcher asked for one in circles until its stack was gone. Wine's own fonts go in as Proton
+# puts them; where Proton has fonts of its own making under Microsoft's names, the Mac's own
+# copies of Microsoft's fonts stand in. (The East Asian and Indic ones have no such stand-in.)
+fonts_dir="$prefix/drive_c/windows/Fonts"
+mkdir -p "$fonts_dir"
+for font in "$WINE_INSTALL"/share/wine/fonts/*.tt[fc]; do
+    [ -e "$font" ] && ln -sfn "$font" "$fonts_dir/$(basename "$font")"
+done
+while IFS='|' read -r font mac_font; do
+    [ -f "/System/Library/Fonts/Supplemental/$mac_font" ] \
+        && ln -sfn "/System/Library/Fonts/Supplemental/$mac_font" "$fonts_dir/$font"
+done <<'FONTS'
+arial.ttf|Arial.ttf
+arialbd.ttf|Arial Bold.ttf
+cour.ttf|Courier New.ttf
+courbd.ttf|Courier New Bold.ttf
+micross.ttf|Microsoft Sans Serif.ttf
+tahoma.ttf|Tahoma.ttf
+tahomabd.ttf|Tahoma Bold.ttf
+times.ttf|Times New Roman.ttf
+wingdings.ttf|Wingdings.ttf
+FONTS
 # Steam's own compatibility options for the game, which Proton's script takes the same way.
 # nativevulkanloader: the game is to load Khronos's vulkan-1.dll, which its own installer puts
 # into the prefix (Red Dead Redemption 2; wine.inf says the same for RDR2.exe). Mac Steam runs no
@@ -111,6 +136,8 @@ logfile=${STEAMPLAY_LOG:-$compat/steamplay-run.log}
 # where each module is loaded, so that the PE addresses of a crash can be given their DLLs, and
 # what a message box says, which is often all a game tells of what it could not do
 export WINEDEBUG="${WINEDEBUG:-+loaddll,+msgbox}"
+# and where ntdll leaves the stack of a thread that ran out of it (wine-stack.<pid>.<tid>.bin)
+export WINE_STACK_DUMP_DIR="${WINE_STACK_DUMP_DIR:-$compat}"
 log "app $appid: $exe (log: $logfile)"
 # A game that hangs says nothing of where. Wine does say when a thread has waited a minute for a
 # lock that another one holds: at that, where every thread of the game's processes is gets

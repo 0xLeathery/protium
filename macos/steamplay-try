@@ -56,24 +56,31 @@ installdir=$(sed -n 's/^[[:space:]]*"installdir"[[:space:]]*"\(.*\)"$/\1/p' "$li
 game_dir="$library/steamapps/common/$installdir"
 compat="$library/steamapps/compatdata/$appid"
 log="$compat/steamplay-run.log"
-game_dir_win="Z:${game_dir//\//\\}\\"
-# the game's own processes: started from its folder, and not Proton's steam.exe that waits for them
-game_pids() { ps -axo pid=,command= | grep -F -- "$game_dir_win" | grep -v -e ' grep ' -e 'system32\\steam\.exe ' | awk '{print $1}'; }
+# the game's processes: Windows programs started since the launch that are not Wine's own, which
+# all live in C:\windows (a launcher installs itself in Program Files and starts the game from there)
+game_pids() {
+    ps -axo pid=,etime=,command= | awk -v max=$((SECONDS - start + 3)) '{
+        n = split($2, t, /[-:]/); age = 0; for (i = 1; i <= n; i++) age = age * 60 + t[i]
+        cmd = $0; sub(/^ *[0-9]+ +[^ ]+ +/, "", cmd)
+        if (age <= max && cmd ~ /^[A-Za-z]:\\/ && cmd !~ /^[Cc]:\\windows\\/) print $1 }'
+}
 end_session() { [ -d "$compat/pfx" ] && WINEPREFIX="$compat/pfx" "$WINE_INSTALL/bin/wineserver" -k 2>/dev/null; }
 
 end_session
 sleep 1
+outcome=running seen=no gone=0 start=$SECONDS
 "$SCRIPT_DIR/steamplay-run.sh" "$appid" "$@" &
 runner=$!
 
-outcome=running seen=no start=$SECONDS
 while [ $((SECONDS - start)) -lt "$seconds" ]; do
     sleep 2
     if grep -qa '^wine: abort() in native code' "$log" 2>/dev/null; then outcome=abort; break; fi
     if grep -qa -e '^wine: Unhandled' -e 'err:seh:NtRaiseException Exception frame is not in stack limits' -e 'virtual_setup_exception stack overflow' "$log" 2>/dev/null; then outcome=crash; break; fi
     if ls "$compat"/steamplay-run.hang.*.txt >/dev/null 2>&1; then outcome=hang; break; fi
-    if [ -n "$(game_pids)" ]; then seen=yes
-    elif [ $seen = yes ] || ! kill -0 $runner 2>/dev/null; then outcome=exited; break; fi
+    # a launcher's first program may be gone before its next one is there: gone means for a while
+    if [ -n "$(game_pids)" ]; then seen=yes gone=0
+    elif [ $seen = yes ]; then gone=$((gone + 1)); [ $gone -lt 5 ] || { outcome=exited; break; }
+    elif ! kill -0 $runner 2>/dev/null; then outcome=exited; break; fi
 done
 elapsed=$((SECONDS - start))
 # an abort or a crash takes a moment to finish writing its report
