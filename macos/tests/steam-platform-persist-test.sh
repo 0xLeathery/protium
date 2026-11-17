@@ -69,6 +69,18 @@
 # /usr/local: "Registering tool macos-native, AppID 0", "Registering tool proton-macos, AppID 0",
 # "Loaded manifest for tool ..." for both, and Valve's tool list processed. Every game was aside.
 #
+# Second attempt, setup-steamplay (2026-11-17 12:14): passed. With the tools registered and the
+# three canaries mapped, Steam changed nothing at startup (Left 4 Dead and IRON NEST kept their
+# Windows depots; compat.vdf was written with no overrides). Play on IRON NEST ran
+# "<tools>/proton-macos/./run waitforexitandrun <its .exe>" with Proton's environment
+# (STEAM_COMPAT_DATA_PATH = <library>/steamapps/compatdata/<id>, STEAM_COMPAT_CLIENT_INSTALL_PATH,
+# STEAM_COMPAT_INSTALL_PATH, SteamAppId, and the overlay's libraries in
+# STEAM_DYLD_INSERT_LIBRARIES), the game reached its menu, and Auto-Cloud resolved the Windows
+# save paths into the prefix ("Watching file .../pfx/drive_c/users/steamuser/AppData/LocalLow/...").
+# Play on Kerbal Space Program, mapped to macos-native, first replaced its Windows depots with the
+# Mac one (220202, 292 MB; not a Linux depot), then ran "<tools>/macos-native/./run
+# waitforexitandrun <...>/KSP.app", and the Mac build (x86_64) loaded.
+#
 # For all:
 #
 #   steam-platform-persist-test.sh status             what Steam did since setup (reads only)
