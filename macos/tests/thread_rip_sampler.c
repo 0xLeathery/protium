@@ -3,8 +3,9 @@
  *
  *   thread_rip_sampler.exe <process name substring> [samples, default 200] [interval ms, default 10]
  *   thread_rip_sampler.exe <process name substring> regs <thread id> [count, default 5]
+ *   thread_rip_sampler.exe <process name substring> stack [thread id, or 0 for all] [bytes, default 0x6000]
  *
- * Finds the first process whose executable name contains the substring, then for each sample
+ * Finds the process of that name, or else the first whose name contains it, then for each sample
  * suspends each of its threads, reads its context (Rip and Rsp), and resumes it. Prints, per
  * thread with any samples, the most frequent instruction pointers with the module they are in
  * and their offset from its base, e.g.
@@ -13,7 +14,10 @@
  * Under FEX an x86_64 process runs as ARM64EC, and a suspended thread's context is its x86_64
  * state, so this names the guest code a thread is in. With "regs", it prints that thread's integer
  * registers and RIP count times, a second apart, to tell a loop that makes progress from one
- * that does not. Built for x86_64 with the mingw compiler: -lpsapi.
+ * that does not. With "stack", it prints where each thread is and every value on its stack that
+ * points into a loaded module, as module+offset: the return addresses of its call chain, among
+ * some stale ones. This reads a waiting thread's callers without attaching as a debugger, which
+ * some games end themselves over. Built for x86_64 with the mingw compiler: -lpsapi.
  */
 #include <windows.h>
 #include <tlhelp32.h>
@@ -64,6 +68,77 @@ static void describe( HANDLE process, DWORD64 rip, char *out, size_t size )
     }
 }
 
+struct module { DWORD64 base, size; char name[64]; };
+static struct module mods[1024];
+static int nmods;
+
+static void load_modules( HANDLE process )
+{
+    HMODULE modules[1024];
+    DWORD needed, i;
+    MODULEINFO info;
+
+    if (!EnumProcessModulesEx( process, modules, sizeof(modules), &needed, LIST_MODULES_ALL )) return;
+    for (i = 0; i < needed / sizeof(HMODULE) && nmods < 1024; i++)
+    {
+        if (!GetModuleInformation( process, modules[i], &info, sizeof(info) )) continue;
+        mods[nmods].base = (DWORD64)info.lpBaseOfDll;
+        mods[nmods].size = info.SizeOfImage;
+        if (!GetModuleBaseNameA( process, modules[i], mods[nmods].name, sizeof(mods[nmods].name) ))
+            strcpy( mods[nmods].name, "?" );
+        nmods++;
+    }
+}
+
+static const struct module *find_module( DWORD64 addr )
+{
+    int i;
+    for (i = 0; i < nmods; i++) if (addr >= mods[i].base && addr - mods[i].base < mods[i].size) return &mods[i];
+    return NULL;
+}
+
+/* where a thread is, and the values on its stack that point into modules */
+static void scan_stack( HANDLE process, DWORD tid, SIZE_T bytes )
+{
+    HANDLE thread = OpenThread( THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT | THREAD_QUERY_INFORMATION, FALSE, tid );
+    CONTEXT ctx = { 0 };
+    const struct module *mod;
+    DWORD64 *stack;
+    SIZE_T got = 0, chunk, i;
+
+    if (!thread) { printf( "thread %#lx: OpenThread failed, error %lu\n", tid, GetLastError() ); return; }
+    if (!(stack = malloc( bytes ))) return;
+    ctx.ContextFlags = CONTEXT_CONTROL | CONTEXT_INTEGER;
+    if (SuspendThread( thread ) == (DWORD)-1 || !GetThreadContext( thread, &ctx ))
+    {
+        printf( "thread %#lx: no context, error %lu\n", tid, GetLastError() );
+        ResumeThread( thread );
+        CloseHandle( thread );
+        free( stack );
+        return;
+    }
+    /* page by page, as the stack may end before the requested size */
+    while (got < bytes)
+    {
+        chunk = 0x1000 - ((ctx.Rsp + got) & 0xfff);
+        if (chunk > bytes - got) chunk = bytes - got;
+        if (!ReadProcessMemory( process, (void *)(ctx.Rsp + got), (char *)stack + got, chunk, NULL )) break;
+        got += chunk;
+    }
+    ResumeThread( thread );
+    CloseHandle( thread );
+
+    mod = find_module( ctx.Rip );
+    printf( "thread %#lx: rip %#llx %s+%#llx, rsp %#llx, %#lx bytes of stack\n", tid, (unsigned long long)ctx.Rip,
+            mod ? mod->name : "?", (unsigned long long)(mod ? ctx.Rip - mod->base : 0),
+            (unsigned long long)ctx.Rsp, (unsigned long)got );
+    for (i = 0; i < got / sizeof(*stack); i++)
+        if ((mod = find_module( stack[i] )))
+            printf( "  +%#06lx  %s+%#llx\n", (unsigned long)(i * sizeof(*stack)), mod->name,
+                    (unsigned long long)(stack[i] - mod->base) );
+    free( stack );
+}
+
 int main( int argc, char **argv )
 {
     int samples = argc > 2 ? atoi( argv[2] ) : 200, interval = argc > 3 ? atoi( argv[3] ) : 10, s, i, shown = 0;
@@ -75,8 +150,15 @@ int main( int argc, char **argv )
 
     if (argc < 2) { printf( "usage: thread_rip_sampler.exe <process name substring> [samples] [interval ms]\n" ); return 2; }
     snap = CreateToolhelp32Snapshot( TH32CS_SNAPPROCESS | TH32CS_SNAPTHREAD, 0 );
+    /* the program of exactly that name if there is one ("RDR2.exe" is also in "PlayRDR2.exe") */
     for (BOOL ok = Process32First( snap, &pe ); ok; ok = Process32Next( snap, &pe ))
-        if (strstr( pe.szExeFile, argv[1] )) { pid = pe.th32ProcessID; break; }
+        if (!_stricmp( pe.szExeFile, argv[1] )) { pid = pe.th32ProcessID; break; }
+    if (!pid)
+    {
+        pe.dwSize = sizeof(pe);
+        for (BOOL ok = Process32First( snap, &pe ); ok; ok = Process32Next( snap, &pe ))
+            if (strstr( pe.szExeFile, argv[1] )) { pid = pe.th32ProcessID; break; }
+    }
     if (!pid) { printf( "sampler: no process with \"%s\" in its name\n", argv[1] ); return 1; }
     for (BOOL ok = Thread32First( snap, &te ); ok; ok = Thread32Next( snap, &te ))
         if (te.th32OwnerProcessID == pid && ntids < MAX_THREADS) tids[ntids++] = te.th32ThreadID;
@@ -85,6 +167,18 @@ int main( int argc, char **argv )
     {
         printf( "sampler: OpenProcess %#lx failed, error %lu\n", pid, GetLastError() );
         return 1;
+    }
+    if (argc > 2 && !strcmp( argv[2], "stack" ))
+    {
+        DWORD tid = argc > 3 ? strtoul( argv[3], NULL, 16 ) : 0;
+        SIZE_T bytes = argc > 4 ? strtoul( argv[4], NULL, 0 ) : 0x6000;
+
+        load_modules( process );
+        printf( "sampler: process %#lx (%s), %lu threads, %d modules\n", pid, pe.szExeFile, ntids, nmods );
+        for (i = 0; i < nmods; i++)
+            printf( "module %#llx %#llx %s\n", (unsigned long long)mods[i].base, (unsigned long long)mods[i].size, mods[i].name );
+        for (i = 0; i < (int)ntids; i++) if (!tid || tids[i] == tid) scan_stack( process, tids[i], bytes );
+        return 0;
     }
     if (argc > 3 && !strcmp( argv[2], "regs" ))
     {
