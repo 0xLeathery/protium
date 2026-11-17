@@ -7,8 +7,9 @@
 # "repairs" Windows installs: it swaps a game's Windows depots for its Mac ones (Left 4 Dead lost
 # its Windows binaries) and updates a Windows-only game to no depots at all, deleting every file
 # (Just Die Already and GTFO, twice). Both experiments here restart Steam, so each first sets the
-# manifests of the installed games it does not need aside, where Steam cannot see them: Steam
-# takes those games for not installed and leaves their folders alone.
+# manifests of the installed games it does not need aside, where Steam cannot see them, together
+# with what it has downloaded for them so far: Steam takes those games for not installed and
+# leaves their folders alone.
 #
 # Experiment 1, the per-game override Steam Play uses on Linux. Steam's client for the Mac has the
 # same code (CCompatManager): it reads userdata/<user>/config/compat.vdf, a list of
@@ -80,11 +81,12 @@ user_config() {
 }
 since_setup() { LC_ALL=C awk -v s="[$1]" 'substr($0, 1, 21) >= s' "$2"; }
 
-# Sets every installed game's manifest aside, except those of the app ids given
+# Sets every installed game's manifest aside, except those of the app ids given, and with it what
+# Steam has downloaded for the game so far (downloading/<id>, its state files and temp/<id>)
 set_aside_except() {
-    local keep=" $* 228980 " n=0 library manifest id dest   # 228980: Steam's shared redistributables
+    local keep=" $* 228980 " n=0 library manifest id dest item kind   # 228980: Steam's shared redistributables
     [ ! -s "$STATE_DIR/moved.tsv" ] || die "manifests are already set aside in $STATE_DIR; run restore first"
-    mkdir -p "$STATE_DIR/manifests"
+    mkdir -p "$STATE_DIR/manifests" "$STATE_DIR/downloads"
     : > "$STATE_DIR/moved.tsv"
     while IFS= read -r library; do
         for manifest in "$library"/steamapps/appmanifest_*.acf; do
@@ -95,6 +97,15 @@ set_aside_except() {
             mv "$manifest" "$dest"
             printf '%s\t%s\n' "$dest" "$manifest" >> "$STATE_DIR/moved.tsv"
             echo "set aside  $id  $(app_name "$dest")"
+            for item in "$library/steamapps/downloading/$id" "$library/steamapps/temp/$id" \
+                        "$library"/steamapps/downloading/state_"${id}"_*.patch; do
+                [ -e "$item" ] || continue
+                kind=$(basename "$(dirname "$item")")
+                dest="$STATE_DIR/downloads/$n-$kind-$(basename "$item")"
+                mv "$item" "$dest"
+                printf '%s\t%s\n' "$dest" "$item" >> "$STATE_DIR/moved.tsv"
+                echo "set aside  $id  its $kind/$(basename "$item")"
+            done
         done
         n=$((n + 1))
     done < <(libraries)
@@ -187,7 +198,7 @@ restore)
     while IFS=$'\t' read -r from to; do
         if [ -e "$to" ]; then echo "kept aside $from: $to exists now"; left=1; continue; fi
         mv "$from" "$to"
-        echo "put back   $(basename "$to")  $(app_name "$to")"
+        case $to in *.acf) echo "put back   $(basename "$to")  $(app_name "$to")" ;; *) echo "put back   $to" ;; esac
     done < "$STATE_DIR/moved.tsv"
     [ -n "$left" ] || rm "$STATE_DIR/moved.tsv"
     ;;
