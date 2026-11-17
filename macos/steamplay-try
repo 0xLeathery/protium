@@ -1,0 +1,99 @@
+#!/bin/bash
+#
+# Start a Windows game that Mac Steam installed, watch what becomes of it and say so: the loop
+# of "launch, wait, read the log" that finding a game's next failure takes, without anyone at
+# the keyboard.
+#
+#   macos/steamplay-try <app id> [--seconds N] [--exe <program>] [--keep] [game arguments...]
+#
+# It ends what an earlier run left in the game's prefix, starts the game through
+# macos/steamplay-run.sh (Mac Steam must be running), and looks every two seconds, for N seconds
+# (default 180), at the log and at the game's processes. It stops at the first of:
+#
+#   abort     native code gave up (Metal's validation, a driver's assert); the frames follow
+#   crash     an exception nobody handled; Wine's report follows
+#   hang      a thread waited a minute for a lock; where the samples are follows
+#   exited    the game's processes are gone, with nothing of the above in the log
+#   running   the game is still there after N seconds, which is as good as this can say
+#
+# and prints that word, the message boxes the game showed, what the graphics layers complained
+# of and the last lines of the game's part of the log. Then it ends the game, unless --keep.
+# The exit status is 0 for running, 1 for abort or crash, 2 for hang and 3 for exited.
+#
+# --exe names the program to start, relative to the game's folder or as a full path, for a game
+# whose launch entry is a launcher that waits for a click (The Last of Us Part II: tlou-ii.exe).
+# The game shows its windows and takes the screen as it would for a player: run this while
+# nobody is using the Mac.
+#
+# Environment: as for macos/steamplay-run.sh (WINE_INSTALL, STEAM_ROOT, STEAM_COMPAT_CONFIG for
+# the options Steam would send the game, ...).
+
+set -uo pipefail
+
+SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
+WINE_INSTALL=${WINE_INSTALL:-/Users/annon/projects/proton-macos-build/install-aarch64}
+STEAM_ROOT=${STEAM_ROOT:-$HOME/Library/Application Support/Steam}
+die() { echo "steamplay-try: error: $*" >&2; exit 64; }
+
+[ $# -ge 1 ] && [[ $1 =~ ^[0-9]+$ ]] || die "usage: steamplay-try <app id> [--seconds N] [--exe <program>] [--keep] [game arguments...]"
+appid=$1; shift
+seconds=180 keep=no
+while [ $# -gt 0 ]; do
+    case $1 in
+        --seconds) seconds=${2:?}; shift 2 ;;
+        --exe) export GAME_EXE=${2:?}; shift 2 ;;
+        --keep) keep=yes; shift ;;
+        *) break ;;
+    esac
+done
+
+library=
+while IFS= read -r path; do
+    [ -f "$path/steamapps/appmanifest_$appid.acf" ] && { library=$path; break; }
+done < <(sed -n 's/^[[:space:]]*"path"[[:space:]]*"\(.*\)"$/\1/p' "$STEAM_ROOT/steamapps/libraryfolders.vdf")
+[ -n "$library" ] || die "app $appid is not installed in any Steam library"
+installdir=$(sed -n 's/^[[:space:]]*"installdir"[[:space:]]*"\(.*\)"$/\1/p' "$library/steamapps/appmanifest_$appid.acf")
+game_dir="$library/steamapps/common/$installdir"
+compat="$library/steamapps/compatdata/$appid"
+log="$compat/steamplay-run.log"
+game_dir_win="Z:${game_dir//\//\\}\\"
+# the game's own processes: started from its folder, and not Proton's steam.exe that waits for them
+game_pids() { ps -axo pid=,command= | grep -F -- "$game_dir_win" | grep -v -e ' grep ' -e 'system32\\steam\.exe ' | awk '{print $1}'; }
+end_session() { [ -d "$compat/pfx" ] && WINEPREFIX="$compat/pfx" "$WINE_INSTALL/bin/wineserver" -k 2>/dev/null; }
+
+end_session
+sleep 1
+"$SCRIPT_DIR/steamplay-run.sh" "$appid" "$@" &
+runner=$!
+
+outcome=running seen=no start=$SECONDS
+while [ $((SECONDS - start)) -lt "$seconds" ]; do
+    sleep 2
+    if grep -qa '^wine: abort() in native code' "$log" 2>/dev/null; then outcome=abort; break; fi
+    if grep -qa -e '^wine: Unhandled' -e 'err:seh:NtRaiseException Exception frame is not in stack limits' -e 'virtual_setup_exception stack overflow' "$log" 2>/dev/null; then outcome=crash; break; fi
+    if ls "$compat"/steamplay-run.hang.*.txt >/dev/null 2>&1; then outcome=hang; break; fi
+    if [ -n "$(game_pids)" ]; then seen=yes
+    elif [ $seen = yes ] || ! kill -0 $runner 2>/dev/null; then outcome=exited; break; fi
+done
+elapsed=$((SECONDS - start))
+# an abort or a crash takes a moment to finish writing its report
+[ $outcome = abort ] || [ $outcome = crash ] && sleep 3
+
+echo "$outcome after ${elapsed}s: app $appid ($installdir), log $log"
+if [ -f "$log" ]; then
+    grep -a 'trace:msgbox:MSGBOX_OnInit' "$log" | sed 's/^.*MSGBOX_OnInit /message box: /' | cut -c1-300 | sort -u
+    grep -a -e 'failed assertion' -e '^MTL' -e 'fixme:vkd3d-proton' -e 'err:vkd3d-proton' -e '^err:  ' "$log" | cut -c1-300 | sort | uniq -c | sort -rn | head -12
+    case $outcome in
+        abort) grep -a '^wine:  ' "$log" | head -40 ;;
+        crash) grep -a -A14 -e '^wine: Unhandled' -e '^Unhandled exception' "$log" | head -40
+               grep -a -e 'stack overflow' -e 'not in stack limits' "$log" | head -4 ;;
+        hang)  grep -a 'wait timed out' "$log" | head -4; ls -l "$compat"/steamplay-run.hang.*.txt ;;
+    esac
+    echo "-- the log's last lines, without module loads and fixmes:"
+    grep -a -v -e 'trace:loaddll' -e ':fixme:' "$log" | tail -12 | cut -c1-240
+fi
+if [ $keep = no ]; then
+    end_session
+    kill $runner 2>/dev/null
+fi
+case $outcome in running) exit 0 ;; abort|crash) exit 1 ;; hang) exit 2 ;; *) exit 3 ;; esac
