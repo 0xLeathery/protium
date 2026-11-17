@@ -11,15 +11,15 @@ change: Mac Steam itself, a vendor, or code we do not write).
 
 | Feature | How Linux does it | Here | What bringing it in takes |
 |---|---|---|---|
-| Install the Windows build | Steam Play enables it per game | **partial**: console switch `@sSteamCmdForcePlatformType windows` + `app_install`; forgotten on restart, and Steam then swaps or deletes Windows files | Persisting the switch: `steam_dev.cfg` (experiment: `tests/steam-platform-persist-test.sh`), or the per-game platform override Steam Play uses (`CCompatManager` is in the Mac client) |
-| Play from the game's own library entry | Steam starts the compatibility tool | **partial**: `steamplay-launch` as a launch option (run by hand: works; from Steam's Play button: untested). Today: non-Steam shortcuts (`steamplay sync`), a second entry per game | Confirm from Steam; have the tool write the launch option per game; then drop the shortcuts |
+| Install the Windows build | Steam Play enables it per game | **works, for all games at once**: the switch `@sSteamCmdForcePlatformType windows` in Steam's `steam_dev.cfg` holds across restarts (`tests/steam-platform-persist-test.sh`, 2026-11-17: Left 4 Dead and Just Die Already got their Windows depots back at startup by themselves). Without it Steam swaps or deletes Windows files when it starts. Per game it does not work: Steam Play's platform overrides (`compat.vdf`) are ignored by the Mac client | Have the installer write `steam_dev.cfg`. Open: Mac-native games become Windows builds too; which of the two file locations Steam reads |
+| Play from the game's own library entry | Steam starts the compatibility tool | **works**: with the switch on, Steam's Play runs the game's launch option, `steamplay-launch` (set by `steamplay hook`), with the Windows executable it chose (IRON NEST, 2026-11-17: main menu, tracked as running). The non-Steam shortcuts (`steamplay sync`) are no longer needed | Run `steamplay hook` for new installs automatically |
 | Compatibility tool list, per-game tool choice | Steam Play settings | **blocked**: Mac Steam hides Steam Play and answers "Invalid platform" to tool mappings | Not needed with one runtime |
 | Steamworks API (login, ownership, Steam DRM, stats, achievements) | lsteamclient to the Linux client | **works**: lsteamclient to Mac Steam's client library (check-wave5 item 10; IRON NEST, Left 4 Dead stats, GTFO login) | — |
 | Playtime and "running" status | Steam tracks the tool's processes | **works** (Steam's log: game process added/removed) | — |
 | Online play, Steam networking | through the client | **partial**: GTFO's network layer and its PlayFab login came up; lobbies and matches untested | Play a match |
 | Steam Cloud, by API | through the client | **works** in one case (Left 4 Dead saved its config to the cloud) | Test more games |
-| Steam Cloud, files Steam syncs itself (Auto-Cloud) | Steam maps Windows save paths into the prefix | **untested**; likely missing, since that mapping is Steam Play's | Test with a game that uses it; if missing, sync the paths ourselves around a launch |
-| Overlay (Shift+Tab), screenshots, Remote Play, broadcast | Steam injects its overlay library into the Wine process | **missing**: shortcuts are not started by Steam, and our signed loader ignores injected libraries | Launch from Steam (above), a compiled launcher that passes the injection on, the entitlement that allows it, then see whether Valve's overlay can draw over our Metal output |
+| Steam Cloud, files Steam syncs itself (Auto-Cloud) | Steam maps Windows save paths into the prefix | **missing**: Steam runs the sync at launch but cannot place the files ("Unable to resolve path with root WinAppDataLocalLow", IRON NEST, cloud log 2026-11-17) | Give Steam the paths it looks for (links from where it resolves Windows roots into the prefix), or sync those folders ourselves around a launch |
+| Overlay (Shift+Tab), screenshots, Remote Play, broadcast | Steam injects its overlay library into the Wine process | **missing**: Steam now starts the game itself, but the launcher is a shell script, which macOS strips the injection from, and our signed loader ignores injected libraries | A compiled launcher that passes the injection on, the entitlement that allows it, then see whether Valve's overlay can draw over our Metal output |
 | Steam Input (controller layouts, remapping) | virtual controllers Proton reads | **untested**; controllers work directly instead (below) | After the overlay |
 | Install scripts (first-run redistributables) | Steam runs them in the prefix | **missing** | Run `installscript.vdf` ourselves at first launch, or rely on Wine's built-in runtimes |
 | Shader pre-caching | Steam downloads compiled shaders | **blocked** (Steam-side, Vulkan pipelines); DXMT and Metal keep their own caches | — |
@@ -64,8 +64,8 @@ change: Mac Steam itself, a vendor, or code we do not write).
 | Updates of the runtime | **missing** | An update check in the installer app |
 
 ## Order of investigation
-1. Persisting the Windows switch (`tests/steam-platform-persist-test.sh`), since restarts destroy installs.
-2. Play from the real entry (`steamplay-launch` from Steam), then remove the shortcuts.
+1. Done 2026-11-17: the Windows switch persists through `steam_dev.cfg`, and Play works from the real entry. Left of it: which file location Steam reads, what to do about Mac-native games, and setting the launch option on new installs by itself.
+2. Auto-Cloud: where Mac Steam looks for Windows save paths.
 3. The overlay: launcher as a program, the loader's entitlement, whether Valve's overlay draws.
 4. Port the `proton` launcher script; add wine-mono, wine-gecko and Proton's fonts to the bundle.
 5. Auto-Cloud, install scripts, a match in an online game.

@@ -45,6 +45,14 @@
 # Already was not asked for again, and Play on IRON NEST failed with AppError_29 (Invalid
 # platform) without the probe tool being started. The Mac client does not act on overrides.
 #
+# Result of experiment 2 (2026-11-17): it works. Four seconds after Steam started, with nothing
+# typed into its console, the content log had "AppID 500 config changed : added depots 503" and
+# "removed depots 515" (Left 4 Dead back on its Windows depot, binkw32.dll back a second later) and
+# "AppID 979070 config changed : added depots 979071" (Just Die Already, wiped before, downloading
+# again by itself). With the switch on, Play on IRON NEST's own library entry, whose launch option
+# was macos/steamplay-launch (macos/steamplay hook), started the game through that script. Which
+# of the two steam_dev.cfg files Steam reads is not yet known: both were written.
+#
 # Reading "status" after experiment 1 (Left 4 Dead has its Mac depot 515 when it starts):
 #   - "AppID 500 config changed : added depots 503" (its Windows depot): the override works at
 #     startup. A download starting for Just Die Already says the same for a Windows-only game.
