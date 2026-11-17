@@ -60,9 +60,10 @@ maps games that are not mapped yet (new purchases). If Steam is running without 
 compatibility log shows our tools ignored or never registered), installs are seconds from being
 removed: it tells the user, stops Steam, repairs and starts Steam again. "guard install" copies
 this script and the tools to ~/Library/Application Support/SteamPlay, on the internal disk, where
-a background job may read them, and adds a LaunchAgent that runs the guard at login, whenever the
-switch file, the tools folder, Steam's config.vdf (written when Steam quits) or its
-compatibility log (written when Steam starts) change, and every five minutes. It logs what it did to ~/Library/Logs/SteamPlay/guard.log.
+a background job may read them, and adds a LaunchAgent that keeps "guard watch" running from
+login on: a small process that looks every two seconds and runs the guard when the switch or a
+tool is gone, when Steam starts (its compatibility log grows) or its settings change, and every
+five minutes. It logs what it did to ~/Library/Logs/SteamPlay/guard.log.
 
 Environment: STEAM_ROOT (default ~/Library/Application Support/Steam), STEAMPLAY_APP (default
 <build root>/steamplay-apps/Steam Play.app), STEAMPLAY_HOME (default ~/Library/Application
@@ -842,6 +843,37 @@ def cmd_guard():
     return 0
 
 
+def cmd_guard_watch():
+    """The guard as a process that stays: looks every two seconds, which costs a few file checks,
+    and runs the guard proper when the switch or a tool is gone, when Steam's compatibility log
+    has grown (Steam started, or is busy), when Steam's settings or app cache changed, and every
+    five minutes. launchd's own file watching proved too slow and unsure for this: up to a
+    minute for a deleted file, where Steam removes installs within half a minute of a bad start."""
+    watched = [os.path.join(STEAM_ROOT, "logs", "compat_log.txt"), os.path.join(STEAM_ROOT, "config", "config.vdf"),
+               os.path.join(STEAM_ROOT, "appcache", "appinfo.vdf")]
+
+    def stamps():
+        out = []
+        for path in watched:
+            try:
+                st = os.stat(path)
+                out.append((st.st_mtime, st.st_size))
+            except OSError:
+                out.append(None)
+        return out
+
+    seen, last = None, 0
+    while True:
+        try:
+            now = stamps()
+            if switch_state()[1] != "linux" or not tools_installed() or now != seen or time.time() - last > 300:
+                cmd_guard()
+                seen, last = stamps(), time.time()
+        except Exception as e:      # the watch must outlive anything a pass trips over
+            guard_log("PROBLEM: %s: %s" % (type(e).__name__, e))
+        time.sleep(2)
+
+
 def cmd_guard_install():
     if install_tools() is None and not tools_installed():
         die("%s is missing or not writable; run setup first" % TOOLS_DIR)
@@ -857,14 +889,10 @@ def cmd_guard_install():
     python = "/usr/bin/python3" if os.access("/usr/bin/python3", os.X_OK) else sys.executable
     plist = {
         "Label": GUARD_LABEL,
-        "ProgramArguments": [python, script, "guard"],
+        "ProgramArguments": [python, script, "guard", "watch"],
         "EnvironmentVariables": {"STEAMPLAY_HOME": HOME_DIR, "STEAM_ROOT": STEAM_ROOT, "STEAMPLAY_TOOLS_DIR": TOOLS_DIR},
         "RunAtLoad": True,
-        "StartInterval": 300,
-        "ThrottleInterval": 3,
-        # the compatibility log is the one Steam writes first when it starts
-        "WatchPaths": [SWITCH_FILES[1], TOOLS_DIR, os.path.join(STEAM_ROOT, "config", "config.vdf"),
-                       os.path.join(STEAM_ROOT, "logs", "compat_log.txt")],
+        "KeepAlive": True,
         "ProcessType": "Background",
         "StandardOutPath": os.path.join(os.path.dirname(GUARD_LOG), "guard.out"),
         "StandardErrorPath": os.path.join(os.path.dirname(GUARD_LOG), "guard.out"),
@@ -878,7 +906,7 @@ def cmd_guard_install():
     r = subprocess.run(["/bin/launchctl", "bootstrap", domain, GUARD_PLIST])
     if r.returncode:
         die("launchctl could not load %s" % GUARD_PLIST)
-    print("the guard is installed: %s runs %s guard" % (GUARD_PLIST, script))
+    print("the guard is installed: %s keeps %s guard watch running" % (GUARD_PLIST, script))
     print("it logs to %s" % GUARD_LOG)
 
 
@@ -937,6 +965,8 @@ def main(argv):
         cmd_prefer(int(argv[1]), argv[2])
     elif argv == ["guard"]:
         sys.exit(cmd_guard())
+    elif argv == ["guard", "watch"]:
+        cmd_guard_watch()
     elif argv == ["guard", "install"]:
         cmd_guard_install()
     elif argv == ["guard", "remove"]:
