@@ -130,20 +130,18 @@ since_setup() { LC_ALL=C awk -v s="[$1]" 'substr($0, 1, 21) >= s' "$2"; }
 # Steam has downloaded for the game so far (downloading/<id>, its state files and temp/<id>)
 set_aside_except() {
     local keep=" $* 228980 " n=0 library manifest id dest item kind   # 228980: Steam's shared redistributables
-    mkdir -p "$STATE_DIR"
-    date '+%Y-%m-%d %H:%M:%S' > "$STATE_DIR/setup-time"
-    if [ -s "$STATE_DIR/moved.tsv" ]; then   # a second experiment before restore: nothing more to move
-        echo "manifests are already set aside ($(grep -c 'appmanifest_' "$STATE_DIR/moved.tsv") games): left as they are"
-        return 0
-    fi
     mkdir -p "$STATE_DIR/manifests" "$STATE_DIR/downloads"
-    : > "$STATE_DIR/moved.tsv"
+    date '+%Y-%m-%d %H:%M:%S' > "$STATE_DIR/setup-time"
+    # a later experiment before restore adds to what is aside; what is aside is not in a library
+    [ -s "$STATE_DIR/moved.tsv" ] || : > "$STATE_DIR/moved.tsv"
+    n=$(wc -l < "$STATE_DIR/moved.tsv" | tr -d ' ')
     while IFS= read -r library; do
         for manifest in "$library"/steamapps/appmanifest_*.acf; do
             [ -f "$manifest" ] || continue
             id=$(basename "$manifest" .acf); id=${id#appmanifest_}
             case "$keep" in *" $id "*) echo "left       $id  $(app_name "$manifest")"; continue ;; esac
             dest="$STATE_DIR/manifests/$n-$(basename "$manifest")"
+            [ ! -e "$dest" ] || dest="$dest.$(date +%s)"
             mv "$manifest" "$dest"
             printf '%s\t%s\n' "$dest" "$manifest" >> "$STATE_DIR/moved.tsv"
             echo "set aside  $id  $(app_name "$dest")"
@@ -152,6 +150,7 @@ set_aside_except() {
                 [ -e "$item" ] || continue
                 kind=$(basename "$(dirname "$item")")
                 dest="$STATE_DIR/downloads/$n-$kind-$(basename "$item")"
+                [ ! -e "$dest" ] || dest="$dest.$(date +%s)"
                 mv "$item" "$dest"
                 printf '%s\t%s\n' "$dest" "$item" >> "$STATE_DIR/moved.tsv"
                 echo "set aside  $id  its $kind/$(basename "$item")"
@@ -226,6 +225,22 @@ setup-steamplay)
     echo "experiment: steamplay" > "$STATE_DIR/experiment"
     echo "Now start Steam, wait a minute, and run: $0 status"
     ;;
+setup-register)
+    # Step 1 of the second Steam Play attempt: are tools in /usr/local/share/steam/
+    # compatibilitytools.d registered? Every game is set aside first, so there is nothing to lose.
+    steam_running && die "quit Steam first (Steam > Quit Steam)"
+    "$STEAMPLAY" tools || exit 1
+    set_aside_except
+    printf '%s\n' '@sSteamCmdForcePlatformType linux' > "${CFG_FILES[0]}"
+    echo "linux in   ${CFG_FILES[0]} (only)"
+    if [ -f "${CFG_FILES[1]}" ]; then
+        mv "${CFG_FILES[1]}" "$STATE_DIR/steam_dev.cfg.bundle"
+        echo "moved      ${CFG_FILES[1]} to $STATE_DIR"
+    fi
+    date '+%Y-%m-%d %H:%M:%S' > "$STATE_DIR/setup-time"
+    echo "experiment: register" > "$STATE_DIR/experiment"
+    echo "Now start Steam, wait a minute, and run: $0 status"
+    ;;
 status)
     steam_running && echo "Steam is running" || echo "Steam is not running"
     [ -f "$STATE_DIR/experiment" ] && cat "$STATE_DIR/experiment"
@@ -258,9 +273,13 @@ status)
             | LC_ALL=C grep -E "config changed|update started|finished update|update canceled|finished uninstall" \
             | cut -c1-200 || echo "  (nothing)"
     fi
-    echo "== Steam's compatibility log since setup"
+    echo "== Steam's compatibility log since setup: tools, tool lists, our mappings"
     if [ -f "$STEAM_ROOT/logs/compat_log.txt" ]; then
-        since_setup "$since" "$STEAM_ROOT/logs/compat_log.txt" | cut -c1-200 | grep . || echo "  (nothing)"
+        since_setup "$since" "$STEAM_ROOT/logs/compat_log.txt" \
+            | LC_ALL=C grep -E "Client version|proton-macos|macos-native|tool list|Ignoring tool|Unmapping|Processing" \
+            | LC_ALL=C grep -v "Registering tool proton_[0-9]|Registering tool proton_experimental" | cut -c1-200 | grep . \
+            || echo "  (nothing)"
+        echo "  ($(since_setup "$since" "$STEAM_ROOT/logs/compat_log.txt" | LC_ALL=C grep -c "Registering tool") tools registered in all)"
     fi
     echo "== the probe tool's log since setup (an entry means Steam started the tool)"
     if [ -f "$PROBE_LOG" ]; then

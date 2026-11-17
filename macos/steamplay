@@ -392,12 +392,20 @@ def cmd_hook(appids, remove, dry_run):
 
 TOOLS_SRC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "steamplay-tools")
 TOOLS = sorted(t for t in os.listdir(TOOLS_SRC)) if os.path.isdir(TOOLS_SRC) else []
+# Mac Steam looks for tools only in /usr/share/steam, /usr/local/share/steam (each with a
+# compatibilitytools.d), $STEAM_EXTRA_COMPAT_TOOLS_PATHS and the folder of its own client library
+# inside its app bundle (steamclient.dylib's CLoadLocalToolListJob). /usr/local is the one outside
+# everything Steam manages, so client updates do not touch it.
+TOOLS_DIR = os.environ.get("STEAMPLAY_TOOLS_DIR", "/usr/local/share/steam/compatibilitytools.d")
 
 
 def cmd_tools():
     if steam_running():
         die("quit Steam first: it reads its tools when it starts")
-    dest = os.path.join(STEAM_ROOT, "compatibilitytools.d")
+    dest = TOOLS_DIR
+    if not os.path.isdir(dest) or not os.access(dest, os.W_OK):
+        die("%s is missing or not writable. Make it once, as an administrator:\n"
+            "    sudo mkdir -p %s && sudo chown \"$USER\" %s" % (dest, dest, dest))
     for tool in TOOLS:
         target = os.path.join(dest, tool)
         if os.path.isdir(target):
