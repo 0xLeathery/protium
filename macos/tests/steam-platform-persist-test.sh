@@ -37,7 +37,13 @@
 #
 # A run: quit Steam, a setup, start Steam and let it settle for a minute, "status", and for
 # experiment 1 press Play on IRON NEST's own library entry and run "status" again; then quit
-# Steam and "restore". While manifests are aside, do not press Install on those games.
+# Steam and "restore". While manifests are aside, do not press Install on those games. The second
+# setup can follow the first without a restore between them ("clean" first, so that one experiment
+# does not hide the other): the manifests stay aside.
+#
+# Result of experiment 1 (2026-11-17): nothing. Left 4 Dead kept its Mac depot at startup, Just Die
+# Already was not asked for again, and Play on IRON NEST failed with AppError_29 (Invalid
+# platform) without the probe tool being started. The Mac client does not act on overrides.
 #
 # Reading "status" after experiment 1 (Left 4 Dead has its Mac depot 515 when it starts):
 #   - "AppID 500 config changed : added depots 503" (its Windows depot): the override works at
@@ -85,7 +91,12 @@ since_setup() { LC_ALL=C awk -v s="[$1]" 'substr($0, 1, 21) >= s' "$2"; }
 # Steam has downloaded for the game so far (downloading/<id>, its state files and temp/<id>)
 set_aside_except() {
     local keep=" $* 228980 " n=0 library manifest id dest item kind   # 228980: Steam's shared redistributables
-    [ ! -s "$STATE_DIR/moved.tsv" ] || die "manifests are already set aside in $STATE_DIR; run restore first"
+    mkdir -p "$STATE_DIR"
+    date '+%Y-%m-%d %H:%M:%S' > "$STATE_DIR/setup-time"
+    if [ -s "$STATE_DIR/moved.tsv" ]; then   # a second experiment before restore: nothing more to move
+        echo "manifests are already set aside ($(grep -c 'appmanifest_' "$STATE_DIR/moved.tsv") games): left as they are"
+        return 0
+    fi
     mkdir -p "$STATE_DIR/manifests" "$STATE_DIR/downloads"
     : > "$STATE_DIR/moved.tsv"
     while IFS= read -r library; do
