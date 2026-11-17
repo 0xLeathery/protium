@@ -61,8 +61,8 @@ compatibility log shows our tools ignored or never registered), installs are sec
 removed: it tells the user, stops Steam, repairs and starts Steam again. "guard install" copies
 this script and the tools to ~/Library/Application Support/SteamPlay, on the internal disk, where
 a background job may read them, and adds a LaunchAgent that runs the guard at login, whenever the
-switch file, the tools folder or Steam's config.vdf change (Steam writes that when it quits),
-and every five minutes. It logs what it did to ~/Library/Logs/SteamPlay/guard.log.
+switch file, the tools folder, Steam's config.vdf (written when Steam quits) or its
+compatibility log (written when Steam starts) change, and every five minutes. It logs what it did to ~/Library/Logs/SteamPlay/guard.log.
 
 Environment: STEAM_ROOT (default ~/Library/Application Support/Steam), STEAMPLAY_APP (default
 <build root>/steamplay-apps/Steam Play.app), STEAMPLAY_HOME (default ~/Library/Application
@@ -812,6 +812,11 @@ def cmd_guard():
             guard_log("the tools were missing: installed again in %s" % TOOLS_DIR)
     if steam_running():
         state = session_state()
+        for _ in range(6):      # Steam has only just started: its log says within seconds
+            if state != "unknown" or not steam_running():
+                break
+            time.sleep(2)
+            state = session_state()
         if state in ("ignored", "no-tools"):
             guard_log("Steam is running without Steam Play (%s): stopping it before it removes installs" % state)
             if not fake:
@@ -856,7 +861,10 @@ def cmd_guard_install():
         "EnvironmentVariables": {"STEAMPLAY_HOME": HOME_DIR, "STEAM_ROOT": STEAM_ROOT, "STEAMPLAY_TOOLS_DIR": TOOLS_DIR},
         "RunAtLoad": True,
         "StartInterval": 300,
-        "WatchPaths": [SWITCH_FILES[1], TOOLS_DIR, os.path.join(STEAM_ROOT, "config", "config.vdf")],
+        "ThrottleInterval": 3,
+        # the compatibility log is the one Steam writes first when it starts
+        "WatchPaths": [SWITCH_FILES[1], TOOLS_DIR, os.path.join(STEAM_ROOT, "config", "config.vdf"),
+                       os.path.join(STEAM_ROOT, "logs", "compat_log.txt")],
         "ProcessType": "Background",
         "StandardOutPath": os.path.join(os.path.dirname(GUARD_LOG), "guard.out"),
         "StandardErrorPath": os.path.join(os.path.dirname(GUARD_LOG), "guard.out"),
