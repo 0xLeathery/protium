@@ -11,8 +11,8 @@
 # it finds the game through Steam's library folders and the app's manifest, gives it a prefix
 # in <library>/steamapps/compatdata/<app id>/pfx as Proton does, puts Valve's Windows client
 # DLLs where steam_api looks for them, and starts the game through Proton's steam.exe, so
-# that lsteamclient connects it to the running Mac Steam (login, ownership, overlay and
-# playtime).
+# that lsteamclient connects it to the running Mac Steam (login, ownership, stats and
+# playtime; not the overlay, which Steam would have to inject into the game's process).
 #
 # Environment overrides:
 #   WINE_INSTALL    the bundle (default /Users/annon/projects/proton-macos-build/install-aarch64)
