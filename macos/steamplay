@@ -2,7 +2,9 @@
 """Steam Play on the Mac: Windows games that Mac Steam installed, played from Steam's library.
 
     macos/steamplay list              Windows games in Steam's libraries
-    macos/steamplay sync [--dry-run]  give each one a shortcut in Steam's library (Steam quit)
+    macos/steamplay sync [--dry-run] [--remove]
+                                      give each one a shortcut in Steam's library, or take the
+                                      shortcuts out again (Steam quit)
     macos/steamplay play <app id>     start one now, through Steam Play.app
     macos/steamplay hook [--dry-run] [--remove] [app id...]
                                       make each one's own library entry start it (Steam quit)
@@ -248,17 +250,22 @@ def steam_running():
     return subprocess.run(["pgrep", "-x", "steam_osx"], stdout=subprocess.DEVNULL).returncode == 0
 
 
-def cmd_sync(dry_run):
-    if not os.path.isdir(STEAMPLAY_APP):
+def cmd_sync(dry_run, remove=False):
+    if not remove and not os.path.isdir(STEAMPLAY_APP):
         die("no %s: make it with macos/make-steamplay-app.sh" % STEAMPLAY_APP)
     if not dry_run and steam_running():
         die("quit Steam first: it rewrites its shortcuts when it quits")
     cfg = steam_user_config()
     path = os.path.join(cfg, "shortcuts.vdf")
-    kept = [s for s in read_shortcuts(path) if TAG not in s.get("tags", {}).values()]
+    before = list(read_shortcuts(path))
+    kept = [s for s in before if TAG not in s.get("tags", {}).values()]
     exe = '"%s"' % OPEN
     made = []
-    for appid, name, _, folder in windows_games():
+    if remove:
+        for s in before:
+            if s not in kept:
+                print("%s %s" % ("would remove" if dry_run else "remove", s.get("AppName", "?")))
+    for appid, name, _, folder in ([] if remove else windows_games()):
         sid = shortcut_id(exe, name)
         art = artwork(appid)
         made.append({
@@ -334,7 +341,7 @@ def main(argv):
     if len(argv) >= 1 and argv[0] == "list":
         cmd_list()
     elif len(argv) >= 1 and argv[0] == "sync":
-        cmd_sync("--dry-run" in argv[1:])
+        cmd_sync("--dry-run" in argv[1:], "--remove" in argv[1:])
     elif len(argv) == 2 and argv[0] == "play" and argv[1].isdigit():
         cmd_play(int(argv[1]))
     elif len(argv) >= 1 and argv[0] == "hook" and all(a.isdigit() or a in ("--dry-run", "--remove") for a in argv[1:]):
