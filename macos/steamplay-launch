@@ -1,0 +1,44 @@
+#!/bin/bash
+#
+# Steam launch option for a Windows game in Mac Steam's own library entry, so that its Play button
+# runs the game under the macOS Proton build. In the game's Properties > General > Launch Options:
+#
+#   "/Users/annon/projects/Proton/macos/steamplay-launch" %command%
+#
+# Steam replaces %command% with the game's command line (the Windows executable of the launch
+# entry it chose and that entry's arguments) and starts the line itself, with the app id in
+# SteamAppId. So Steam, not this script, picks the executable, sees the game as running until it
+# exits, counts its playtime and does what it does around a launch. This script hands the
+# executable to macos/steamplay-run.sh, which does the rest (prefix, Valve's client DLLs, Proton's
+# steam.exe).
+#
+# Steam only offers Play for a Windows game while it takes the Mac for a Windows machine
+# (@sSteamCmdForcePlatformType windows), see steamplay-run.sh.
+#
+# Not started by Steam (no SteamAppId), the app id is the one whose manifest names the install
+# folder that holds the executable.
+
+set -euo pipefail
+
+SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
+die() { echo "steamplay-launch: error: $*" >&2; exit 1; }
+
+[ $# -ge 1 ] || die 'usage, as a Steam launch option: "<this script>" %command%'
+exe=$1; shift
+[ -f "$exe" ] || die "no executable $exe"
+
+appid=${SteamAppId:-}
+if [ -z "$appid" ]; then
+    library=${exe%%/steamapps/common/*}
+    rest=${exe#*/steamapps/common/}
+    [ "$library" != "$exe" ] || die "$exe is not in a Steam library, and SteamAppId is not set"
+    for manifest in "$library"/steamapps/appmanifest_*.acf; do
+        if grep -q "\"installdir\"[[:space:]]*\"${rest%%/*}\"" "$manifest"; then
+            appid=$(basename "$manifest" .acf); appid=${appid#appmanifest_}
+            break
+        fi
+    done
+    [ -n "$appid" ] || die "no app manifest in $library/steamapps for ${rest%%/*}"
+fi
+
+GAME_EXE=$exe exec "$SCRIPT_DIR/steamplay-run.sh" "$appid" "$@"

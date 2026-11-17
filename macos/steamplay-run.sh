@@ -19,8 +19,9 @@
 #   STEAM_ROOT      Mac Steam's data folder (default ~/Library/Application Support/Steam)
 #   WIN_STEAM_DLLS  a folder with Valve's Windows steamclient.dll and steamclient64.dll, which
 #                   Mac Steam does not ship (Linux Steam has them in legacycompat/)
-#   GAME_EXE        the executable, relative to the install folder, when the largest .exe in
-#                   its top folder is not the game
+#   GAME_EXE        the executable, relative to the install folder or as a full path, when the
+#                   largest .exe in its top folder is not the game (macos/steamplay-launch gives
+#                   the one Steam chose)
 #   STEAMPLAY_LOG   where Wine's output goes (default <prefix>/../steamplay-run.log)
 
 set -euo pipefail
@@ -51,7 +52,8 @@ installdir=$(sed -n 's/^[[:space:]]*"installdir"[[:space:]]*"\(.*\)"$/\1/p' "$ma
 game_dir="$library/steamapps/common/$installdir"
 [ -d "$game_dir" ] || die "no install folder $game_dir"
 
-if [ -n "${GAME_EXE:-}" ]; then exe="$game_dir/$GAME_EXE"
+if [ -n "${GAME_EXE:-}" ]; then
+    case $GAME_EXE in /*) exe=$GAME_EXE ;; *) exe="$game_dir/$GAME_EXE" ;; esac
 else
     exe=$(find "$game_dir" -maxdepth 1 -iname '*.exe' ! -iname 'UnityCrashHandler*' ! -iname '*setup*' \
           ! -iname 'unins*' -exec stat -f '%z %N' {} + | sort -rn | head -1 | cut -d' ' -f2-)
