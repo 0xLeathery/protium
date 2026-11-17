@@ -47,6 +47,16 @@
 # their Windows depots); Kerbal changed to its Mac depot (220202), not a Linux one; after Play, the
 # probe log names the tool Steam started and its verb. A Linux depot or removed files: stop.
 #
+# Result of experiment 3 (2026-11-17): Steam Play does switch on with "linux": the compatibility
+# log shows Valve's own tool list processed (Proton versions registered from app 891390), the
+# Steam Linux Runtime mapped to Valve's games, and our mappings read ("Mapping AppID 500 to tool
+# proton-macos"). But Steam never scanned compatibilitytools.d (no "Processing local tool list" or
+# "No local tool list detected" in any log), so our two tools did not exist for it, and it took
+# the games mapped to them for native Linux ones: Left 4 Dead lost its Windows depot 503 and Just
+# Die Already all of its files, within four seconds of startup. Back on the windows switch, Steam
+# restored both at its next start. What starts the local tool scan on the Mac client
+# (CLoadLocalToolListJob, base folder from 0xa494e8 + "/compatibilitytools.d") is not known.
+#
 # For all:
 #
 #   steam-platform-persist-test.sh status             what Steam did since setup (reads only)
