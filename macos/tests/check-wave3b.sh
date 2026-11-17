@@ -108,7 +108,7 @@ CROSS_ARCH_ENTITLEMENT=com.apple.developer.cross-architecture-support
 WAVE_FILES="loader/main.c dlls/ntdll/unix/loader.c dlls/ntdll/unix/system.c dlls/ntdll/unix/virtual.c dlls/winemac.drv/macdrv.h dlls/winemac.drv/window.c dlls/uiautomationcore/uia_client.c dlls/winegstreamer/media-converter/media-converter.h dlls/winebus.sys/bus_iohid.c"
 # Wine files that later waves change, which check-wave5.sh checks the guards of (PE code, guarded
 # by configure's WINE_MACOS_AARCH64, and configure.ac itself)
-LATER_WAVE_FILES="dlls/mfreadwrite/reader.c configure.ac dlls/winegstreamer/video_decoder.c dlls/winegstreamer/video_processor.c dlls/ntdll/unix/signal_arm64.c dlls/winemac.drv/cocoa_display.m"
+LATER_WAVE_FILES="dlls/mfreadwrite/reader.c configure.ac dlls/winegstreamer/video_decoder.c dlls/winegstreamer/video_processor.c dlls/ntdll/unix/signal_arm64.c dlls/winemac.drv/cocoa_display.m programs/tabtip/tabtip.c"
 # The build scripts stop below 20 GB free by default; 10 GB is the limit agreed for this work.
 export MIN_FREE_GB=${MIN_FREE_GB:-10}
 # A new prefix would otherwise wait on the Mono and Gecko install dialogs.
