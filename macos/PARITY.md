@@ -11,17 +11,17 @@ change: Mac Steam itself, a vendor, or code we do not write).
 
 | Feature | How Linux does it | Here | What bringing it in takes |
 |---|---|---|---|
-| Install the Windows build | Steam Play enables it per game | **works, for all games at once**: the switch `@sSteamCmdForcePlatformType windows` in Steam's `steam_dev.cfg` holds across restarts (`tests/steam-platform-persist-test.sh`, 2026-11-17: Left 4 Dead and Just Die Already got their Windows depots back at startup by themselves). Without it Steam swaps or deletes Windows files when it starts. Per game it does not work: Steam Play's platform overrides (`compat.vdf`) are ignored by the Mac client | Have the installer write `steam_dev.cfg`. Open: Mac-native games become Windows builds too; which of the two file locations Steam reads |
-| Play from the game's own library entry | Steam starts the compatibility tool | **works**: with the switch on, Steam's Play runs the game's launch option, `steamplay-launch` (set by `steamplay hook`), with the Windows executable it chose (IRON NEST, 2026-11-17: main menu, tracked as running). The non-Steam shortcuts (`steamplay sync`) are no longer needed | Run `steamplay hook` for new installs automatically |
-| Compatibility tool list, per-game tool choice; native builds win | Steam Play settings | **missing**: Mac Steam has Linux's Steam Play but enables it only while its platform is "linux"; then it registers Valve's tools and reads per-game mappings, but does not load tools from `compatibilitytools.d`, so games mapped to ours were treated as Linux games and lost their Windows files (2026-11-17, `tests/steam-platform-persist-test.sh` experiment 3). Meanwhile Mac-native games are kept aside from the Windows switch | Find what starts the client's local tool scan; or reuse a registered Valve tool entry with our launcher in its place |
+| Install the Windows build | Steam Play enables it per game | **works**: Steam Play itself. Mac Steam has Linux's Steam Play and runs it while its platform is "linux" (`@sSteamCmdForcePlatformType linux` in the `steam_dev.cfg` next to its executables); it then installs each game's depots by the game's compatibility tool and keeps them across restarts (rollout 2026-11-17: GTFO re-fetched its Windows depot by itself, nothing else changed). `steamplay setup` writes the switch | A guard: if the switch or the tools go missing, Steam removes Windows installs at its next start (`steamplay status` says so) |
+| Play from the game's own library entry | Steam starts the compatibility tool | **works**: Steam runs `<tool>/run waitforexitandrun <game>` with Proton's environment, as on Linux (IRON NEST, Just Die Already, Kerbal Space Program, 2026-11-17). The shortcuts (`sync`) and launch options (`hook`) are no longer needed | — |
+| Compatibility tool list, per-game tool choice; native builds win | Steam Play settings | **works**: two tools in `/usr/local/share/steam/compatibilitytools.d` (the folder Mac Steam scans): `proton-macos` (Windows build through Proton) and `macos-native` (the Mac build, unchanged). `steamplay setup` maps every game in Steam's app cache: a 64-bit or Apple Silicon Mac build wins, everything else gets Proton; `steamplay prefer` overrides one game. Kerbal got its Mac depot, not its Linux one | Mappings for newly bought games (the guard); whether Steam's own Properties shows the choice is unchecked |
 | Steamworks API (login, ownership, Steam DRM, stats, achievements) | lsteamclient to the Linux client | **works**: lsteamclient to Mac Steam's client library (check-wave5 item 10; IRON NEST, Left 4 Dead stats, GTFO login) | — |
 | Playtime and "running" status | Steam tracks the tool's processes | **works** (Steam's log: game process added/removed) | — |
 | Online play, Steam networking | through the client | **partial**: GTFO's network layer and its PlayFab login came up; lobbies and matches untested | Play a match |
 | Steam Cloud, by API | through the client | **works** in one case (Left 4 Dead saved its config to the cloud) | Test more games |
-| Steam Cloud, files Steam syncs itself (Auto-Cloud) | Steam maps Windows save paths into the prefix | **missing**: Steam runs the sync at launch but cannot place the files ("Unable to resolve path with root WinAppDataLocalLow", IRON NEST, cloud log 2026-11-17) | Give Steam the paths it looks for (links from where it resolves Windows roots into the prefix), or sync those folders ourselves around a launch |
-| Overlay (Shift+Tab), screenshots, Remote Play, broadcast | Steam injects its overlay library into the Wine process | **missing**: Steam now starts the game itself, but the launcher is a shell script, which macOS strips the injection from, and our signed loader ignores injected libraries | A compiled launcher that passes the injection on, the entitlement that allows it, then see whether Valve's overlay can draw over our Metal output |
+| Steam Cloud, files Steam syncs itself (Auto-Cloud) | Steam maps Windows save paths into the prefix | **works** under Steam Play: Steam watches the save files in `compatdata/<id>/pfx/drive_c/users/steamuser/...` (IRON NEST, cloud log 2026-11-17) | Test a second game |
+| Overlay (Shift+Tab), screenshots, Remote Play, broadcast | Steam injects its overlay library into the Wine process | **missing**: Steam now passes its overlay libraries to the tool (`STEAM_DYLD_INSERT_LIBRARIES`: `steamloader.dylib`, `gameoverlayrenderer.dylib`, both with arm64 code), but the tool does not load them and our signed loader ignores injected libraries | Load them from the tool, add the entitlement that allows it, then see whether Valve's overlay can draw over our Metal output |
 | Steam Input (controller layouts, remapping) | virtual controllers Proton reads | **untested**; controllers work directly instead (below) | After the overlay |
-| Install scripts (first-run redistributables) | Steam runs them in the prefix | **missing** | Run `installscript.vdf` ourselves at first launch, or rely on Wine's built-in runtimes |
+| Install scripts (first-run redistributables) | Steam runs them in the prefix | **partial**: Steam downloads the Windows redistributables and passes its install-script step, but does not run them through the tool (no `run` verb seen, 2026-11-17) | Run `installscript.vdf` ourselves at first launch, or rely on Wine's built-in runtimes |
 | Shader pre-caching | Steam downloads compiled shaders | **blocked** (Steam-side, Vulkan pipelines); DXMT and Metal keep their own caches | — |
 | Updates, DLC, Workshop downloads | Steam | **partial**: Steam does them while the switch is on; Workshop untested | Follows the persistent switch |
 | Uninstall removes the prefix | Steam | **missing**: the `compatdata` folder stays | Small tool step |
@@ -64,9 +64,11 @@ change: Mac Steam itself, a vendor, or code we do not write).
 | Updates of the runtime | **missing** | An update check in the installer app |
 
 ## Order of investigation
-1. Done 2026-11-17: the Windows switch persists through `steam_dev.cfg`, and Play works from the real entry. Left of it: which file location Steam reads, what to do about Mac-native games, and setting the launch option on new installs by itself.
-2. Auto-Cloud: where Mac Steam looks for Windows save paths.
-3. The overlay: launcher as a program, the loader's entitlement, whether Valve's overlay draws.
-4. Port the `proton` launcher script; add wine-mono, wine-gecko and Proton's fonts to the bundle.
-5. Auto-Cloud, install scripts, a match in an online game.
-6. OpenGL through Zink; AV1; the untested rows above, one game each.
+1. Done 2026-11-17: Steam Play itself on Mac Steam (install, Play, per-game choice with native builds first, Auto-Cloud).
+2. A guard for the switch and the tools, and mappings for newly bought games.
+3. The crash on exit (`UIAutomationCore.UiaDisconnectAllProviders` is unimplemented; IRON NEST aborts when quitting).
+4. Packaging for other Macs: relocatable bundle, signing, Valve's Windows client DLLs fetched from Valve.
+5. The overlay, now that Steam passes its libraries to the tool.
+6. Port the `proton` launcher script; add wine-mono, wine-gecko and Proton's fonts to the bundle.
+7. Install scripts, a match in an online game.
+8. OpenGL through Zink; AV1; the untested rows above, one game each.

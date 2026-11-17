@@ -81,6 +81,11 @@
 # Mac one (220202, 292 MB; not a Linux depot), then ran "<tools>/macos-native/./run
 # waitforexitandrun <...>/KSP.app", and the Mac build (x86_64) loaded.
 #
+# Rollout (2026-11-17 12:27): every game restored and mapped by "steamplay setup" (which is what
+# to use from here on; this script stays as the record of the experiments). Steam re-fetched
+# GTFO's Windows depot by itself and changed nothing else; Just Die Already ran through
+# proton-macos.
+#
 # For all:
 #
 #   steam-platform-persist-test.sh status             what Steam did since setup (reads only)
