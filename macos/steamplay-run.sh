@@ -25,6 +25,9 @@
 #   STEAMPLAY_LOG   where Wine's output goes (default <prefix>/../steamplay-run.log; the run
 #                   before keeps its own as steamplay-run.prev.log)
 #   WINEDEBUG       Wine's debug channels (default +loaddll,+msgbox)
+#
+# Steam's STEAM_COMPAT_CONFIG is read for nativevulkanloader. When a thread of the game waits a
+# minute for a lock, samples of the game's processes are left as steamplay-run.hang.<pid>.txt.
 
 set -euo pipefail
 
@@ -79,6 +82,19 @@ if [ ! -f "$prefix/system.reg" ]; then
     log "creating the prefix in $prefix"
     "$WINE_INSTALL/bin/wine" wineboot -u >/dev/null 2>&1 || die "wineboot failed in $prefix"
 fi
+# Steam's own compatibility options for the game, which Proton's script takes the same way.
+# nativevulkanloader: the game is to load Khronos's vulkan-1.dll, which its own installer puts
+# into the prefix (Red Dead Redemption 2; wine.inf says the same for RDR2.exe). Mac Steam runs no
+# installer of a Windows game, so where the prefix has only Wine's loader, that one has to do.
+case ",${STEAM_COMPAT_CONFIG:-}," in
+    *,nativevulkanloader,*)
+        vulkan_dll="$prefix/drive_c/windows/system32/vulkan-1.dll"
+        if [ -f "$vulkan_dll" ] && ! head -c 128 "$vulkan_dll" | grep -qa -e 'Wine builtin DLL' -e 'Wine placeholder DLL'; then
+            WINEDLLOVERRIDES="$WINEDLLOVERRIDES;vulkan-1=n"
+        else
+            WINEDLLOVERRIDES="$WINEDLLOVERRIDES;vulkan-1=b"
+        fi ;;
+esac
 # steam_api loads Valve's Windows client DLLs from Steam's folder in the prefix, and ntdll
 # points their exports at lsteamclient
 steam_in_pfx="$prefix/drive_c/Program Files (x86)/Steam"
@@ -96,6 +112,23 @@ logfile=${STEAMPLAY_LOG:-$compat/steamplay-run.log}
 # what a message box says, which is often all a game tells of what it could not do
 export WINEDEBUG="${WINEDEBUG:-+loaddll,+msgbox}"
 log "app $appid: $exe (log: $logfile)"
+# A game that hangs says nothing of where. Wine does say when a thread has waited a minute for a
+# lock that another one holds: at that, where every thread of the game's processes is gets
+# saved next to the log (macOS's sample), once per run. The watcher goes when this process,
+# which becomes Wine's, does.
+hang=${logfile%.log}.hang
+rm -f "$hang".*.txt
+(
+    game_dir_win="Z:${game_dir//\//\\}\\"
+    while sleep 2 && kill -0 $$ 2>/dev/null; do
+        grep -qa 'RtlpWaitForCriticalSection.*wait timed out' "$logfile" 2>/dev/null || continue
+        for pid in $(ps -axo pid=,command= | grep -F -- "$game_dir_win" | grep -v ' grep ' | awk '{print $1}'); do
+            /usr/bin/sample "$pid" 3 -file "$hang.$pid.txt" &
+        done
+        wait
+        exit 0
+    done
+) </dev/null >/dev/null 2>&1 &
 cd "$(dirname "$exe")"
 # steam.exe starts the game by its full Windows path (Wine's Z: drive is the host's /)
 exec "$WINE_INSTALL/bin/wine" steam.exe "Z:${exe//\//\\}" "$@" >"$logfile" 2>&1 </dev/null
