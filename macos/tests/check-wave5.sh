@@ -75,7 +75,7 @@ SUPER_WAVE_BASE=${SUPER_WAVE_BASE:-43acb634}
 # trampolines, winemac.drv's update of DXMT's client surfaces, ntdll's GStreamer paths, an include
 # in winegstreamer's media converter, winebus's IOHID game controllers, and the source reader's
 # drain of a decoder, which is PE code and so is guarded by configure's WINE_MACOS_AARCH64
-WAVE_FILES="dlls/ntdll/unix/virtual.c dlls/ntdll/unix/loader.c dlls/winemac.drv/window.c dlls/winegstreamer/media-converter/media-converter.h dlls/winebus.sys/bus_iohid.c dlls/mfreadwrite/reader.c configure.ac dlls/winegstreamer/video_decoder.c dlls/winegstreamer/video_processor.c dlls/ntdll/unix/signal_arm64.c dlls/winemac.drv/cocoa_display.m programs/tabtip/tabtip.c dlls/win32u/font.c dlls/kernelbase/process.c"
+WAVE_FILES="dlls/ntdll/unix/virtual.c dlls/ntdll/unix/loader.c dlls/winemac.drv/window.c dlls/winegstreamer/media-converter/media-converter.h dlls/winebus.sys/bus_iohid.c dlls/mfreadwrite/reader.c configure.ac dlls/winegstreamer/video_decoder.c dlls/winegstreamer/video_processor.c dlls/ntdll/unix/signal_arm64.c dlls/winemac.drv/cocoa_display.m programs/tabtip/tabtip.c dlls/win32u/font.c dlls/kernelbase/process.c dlls/win32u/vulkan.c"
 SUPER_FILES="lsteamclient/unixlib.cpp lsteamclient/unix_steam_input_manual.cpp"
 export MIN_FREE_GB=${MIN_FREE_GB:-4}
 export WINEDLLOVERRIDES=${WINEDLLOVERRIDES:-mscoree,mshtml=}
