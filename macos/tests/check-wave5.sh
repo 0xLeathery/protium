@@ -38,6 +38,9 @@
 #  11  guards: the Wine changes since WINE_WAVE_BASE are in WAVE_FILES and vanish with __APPLE__
 #      undefined, and so do the superproject's outside macos/ (two lsteamclient files)
 #  12  regression: check-wave4.sh has no FAIL
+#  13  adapter id: adapter_id_test.exe, x86_64 and i386, finds a display device
+#      (EnumDisplayDevicesW) with the PCI id of its DXGI adapter, as a game does that reads the
+#      graphics driver's version (The Last of Us Part II, which otherwise reports no GPU)
 # The build comes first ("build", which takes long and can be left out with CHECK_ITEMS); the test
 # programs are compiled on every run.
 #
@@ -82,7 +85,7 @@ mkdir -p "$EVIDENCE_DIR"
 RESULTS=()
 FAILED=0
 TODO=0
-CHECK_ITEMS=${CHECK_ITEMS:-"build 1 2 3 4 5 6 7 8 9 10 11 12"}
+CHECK_ITEMS=${CHECK_ITEMS:-"build 1 2 3 4 5 6 7 8 9 10 11 12 13"}
 want() { case " $CHECK_ITEMS " in *" $1 "*) return 0 ;; esac; return 1; }
 pass() { RESULTS+=("PASS  item $1: $2"); echo "PASS  item $1: $2"; }
 fail() { RESULTS+=("FAIL  item $1: $2"); echo "FAIL  item $1: $2"; FAILED=1; }
@@ -152,6 +155,7 @@ if true; then
         cc $a mf_video_test_$a.exe mf_video_test.c -lmfplat -lmfreadwrite -lmfuuid -lole32 -luuid -ld3d11 -ldxguid
         cc $a d3d9_test_$a.exe d3d9_test.c -ld3d9 -luser32
         cc $a opengl_test_$a.exe opengl_test.c -lopengl32 -lgdi32 -luser32
+        cc $a adapter_id_test_$a.exe adapter_id_test.c -ldxgi -ldxguid -luuid -luser32
     done
     cc x86_64 cursor_clip_test.exe cursor_clip_test.c -luser32 -lgdi32
     cc x86_64 fullscreen_test.exe fullscreen_test.c -ld3d11 -ldxgi -ldxguid -luuid -luser32
@@ -165,8 +169,8 @@ if true; then
     "$FFMPEG_CLI" -loglevel error -y -f lavfi -i color=c=0x3366cc:s=320x240:r=30:d=1 -f lavfi -i sine=f=440:d=1 \
         -c:v libvpx-vp9 -pix_fmt yuv420p -c:a libopus -shortest "$T/vp9_opus.webm" >>"$T/build.log" 2>&1
     n=$(ls "$T"/*.exe 2>/dev/null | wc -l | tr -d ' ')
-    [ "$n" -eq 16 ] && [ -s "$T/h264_aac.mp4" ] && [ -s "$T/vp9_opus.webm" ] \
-        && pass programs "16 test programs and 2 video files ($T)" || fail programs "$n of 16 test programs ($T/build.log)"
+    [ "$n" -eq 18 ] && [ -s "$T/h264_aac.mp4" ] && [ -s "$T/vp9_opus.webm" ] \
+        && pass programs "18 test programs and 2 video files ($T)" || fail programs "$n of 18 test programs ($T/build.log)"
 fi
 
 if [ ! -x "$WINE" ]; then
@@ -190,6 +194,7 @@ two_arch() {
 
 want 1 && two_arch 1 https_test 'status 200'
 want 2 && two_arch 2 bcrypt_test 'rsa sign 0 verify 0, ecdh agree 0 0 same 1'
+want 13 && two_arch 13 adapter_id_test 'match 1'
 
 if want 3; then
     ok=yes; lines=""
