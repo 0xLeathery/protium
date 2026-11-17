@@ -5,7 +5,9 @@
  * Creates a device on the first DXGI adapter, compiles two HLSL shaders with D3DCompile, makes
  * a root signature and a pipeline state from them, clears a 64x64 render target, draws a
  * triangle that covers it in another colour, copies the target into a read-back buffer and
- * maps it.
+ * maps it. Then it makes a shader resource view and an unordered access view of no elements
+ * (NumElements 0) on a buffer, as The Last of Us Part II does while it starts: Vulkan has no
+ * buffer view of range 0, and the driver aborted the process on the one vkd3d-proton asked for.
  *
  * Prints one line, e.g.
  *   d3d12: vkd3d 1, adapter "Apple M4 Pro", feature level c100, pixel 4080bfff, expected 4080bfff
@@ -220,6 +222,33 @@ int main(void)
     if (FAILED(hr = ID3D12Resource_Map( readback, 0, &read_range, (void **)&data ))) return fail( "Map", hr );
     memcpy( pixel, data + footprint.Offset + (SIZE / 2) * footprint.Footprint.RowPitch + (SIZE / 2) * 4, 4 );
     ID3D12Resource_Unmap( readback, 0, &no_write );
+
+    /* views of no elements */
+    {
+        D3D12_DESCRIPTOR_HEAP_DESC view_heap_desc = { D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, 2 };
+        D3D12_SHADER_RESOURCE_VIEW_DESC srv_desc = { DXGI_FORMAT_R32_UINT, D3D12_SRV_DIMENSION_BUFFER,
+                                                     D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING };
+        D3D12_UNORDERED_ACCESS_VIEW_DESC uav_desc = { DXGI_FORMAT_R32_UINT, D3D12_UAV_DIMENSION_BUFFER };
+        D3D12_RESOURCE_DESC empty_desc = buffer_desc;
+        D3D12_CPU_DESCRIPTOR_HANDLE handle;
+        ID3D12DescriptorHeap *view_heap;
+        ID3D12Resource *empty_buffer;
+
+        empty_desc.Width = 4096;
+        empty_desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+        if (FAILED(hr = ID3D12Device_CreateCommittedResource( device, &default_heap, D3D12_HEAP_FLAG_NONE, &empty_desc,
+                                                              D3D12_RESOURCE_STATE_COMMON, NULL,
+                                                              &IID_ID3D12Resource, (void **)&empty_buffer )))
+            return fail( "CreateCommittedResource (buffer for the views of no elements)", hr );
+        if (FAILED(hr = ID3D12Device_CreateDescriptorHeap( device, &view_heap_desc, &IID_ID3D12DescriptorHeap, (void **)&view_heap )))
+            return fail( "CreateDescriptorHeap (views of no elements)", hr );
+        handle = ID3D12DescriptorHeap_GetCPUDescriptorHandleForHeapStart( view_heap );
+        ID3D12Device_CreateShaderResourceView( device, empty_buffer, &srv_desc, handle );
+        handle.ptr += ID3D12Device_GetDescriptorHandleIncrementSize( device, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV );
+        ID3D12Device_CreateUnorderedAccessView( device, empty_buffer, NULL, &uav_desc, handle );
+        if (FAILED(hr = ID3D12Device_GetDeviceRemovedReason( device )))
+            return fail( "the device was removed by the views of no elements, GetDeviceRemovedReason", hr );
+    }
 
     ok = close_to( pixel[0], expected[0] ) && close_to( pixel[1], expected[1] ) && close_to( pixel[2], expected[2] ) && close_to( pixel[3], expected[3] );
     printf( "d3d12: vkd3d %d, adapter \"%s\", feature level %x, pixel %02x%02x%02x%02x, expected %02x%02x%02x%02x\n",
