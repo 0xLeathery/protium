@@ -4,6 +4,7 @@
  *   thread_rip_sampler.exe <process name substring> [samples, default 200] [interval ms, default 10]
  *   thread_rip_sampler.exe <process name substring> regs <thread id> [count, default 5]
  *   thread_rip_sampler.exe <process name substring> stack [thread id, or 0 for all] [bytes, default 0x6000]
+ *   thread_rip_sampler.exe <process name substring> dump <address> <bytes> <file>
  *
  * Finds the process of that name, or else the first whose name contains it, then for each sample
  * suspends each of its threads, reads its context (Rip and Rsp), and resumes it. Prints, per
@@ -17,7 +18,9 @@
  * that does not. With "stack", it prints where each thread is and every value on its stack that
  * points into a loaded module, as module+offset: the return addresses of its call chain, among
  * some stale ones. This reads a waiting thread's callers without attaching as a debugger, which
- * some games end themselves over. Built for x86_64 with the mingw compiler: -lpsapi.
+ * some games end themselves over. With "dump", it writes that much of the process's memory to a
+ * file, unreadable pages as zeroes: a program whose code is encrypted on disk can be read as it
+ * runs. Built for x86_64 with the mingw compiler: -lpsapi.
  */
 #include <windows.h>
 #include <tlhelp32.h>
@@ -167,6 +170,28 @@ int main( int argc, char **argv )
     {
         printf( "sampler: OpenProcess %#lx failed, error %lu\n", pid, GetLastError() );
         return 1;
+    }
+    if (argc > 5 && !strcmp( argv[2], "dump" ))
+    {
+        DWORD64 addr = strtoull( argv[3], NULL, 16 ), size = strtoull( argv[4], NULL, 16 ), done, bad = 0;
+        static char page[0x1000];
+        FILE *out = fopen( argv[5], "wb" );
+
+        if (!out) { printf( "sampler: cannot write %s\n", argv[5] ); return 1; }
+        for (done = 0; done < size; done += sizeof(page))
+        {
+            SIZE_T want = size - done < sizeof(page) ? size - done : sizeof(page);
+            if (!ReadProcessMemory( process, (void *)(addr + done), page, want, NULL ))
+            {
+                memset( page, 0, sizeof(page) );
+                bad++;
+            }
+            fwrite( page, 1, want, out );
+        }
+        fclose( out );
+        printf( "sampler: wrote %#llx bytes from %#llx to %s, %llu unreadable pages\n",
+                (unsigned long long)size, (unsigned long long)addr, argv[5], (unsigned long long)bad );
+        return 0;
     }
     if (argc > 2 && !strcmp( argv[2], "stack" ))
     {
