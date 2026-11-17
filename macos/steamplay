@@ -13,6 +13,9 @@
     macos/steamplay status            the switch, the tools and each installed game's choice
     macos/steamplay prefer <app id> native|proton|auto
                                       your own choice for one game (Steam quit)
+    macos/steamplay guard             put right what would make Steam remove installs (see below)
+    macos/steamplay guard install|remove
+                                      have that done by itself, as a login item of this user
     macos/steamplay tools             install the compatibility tools only (Steam quit)
     macos/steamplay map <app id> <tool|none> [<app id> <tool|none>...]
                                       write a game's compatibility tool directly (Steam quit)
@@ -42,7 +45,7 @@ macos/steamplay-tools: proton-macos runs a game's Windows build through Proton, 
 Steam install the Mac build and runs it unchanged. The rule, from what Steam's app cache says of
 each game: a Mac build that runs on this Mac (64-bit or Apple Silicon) wins; every other game
 gets Proton (a 32-bit Mac build cannot run here, and a Linux build must not be chosen). "prefer"
-overrides the rule for one game and is remembered in <build root>/steamplay/choices.json.
+overrides the rule for one game and is remembered in choices.json (see STEAMPLAY_HOME).
 "setup" installs the tools into /usr/local/share/steam/compatibilitytools.d (one of the few folders
 Steam looks in, and the one no Steam update touches), writes the switch, maps the games in
 config.vdf (CompatToolMapping; app id 0 is the default for games it does not know yet) and takes
@@ -51,15 +54,28 @@ build needs its own mapping. WARNING: with the switch on linux and the tools mis
 switch gone, Steam takes Windows installs for wrong and removes them at its next start: "status"
 says so, and "setup" puts both right. "tools" and "map" are the single steps.
 
+"guard" is the protection against that. Quietly, and as often as it is run: it writes the switch
+back if it is gone, installs the tools again if they are missing and, while Steam is not running,
+maps games that are not mapped yet (new purchases). If Steam is running without Steam Play (its
+compatibility log shows our tools ignored or never registered), installs are seconds from being
+removed: it tells the user, stops Steam, repairs and starts Steam again. "guard install" copies
+this script and the tools to ~/Library/Application Support/SteamPlay, on the internal disk, where
+a background job may read them, and adds a LaunchAgent that runs the guard at login, whenever the
+switch file, the tools folder or Steam's config.vdf change (Steam writes that when it quits),
+and every five minutes. It logs what it did to ~/Library/Logs/SteamPlay/guard.log.
+
 Environment: STEAM_ROOT (default ~/Library/Application Support/Steam), STEAMPLAY_APP (default
-<build root>/steamplay-apps/Steam Play.app), STEAMPLAY_BACKUPS (default <build root>/steamplay/backups),
+<build root>/steamplay-apps/Steam Play.app), STEAMPLAY_HOME (default ~/Library/Application
+Support/SteamPlay: choices.json, backups of what is written, the guard's copy),
 STEAMPLAY_LAUNCH (default steamplay-launch next to this script), and STEAMPLAY_FAKE_STEAM=1 to try
 sync or hook on a copy of a Steam folder while Steam runs.
 """
 import json
 import os
+import plistlib
 import re
 import shutil
+import signal
 import struct
 import subprocess
 import sys
@@ -69,7 +85,8 @@ import zlib
 BUILD_ROOT = os.environ.get("BUILD_ROOT", "/Users/annon/projects/proton-macos-build")
 STEAM_ROOT = os.environ.get("STEAM_ROOT", os.path.expanduser("~/Library/Application Support/Steam"))
 STEAMPLAY_APP = os.environ.get("STEAMPLAY_APP", os.path.join(BUILD_ROOT, "steamplay-apps", "Steam Play.app"))
-BACKUPS = os.environ.get("STEAMPLAY_BACKUPS", os.path.join(BUILD_ROOT, "steamplay", "backups"))
+HOME_DIR = os.environ.get("STEAMPLAY_HOME", os.path.expanduser("~/Library/Application Support/SteamPlay"))
+BACKUPS = os.environ.get("STEAMPLAY_BACKUPS", os.path.join(HOME_DIR, "backups"))
 LAUNCH = os.environ.get("STEAMPLAY_LAUNCH", os.path.join(os.path.dirname(os.path.abspath(__file__)), "steamplay-launch"))
 TAG = "Steam Play"          # marks the shortcuts that sync owns
 OPEN = "/usr/bin/open"
@@ -318,10 +335,32 @@ def cmd_list():
         print("%-9d %s  (%s)" % (appid, name, folder))
 
 
-def steam_running():
+def steam_pids():
+    """Process ids of the running Steam client. For trying things on a copy of a Steam folder:
+    STEAMPLAY_FAKE_STEAM=1 says none, STEAMPLAY_FAKE_RUNNING_PID names a stand-in process."""
+    fake = os.environ.get("STEAMPLAY_FAKE_RUNNING_PID")
+    if fake:
+        try:
+            os.kill(int(fake), 0)
+            return [int(fake)]
+        except OSError:
+            return []
     if os.environ.get("STEAMPLAY_FAKE_STEAM"):
-        return False
-    return subprocess.run(["pgrep", "-x", "steam_osx"], stdout=subprocess.DEVNULL).returncode == 0
+        return []
+    out = subprocess.run(["pgrep", "-x", "steam_osx"], stdout=subprocess.PIPE, universal_newlines=True).stdout
+    return [int(x) for x in out.split()]
+
+
+def steam_running():
+    return bool(steam_pids())
+
+
+def write_file(path, text, **kw):
+    """Replaces a file in one step, so that Steam never reads half of it."""
+    tmp = path + ".steamplay-tmp"
+    with open(tmp, "w", **kw) as f:
+        f.write(text)
+    os.replace(tmp, path)
 
 
 def cmd_sync(dry_run, remove=False):
@@ -402,8 +441,7 @@ def cmd_hook(appids, remove, dry_run):
         return
     os.makedirs(BACKUPS, exist_ok=True)
     shutil.copy2(path, os.path.join(BACKUPS, "localconfig.vdf.%s" % time.strftime("%Y%m%d-%H%M%S")))
-    with open(path, "w", encoding="utf-8", errors="surrogateescape") as f:
-        f.write(text)
+    write_file(path, text, encoding="utf-8", errors="surrogateescape")
     print("written to %s; start Steam" % path)
 
 
@@ -414,7 +452,10 @@ TOOLS = sorted(t for t in os.listdir(TOOLS_SRC)) if os.path.isdir(TOOLS_SRC) els
 # inside its app bundle (steamclient.dylib's CLoadLocalToolListJob). /usr/local is the one outside
 # everything Steam manages, so client updates do not touch it.
 TOOLS_DIR = os.environ.get("STEAMPLAY_TOOLS_DIR", "/usr/local/share/steam/compatibilitytools.d")
-CHOICES = os.path.join(BUILD_ROOT, "steamplay", "choices.json")
+CHOICES = os.path.join(HOME_DIR, "choices.json")
+GUARD_LABEL = "com.redshot.steamplay.guard"
+GUARD_PLIST = os.path.expanduser("~/Library/LaunchAgents/%s.plist" % GUARD_LABEL)
+GUARD_LOG = os.environ.get("STEAMPLAY_GUARD_LOG", os.path.expanduser("~/Library/Logs/SteamPlay/guard.log"))
 SWITCH = "@sSteamCmdForcePlatformType"
 # Steam reads the second, next to its executables; the first is kept the same for whoever looks
 SWITCH_FILES = [os.path.join(STEAM_ROOT, "steam_dev.cfg"),
@@ -520,8 +561,7 @@ def write_switch(platform):
                 lines = [l for l in f.read().splitlines() if not l.startswith(SWITCH + " ")]
         except OSError:
             lines = []
-        with open(path, "w") as f:
-            f.write("\n".join(lines + ["%s %s" % (SWITCH, platform)]) + "\n")
+        write_file(path, "\n".join(lines + ["%s %s" % (SWITCH, platform)]) + "\n")
 
 
 def tools_installed():
@@ -656,6 +696,11 @@ def cmd_status():
         tool, why = wanted.get(appid, (PROTON, "Windows only"))
         mapped = have.get(appid) or ("%s (default)" % have.get(0) if have.get(0) else "none")
         print("  %-9d %-42s %-13s %s; mapped: %s; depots: %s" % (appid, name[:42], tool, why, mapped, " ".join(depots) or "none"))
+    loaded = subprocess.run(["/bin/launchctl", "print", "gui/%d/%s" % (os.getuid(), GUARD_LABEL)],
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
+    print("guard: %s" % ("installed" if loaded else "not installed (nothing repairs a lost switch or tool by itself)"))
+    if steam_running():
+        print("Steam's own log says of this start: %s" % session_state())
     for p in problems:
         print("PROBLEM: " + p)
     if problems:
@@ -663,22 +708,180 @@ def cmd_status():
     return 1 if problems else 0
 
 
-def cmd_tools():
-    if steam_running():
-        die("quit Steam first: it reads its tools when it starts")
-    dest = TOOLS_DIR
-    if not os.path.isdir(dest) or not os.access(dest, os.W_OK):
-        die("%s is missing or not writable. Make it once, as an administrator:\n"
-            "    sudo mkdir -p %s && sudo chown \"$USER\" %s" % (dest, dest, dest))
+def install_tools():
+    """Copies the tools into the folder Steam scans. Returns what it installed, or None when the
+    folder is missing or not writable."""
+    if not os.path.isdir(TOOLS_DIR) or not os.access(TOOLS_DIR, os.W_OK):
+        return None
     for tool in TOOLS:
-        target = os.path.join(dest, tool)
+        target = os.path.join(TOOLS_DIR, tool)
         if os.path.isdir(target):
             shutil.rmtree(target)
         shutil.copytree(os.path.join(TOOLS_SRC, tool), target)
-        print("installed %s in %s" % (tool, target))
+    return TOOLS
 
 
-def cmd_map(choices, dry_run=False, quiet=False):
+def cmd_tools():
+    if steam_running():
+        die("quit Steam first: it reads its tools when it starts")
+    if install_tools() is None:
+        die("%s is missing or not writable. Make it once, as an administrator:\n"
+            "    sudo mkdir -p %s && sudo chown \"$USER\" %s" % (TOOLS_DIR, TOOLS_DIR, TOOLS_DIR))
+    for tool in TOOLS:
+        print("installed %s in %s" % (tool, os.path.join(TOOLS_DIR, tool)))
+
+
+# ---------------------------------------------------------------- the guard
+
+def session_state():
+    """What Steam's compatibility log says of the client's latest start: "ok" (our tools are
+    registered), "ignored" (they were turned down: Steam's platform is not linux), "no-tools"
+    (they were not there when it started), or "unknown" (too early to say, or no log)."""
+    path = os.path.join(STEAM_ROOT, "logs", "compat_log.txt")
+    marker = b"] Client version:"
+    try:    # the log runs to megabytes a start: find the last start from the end, then read its head
+        with open(path, "rb") as f:
+            f.seek(0, os.SEEK_END)
+            end = pos = f.tell()
+            at = -1
+            while pos > 0 and at < 0 and end - pos < (256 << 20):
+                step = min(pos, 1 << 20)
+                pos -= step
+                f.seek(pos)
+                chunk = f.read(step + len(marker))
+                at = chunk.rfind(marker)
+            if at < 0:
+                return "unknown"
+            f.seek(max(0, pos + at - 22))
+            head = f.read(65536).decode("utf-8", "replace")
+    except OSError:
+        return "unknown"
+    session = head[head.index("["):].splitlines() if "[" in head else []
+    if not session:
+        return "unknown"
+    if any("Ignoring tool %s " % t in l for l in session for t in TOOLS):
+        return "ignored"
+    if all(any("Registering tool %s," % t in l for l in session) for t in TOOLS):
+        return "ok"
+    try:    # the tools are read in the first second: give a start five before judging
+        began = time.mktime(time.strptime(session[0][1:20], "%Y-%m-%d %H:%M:%S"))
+    except ValueError:
+        return "unknown"
+    return "no-tools" if time.time() - began > 5 else "unknown"
+
+
+def guard_log(message):
+    line = "%s %s" % (time.strftime("%Y-%m-%d %H:%M:%S"), message)
+    try:
+        os.makedirs(os.path.dirname(GUARD_LOG), exist_ok=True)
+        with open(GUARD_LOG, "a") as f:
+            f.write(line + "\n")
+    except OSError:
+        pass
+    print(line)
+
+
+def stop_steam():
+    """Stops the Steam client: asks first, insists after eight seconds."""
+    for sig, wait in ((signal.SIGTERM, 8), (signal.SIGKILL, 4)):
+        pids = steam_pids()
+        if not pids:
+            return True
+        for pid in pids:
+            try:
+                os.kill(pid, sig)
+            except OSError:
+                pass
+        deadline = time.time() + wait
+        while time.time() < deadline and steam_pids():
+            time.sleep(0.25)
+    return not steam_pids()
+
+
+def cmd_guard():
+    fake = os.environ.get("STEAMPLAY_FAKE_STEAM") or os.environ.get("STEAMPLAY_FAKE_RUNNING_PID")
+    root, bundle = switch_state()
+    if bundle != "linux" or root != "linux":
+        write_switch("linux")
+        if bundle != "linux":
+            guard_log("the switch was %s: set to linux again" % (bundle or "gone"))
+    if not tools_installed():
+        if install_tools() is None:
+            guard_log("PROBLEM: the tools are missing and %s is missing or not writable" % TOOLS_DIR)
+        else:
+            guard_log("the tools were missing: installed again in %s" % TOOLS_DIR)
+    if steam_running():
+        state = session_state()
+        if state in ("ignored", "no-tools"):
+            guard_log("Steam is running without Steam Play (%s): stopping it before it removes installs" % state)
+            if not fake:
+                subprocess.run(["/usr/bin/osascript", "-e", 'display notification "Steam started without Steam Play. '
+                                'Restarting it to protect your installed games." with title "Steam Play"'],
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            if not stop_steam():
+                guard_log("PROBLEM: Steam did not stop")
+                return 1
+            guard_log("Steam stopped; the switch and the tools are in place")
+            if tools_installed() and switch_state()[1] == "linux" and not fake:
+                subprocess.run([OPEN, "-g", "-a", "Steam"])
+                guard_log("Steam started again")
+    if not steam_running():
+        try:
+            wanted, have = wanted_mapping(), current_mapping()
+            changes = {a: t for a, (t, _) in wanted.items() if have.get(a) != t}
+            if changes:
+                cmd_map(changes, quiet=True, silent=True)
+                guard_log("%d game(s) mapped by the rule" % len(changes))
+        except (OSError, ValueError, SystemExit) as e:
+            guard_log("PROBLEM: could not check the mappings: %s" % e)
+    return 0
+
+
+def cmd_guard_install():
+    if install_tools() is None and not tools_installed():
+        die("%s is missing or not writable; run setup first" % TOOLS_DIR)
+    os.makedirs(HOME_DIR, exist_ok=True)
+    here = os.path.dirname(os.path.abspath(__file__))
+    script = os.path.join(HOME_DIR, "steamplay")
+    if os.path.abspath(__file__) != script:
+        shutil.copy2(os.path.abspath(__file__), script)
+        dest = os.path.join(HOME_DIR, "steamplay-tools")
+        if os.path.isdir(dest):
+            shutil.rmtree(dest)
+        shutil.copytree(os.path.join(here, "steamplay-tools"), dest)
+    python = "/usr/bin/python3" if os.access("/usr/bin/python3", os.X_OK) else sys.executable
+    plist = {
+        "Label": GUARD_LABEL,
+        "ProgramArguments": [python, script, "guard"],
+        "EnvironmentVariables": {"STEAMPLAY_HOME": HOME_DIR, "STEAM_ROOT": STEAM_ROOT, "STEAMPLAY_TOOLS_DIR": TOOLS_DIR},
+        "RunAtLoad": True,
+        "StartInterval": 300,
+        "WatchPaths": [SWITCH_FILES[1], TOOLS_DIR, os.path.join(STEAM_ROOT, "config", "config.vdf")],
+        "ProcessType": "Background",
+        "StandardOutPath": os.path.join(os.path.dirname(GUARD_LOG), "guard.out"),
+        "StandardErrorPath": os.path.join(os.path.dirname(GUARD_LOG), "guard.out"),
+    }
+    os.makedirs(os.path.dirname(GUARD_LOG), exist_ok=True)
+    os.makedirs(os.path.dirname(GUARD_PLIST), exist_ok=True)
+    with open(GUARD_PLIST, "wb") as f:
+        plistlib.dump(plist, f)
+    domain = "gui/%d" % os.getuid()
+    subprocess.run(["/bin/launchctl", "bootout", "%s/%s" % (domain, GUARD_LABEL)], stderr=subprocess.DEVNULL)
+    r = subprocess.run(["/bin/launchctl", "bootstrap", domain, GUARD_PLIST])
+    if r.returncode:
+        die("launchctl could not load %s" % GUARD_PLIST)
+    print("the guard is installed: %s runs %s guard" % (GUARD_PLIST, script))
+    print("it logs to %s" % GUARD_LOG)
+
+
+def cmd_guard_remove():
+    subprocess.run(["/bin/launchctl", "bootout", "gui/%d/%s" % (os.getuid(), GUARD_LABEL)], stderr=subprocess.DEVNULL)
+    if os.path.exists(GUARD_PLIST):
+        os.remove(GUARD_PLIST)
+    print("the guard is removed. Nothing now puts the switch or the tools back if they go missing.")
+
+
+def cmd_map(choices, dry_run=False, quiet=False, silent=False):
     """choices: {app id: tool name or None}. Writes them into config.vdf's CompatToolMapping."""
     if not dry_run and steam_running():
         die("quit Steam first: it rewrites its settings when it quits")
@@ -687,7 +890,7 @@ def cmd_map(choices, dry_run=False, quiet=False):
         original = f.read()
     tree = vdf_parse(original)
     mapping = vdf_block(tree, ["InstallConfigStore", "Software", "Valve", "Steam", "CompatToolMapping"])
-    names = {appid: name for appid, name, _, _ in windows_games()}
+    names = {} if quiet else {appid: name for appid, name, _, _ in windows_games()}
     for appid, tool in sorted(choices.items()):
         old = next((v for k, v in mapping if k == str(appid) and isinstance(v, list)), None)
         oldname = next((v for k, v in old if k == "name"), None) if old else None
@@ -702,9 +905,9 @@ def cmd_map(choices, dry_run=False, quiet=False):
         return
     os.makedirs(BACKUPS, exist_ok=True)
     shutil.copy2(path, os.path.join(BACKUPS, "config.vdf.%s" % time.strftime("%Y%m%d-%H%M%S")))
-    with open(path, "w", encoding="utf-8", errors="surrogateescape") as f:
-        f.write("\n".join(vdf_dump(tree)) + "\n")
-    print("%d mapping(s) written to %s" % (len(choices), path))
+    write_file(path, "\n".join(vdf_dump(tree)) + "\n", encoding="utf-8", errors="surrogateescape")
+    if not silent:
+        print("%d mapping(s) written to %s" % (len(choices), path))
 
 
 def cmd_play(appid):
@@ -724,6 +927,12 @@ def main(argv):
         sys.exit(cmd_status())
     elif len(argv) == 3 and argv[0] == "prefer" and argv[1].isdigit() and argv[2] in ("native", "proton", "auto"):
         cmd_prefer(int(argv[1]), argv[2])
+    elif argv == ["guard"]:
+        sys.exit(cmd_guard())
+    elif argv == ["guard", "install"]:
+        cmd_guard_install()
+    elif argv == ["guard", "remove"]:
+        cmd_guard_remove()
     elif argv == ["tools"]:
         cmd_tools()
     elif len(argv) >= 3 and argv[0] == "map" and len(argv[1:]) % 2 == 0 \
