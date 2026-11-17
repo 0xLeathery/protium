@@ -1,0 +1,13 @@
+"compatibilitytools"
+{
+	"compat_tools"
+	{
+		"macos-native"
+		{
+			"install_path"	"."
+			"display_name"	"macOS (native build)"
+			"from_oslist"	"macos"
+			"to_oslist"	"linux"
+		}
+	}
+}

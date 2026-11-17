@@ -8,6 +8,9 @@
     macos/steamplay play <app id>     start one now, through Steam Play.app
     macos/steamplay hook [--dry-run] [--remove] [app id...]
                                       make each one's own library entry start it (Steam quit)
+    macos/steamplay tools             install the compatibility tools into Steam (Steam quit)
+    macos/steamplay map <app id> <tool|none> [<app id> <tool|none>...]
+                                      choose a game's compatibility tool (Steam quit)
 
 Mac Steam downloads a Windows build when its download platform is forced, but will not launch
 it. "sync" adds a non-Steam shortcut per game to the signed-in user's shortcuts.vdf, named
@@ -25,6 +28,12 @@ option the user already has stays, after %command%; one with its own %command% i
 With app ids it does those games whatever is in their folders, without them every Windows game
 "list" shows; --remove takes the script out again. Steam only offers Play for a Windows game
 while it takes the Mac for a Windows machine.
+
+"tools" and "map" are Steam Play's own way, which Mac Steam runs only while it takes the Mac for a
+Linux machine (@sSteamCmdForcePlatformType linux): "tools" copies the tools in macos/steamplay-tools
+(proton-macos: a game's Windows build through Proton; macos-native: its Mac build, unchanged) into
+Steam's compatibilitytools.d, and "map" writes a game's choice into Steam's config.vdf
+(CompatToolMapping; app id 0 is the default for all games, "none" removes a choice).
 
 Environment: STEAM_ROOT (default ~/Library/Application Support/Steam), STEAMPLAY_APP (default
 <build root>/steamplay-apps/Steam Play.app), STEAMPLAY_BACKUPS (default <build root>/steamplay/backups),
@@ -139,6 +148,54 @@ def app_setting(text, appid, key, change):
     if not done:
         die("no Software/Valve/Steam/apps section in localconfig.vdf")
     return "\n".join(out), old, new
+
+
+def vdf_parse(text):
+    """A text VDF file as nested lists of [key, value] pairs (value: str or list), in order."""
+    stack = [[]]
+    key = None
+    for m in re.finditer(r'"((?:[^"\\]|\\.)*)"|\{|\}|//[^\n]*', text):
+        token = m.group(0)
+        if token == "{":
+            block = []
+            stack[-1].append([key, block])
+            stack.append(block)
+            key = None
+        elif token == "}":
+            stack.pop()
+        elif token.startswith('"'):
+            if key is None:
+                key = vdf_unquote(m.group(1))
+            else:
+                stack[-1].append([key, vdf_unquote(m.group(1))])
+                key = None
+    return stack[0]
+
+
+def vdf_dump(pairs, depth=0):
+    out = []
+    for key, value in pairs:
+        if isinstance(value, list):
+            out += ["\t" * depth + '"%s"' % vdf_quote(key), "\t" * depth + "{"]
+            out += vdf_dump(value, depth + 1)
+            out.append("\t" * depth + "}")
+        else:
+            out.append("\t" * depth + '"%s"\t\t"%s"' % (vdf_quote(key), vdf_quote(value)))
+    return out
+
+
+def vdf_block(pairs, path):
+    """The block at a path of keys (compared without case), made if missing."""
+    for name in path:
+        for key, value in pairs:
+            if isinstance(value, list) and key.lower() == name.lower():
+                pairs = value
+                break
+        else:
+            block = []
+            pairs.append([name, block])
+            pairs = block
+    return pairs
 
 
 # ---------------------------------------------------------------- binary VDF (shortcuts.vdf)
@@ -333,6 +390,50 @@ def cmd_hook(appids, remove, dry_run):
     print("written to %s; start Steam" % path)
 
 
+TOOLS_SRC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "steamplay-tools")
+TOOLS = sorted(t for t in os.listdir(TOOLS_SRC)) if os.path.isdir(TOOLS_SRC) else []
+
+
+def cmd_tools():
+    if steam_running():
+        die("quit Steam first: it reads its tools when it starts")
+    dest = os.path.join(STEAM_ROOT, "compatibilitytools.d")
+    for tool in TOOLS:
+        target = os.path.join(dest, tool)
+        if os.path.isdir(target):
+            shutil.rmtree(target)
+        shutil.copytree(os.path.join(TOOLS_SRC, tool), target)
+        print("installed %s in %s" % (tool, target))
+
+
+def cmd_map(choices, dry_run=False):
+    """choices: {app id: tool name or None}. Writes them into config.vdf's CompatToolMapping."""
+    if not dry_run and steam_running():
+        die("quit Steam first: it rewrites its settings when it quits")
+    path = os.path.join(STEAM_ROOT, "config", "config.vdf")
+    with open(path, encoding="utf-8", errors="surrogateescape") as f:
+        original = f.read()
+    tree = vdf_parse(original)
+    mapping = vdf_block(tree, ["InstallConfigStore", "Software", "Valve", "Steam", "CompatToolMapping"])
+    names = {appid: name for appid, name, _, _ in windows_games()}
+    for appid, tool in sorted(choices.items()):
+        old = next((v for k, v in mapping if k == str(appid) and isinstance(v, list)), None)
+        oldname = next((v for k, v in old if k == "name"), None) if old else None
+        mapping[:] = [kv for kv in mapping if kv[0] != str(appid)]
+        if tool:
+            mapping.append([str(appid), [["name", tool], ["config", ""], ["priority", "250"]]])
+        print("%-11s %-9d %s: %s -> %s" % ("would map" if dry_run else "map", appid,
+                                           names.get(appid, "default for all games" if appid == 0 else "?"),
+                                           oldname or "(none)", tool or "(none)"))
+    if dry_run:
+        return
+    os.makedirs(BACKUPS, exist_ok=True)
+    shutil.copy2(path, os.path.join(BACKUPS, "config.vdf.%s" % time.strftime("%Y%m%d-%H%M%S")))
+    with open(path, "w", encoding="utf-8", errors="surrogateescape") as f:
+        f.write("\n".join(vdf_dump(tree)) + "\n")
+    print("written to %s; start Steam" % path)
+
+
 def cmd_play(appid):
     subprocess.run([OPEN, "-a", STEAMPLAY_APP, "--args", str(appid)], check=True)
 
@@ -344,6 +445,12 @@ def main(argv):
         cmd_sync("--dry-run" in argv[1:], "--remove" in argv[1:])
     elif len(argv) == 2 and argv[0] == "play" and argv[1].isdigit():
         cmd_play(int(argv[1]))
+    elif argv == ["tools"]:
+        cmd_tools()
+    elif len(argv) >= 3 and argv[0] == "map" and len(argv[1:]) % 2 == 0 \
+            and all(a.isdigit() for a in argv[1::2] if a != "--dry-run"):
+        args = [a for a in argv[1:] if a != "--dry-run"]
+        cmd_map({int(a): (None if t == "none" else t) for a, t in zip(args[::2], args[1::2])}, "--dry-run" in argv)
     elif len(argv) >= 1 and argv[0] == "hook" and all(a.isdigit() or a in ("--dry-run", "--remove") for a in argv[1:]):
         cmd_hook([int(a) for a in argv[1:] if a.isdigit()], "--remove" in argv[1:], "--dry-run" in argv[1:])
     else:

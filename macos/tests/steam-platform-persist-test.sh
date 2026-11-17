@@ -28,7 +28,26 @@
 #   steam-platform-persist-test.sh setup-cfg          Steam quit: set all manifests but the
 #                                                     canary's aside, write the switch
 #
-# For both:
+# Experiment 3, Steam Play itself: Mac Steam's CCompatManager is the one from Linux, and its
+# constructor enables it only when Steam's platform is "linux" (steamclient.dylib, arm64,
+# 0x6bab74..0x6bab90), which is why overrides and tool mappings did nothing on "windows" or
+# "macos". So this tells Steam it is on Linux and lets two tools choose each game's build:
+# proton-macos (from windows) and macos-native (from macos), both in macos/steamplay-tools.
+#
+#   steam-platform-persist-test.sh setup-steamplay    Steam quit: put Kerbal Space Program back
+#                                                     (the canary with Windows, Mac and Linux
+#                                                     builds), switch to linux, install the tools,
+#                                                     map IRON NEST, Just Die Already and Left 4
+#                                                     Dead to proton-macos, Kerbal to macos-native,
+#                                                     all other games to proton-macos, and take the
+#                                                     steamplay-launch launch options out
+#
+# Reading "status" after experiment 3: "Registering tool proton-macos" and "macos-native" in the
+# compatibility log; no "config changed" for IRON NEST, Just Die Already or Left 4 Dead (they keep
+# their Windows depots); Kerbal changed to its Mac depot (220202), not a Linux one; after Play, the
+# probe log names the tool Steam started and its verb. A Linux depot or removed files: stop.
+#
+# For all:
 #
 #   steam-platform-persist-test.sh status             what Steam did since setup (reads only)
 #   steam-platform-persist-test.sh restore            Steam quit: put the manifests back
@@ -76,6 +95,8 @@ OVERRIDE_APPS=${OVERRIDE_APPS:-"500 979070 2950790"}
 CANARY=${CANARY:-500}
 STATE_DIR=$BUILD_ROOT/steamplay/persist-test
 CFG_LINE='@sSteamCmdForcePlatformType windows'
+CFG_ANY='^@sSteamCmdForcePlatformType '
+STEAMPLAY=$(cd "$(dirname "$0")/.." && pwd)/steamplay
 CFG_FILES=("$STEAM_ROOT/steam_dev.cfg" "$STEAM_ROOT/Steam.AppBundle/Steam/Contents/MacOS/steam_dev.cfg")
 PROBE_VDF="$STEAM_ROOT/compatibilitytools.d/proton-macos-probe/compatibilitytool.vdf"
 PROBE_LOG=$BUILD_ROOT/evidence/steamplay/probe.log
@@ -168,6 +189,33 @@ setup-cfg)
     echo "experiment: cfg" > "$STATE_DIR/experiment"
     echo "Now start Steam, wait a minute, and run: $0 status"
     ;;
+setup-steamplay)
+    steam_running && die "quit Steam first (Steam > Quit Steam)"
+    [ -s "$STATE_DIR/moved.tsv" ] || die "run setup-overrides or setup-cfg first, so that the other games are aside"
+    # Kerbal Space Program back from aside, with what was downloaded for it
+    : > "$STATE_DIR/moved.tsv.new"
+    while IFS=$'\t' read -r from to; do
+        case $to in
+            */appmanifest_220200.acf|*/downloading/220200|*/temp/220200|*/downloading/state_220200_*)
+                if [ -e "$to" ]; then echo "kept aside $from: $to exists"; printf '%s\t%s\n' "$from" "$to" >> "$STATE_DIR/moved.tsv.new"
+                else mv "$from" "$to"; echo "put back   $to"; fi ;;
+            *) printf '%s\t%s\n' "$from" "$to" >> "$STATE_DIR/moved.tsv.new" ;;
+        esac
+    done < "$STATE_DIR/moved.tsv"
+    mv "$STATE_DIR/moved.tsv.new" "$STATE_DIR/moved.tsv"
+    for cfg in "${CFG_FILES[@]}"; do
+        [ -d "$(dirname "$cfg")" ] || continue
+        { grep -v "$CFG_ANY" "$cfg" 2>/dev/null || true; echo '@sSteamCmdForcePlatformType linux'; } > "$cfg.tmp"
+        mv "$cfg.tmp" "$cfg"
+        echo "linux in   $cfg"
+    done
+    "$STEAMPLAY" tools
+    "$STEAMPLAY" map 2950790 proton-macos 979070 proton-macos 500 proton-macos 220200 macos-native 0 proton-macos
+    "$STEAMPLAY" hook --remove 2950790 979070
+    date '+%Y-%m-%d %H:%M:%S' > "$STATE_DIR/setup-time"
+    echo "experiment: steamplay" > "$STATE_DIR/experiment"
+    echo "Now start Steam, wait a minute, and run: $0 status"
+    ;;
 status)
     steam_running && echo "Steam is running" || echo "Steam is not running"
     [ -f "$STATE_DIR/experiment" ] && cat "$STATE_DIR/experiment"
@@ -179,7 +227,8 @@ status)
     fi
     [ -f "$PROBE_VDF" ] && echo "probe tool: $(grep -o '"to_oslist"[[:space:]]*"[a-z]*"' "$PROBE_VDF" | tr -s '[:space:]' ' ')"
     for cfg in "${CFG_FILES[@]}"; do
-        grep -qxF "$CFG_LINE" "$cfg" 2>/dev/null && echo "switch in  $cfg"
+        line=$(grep "$CFG_ANY" "$cfg" 2>/dev/null || true)
+        [ -n "$line" ] && echo "switch     $line  ($cfg)"
     done
     aside=0; [ -s "$STATE_DIR/moved.tsv" ] && aside=$(wc -l < "$STATE_DIR/moved.tsv" | tr -d ' ')
     echo "manifests set aside: $aside"
@@ -231,12 +280,12 @@ clean)
     fi
     for cfg in "${CFG_FILES[@]}"; do
         [ -f "$cfg" ] || continue
-        grep -vxF "$CFG_LINE" "$cfg" > "$cfg.tmp" || true
+        grep -v "$CFG_ANY" "$cfg" > "$cfg.tmp" || true
         if [ -s "$cfg.tmp" ]; then mv "$cfg.tmp" "$cfg"; else rm -f "$cfg.tmp" "$cfg"; fi
         echo "switch out of $cfg"
     done
     ;;
 *)
-    die "usage: $0 setup-overrides | setup-cfg | status | restore | clean"
+    die "usage: $0 setup-overrides | setup-cfg | setup-steamplay | status | restore | clean"
     ;;
 esac
