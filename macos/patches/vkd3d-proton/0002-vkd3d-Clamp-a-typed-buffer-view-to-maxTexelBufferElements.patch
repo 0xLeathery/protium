@@ -1,0 +1,48 @@
+vkd3d: Clamp a typed buffer view to maxTexelBufferElements.
+
+A typed buffer view of more elements than the device supports was reported
+with a FIXME and made all the same. Most drivers go along with that. Metal's
+texture buffers end at 2^28 texels, and KosmicKrisp, asked for more, has
+Metal's descriptor validation abort the process:
+
+  -[MTLTextureDescriptorInternal validateWithDevice:]: failed assertion
+  `MTLTextureDescriptor has width (268959744) greater than the maximum
+  allowed size of 268435456.'
+    mtl_new_texture_with_descriptor_linear
+    kk_CreateBufferView
+    vkCreateBufferView
+
+The Last of Us Part II Remastered makes a view of 268959744 elements (1026 MiB
+of 4-byte elements) while it loads, a few seconds after its swap chain.
+
+The view is clamped to the limit, as the typed view of a raw or structured
+buffer already is, and so is the element count the shader checks against: the
+elements past the limit read as zero instead of being read at all.
+
+Applied by macos/build-vkd3d-proton.sh to github.com/athei/vkd3d-proton at
+c5e2c9b8c55872893e3ba47d60448dd4f35185ef. Written with an AI assistant
+(Claude); vkd3d-proton states no policy on that.
+---
+diff --git a/libs/vkd3d/resource.c b/libs/vkd3d/resource.c
+index 794e8b25..67229942 100644
+--- a/libs/vkd3d/resource.c
++++ b/libs/vkd3d/resource.c
+@@ -6393,10 +6393,16 @@ static bool vkd3d_buffer_view_get_aligned_view(
+         }
+         else if (num_elements > max_elements)
+         {
+-            FIXME("Application is attempting to use more elements in a typed buffer (%llu) than supported by device (%llu).\n",
++            /* The device has no view of that many elements. Most drivers make one all the same;
++             * Metal's texture buffers end at 2^28 texels, and KosmicKrisp aborts the process on
++             * a larger one. Make the view as large as the device allows: the element count the
++             * shader checks its index against is clamped with it, so reads past the end of the
++             * view return zero and never reach the driver. */
++            FIXME_ONCE("Application is attempting to use more elements in a typed buffer (%llu) than supported by device (%llu), clamping.\n",
+                   (unsigned long long)num_elements, (unsigned long long)max_elements);
+             bound_range->element_offset = 0;
+-            bound_range->element_count = num_elements;
++            bound_range->element_count = max_elements;
++            num_elements = max_elements;
+         }
+         else if (num_elements >= max_resource_elements)
+         {
