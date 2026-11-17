@@ -22,7 +22,9 @@
 #   GAME_EXE        the executable, relative to the install folder or as a full path, when the
 #                   largest .exe in its top folder is not the game (macos/steamplay-launch gives
 #                   the one Steam chose)
-#   STEAMPLAY_LOG   where Wine's output goes (default <prefix>/../steamplay-run.log)
+#   STEAMPLAY_LOG   where Wine's output goes (default <prefix>/../steamplay-run.log; the run
+#                   before keeps its own as steamplay-run.prev.log)
+#   WINEDEBUG       Wine's debug channels (default +loaddll)
 
 set -euo pipefail
 
@@ -88,6 +90,10 @@ for dll in steamclient.dll steamclient64.dll; do
 done
 
 logfile=${STEAMPLAY_LOG:-$compat/steamplay-run.log}
+# the run before this one keeps its log, since the next start is often how a crash gets looked at
+[ -f "$logfile" ] && mv -f "$logfile" "${logfile%.log}.prev.log"
+# where each module is loaded, so that the PE addresses of a crash can be given their DLLs
+export WINEDEBUG="${WINEDEBUG:-+loaddll}"
 log "app $appid: $exe (log: $logfile)"
 cd "$(dirname "$exe")"
 # steam.exe starts the game by its full Windows path (Wine's Z: drive is the host's /)
