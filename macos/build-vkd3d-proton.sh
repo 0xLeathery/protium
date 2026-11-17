@@ -17,9 +17,11 @@
 # mark does not depend on the Wine commit. The i386 DLLs, for 32-bit games, are not built: this
 # Wine build has no 32-bit side yet.
 #
-# The source is the macos-patched branch of github.com/athei/vkd3d-proton at a fixed commit,
-# built as it is, the way github.com/athei/mach9 builds it. This script never patches the
-# source, and refuses a source tree that differs from the commit.
+# The source is the macos-patched branch of github.com/athei/vkd3d-proton at a fixed commit, the
+# way github.com/athei/mach9 builds it, with the patches in macos/patches/vkd3d-proton applied
+# in the order of their names. Each patch says at its head what it is for; they are fixes that
+# belong in that fork, and leave here when it has them. A source tree that differs from the
+# commit by anything else is refused.
 #
 # Environment overrides:
 #   BUILD_ROOT     (default /Users/annon/projects/proton-macos-build)
@@ -49,6 +51,10 @@ MESON_VERSION=1.11.2
 TRIPLE=arm64ec-w64-mingw32
 DLLS="d3d12 d3d12core"
 BLD=$BUILD_ROOT/vkd3d-proton-build/arm64x
+PATCH_DIR=$(cd "$(dirname "$0")" && pwd)/patches/vkd3d-proton
+shopt -s nullglob
+PATCHES=("$PATCH_DIR"/*.patch)
+shopt -u nullglob
 
 log() { echo ":: $*" >&2; }
 die() { echo "build-vkd3d-proton.sh: error: $*" >&2; exit 1; }
@@ -77,7 +83,9 @@ for tool in gcc g++ ar strip widl windres; do
 done
 ! command -v widl >/dev/null || die "$(command -v widl) would take the place of llvm-mingw's widl; remove it from PATH"
 
-key="vkd3d-proton=$VKD3D_COMMIT meson=$MESON_VERSION clang=[$("$MINGW_BIN/clang" --version | head -1)] glslang=[$("$GLSLANG" --version | head -1)]"
+patch_key=none
+[ ${#PATCHES[@]} -eq 0 ] || patch_key=$(cat "${PATCHES[@]}" | shasum | cut -c1-12)
+key="vkd3d-proton=$VKD3D_COMMIT patches=$patch_key meson=$MESON_VERSION clang=[$("$MINGW_BIN/clang" --version | head -1)] glslang=[$("$GLSLANG" --version | head -1)]"
 complete=yes
 for dll in $DLLS; do [ -f "$VKD3D_DIST/lib/wine/aarch64-windows/$dll.dll" ] || complete=no; done
 if [ $complete = yes ] && [ "$(cat "$VKD3D_DIST/KEY" 2>/dev/null)" = "$key" ]; then
@@ -100,7 +108,7 @@ if [ "$("$VENV/bin/meson" --version 2>/dev/null)" != "$MESON_VERSION" ]; then
 fi
 
 ########################################################################
-# 2. Source at the fixed commit, unmodified
+# 2. Source at the fixed commit, with our patches
 ########################################################################
 # With every tag: vkd3d-proton's build runs `git describe --tags` for the version it reports.
 # The submodules (dxil-spirv with its own, and the Khronos headers) are fetched shallow at the
@@ -117,10 +125,21 @@ GIT_TERMINAL_PROMPT=0 git -C "$VKD3D_SRC" submodule update -q --init --recursive
 bad=$(git -C "$VKD3D_SRC" submodule status --recursive | grep '^[-+U]' || true)
 [ -z "$bad" ] || die "submodules of $VKD3D_SRC do not match $VKD3D_COMMIT:
 $bad"
+# the patches of the build before come off first, so that what is left is compared with the commit
+if [ -n "$(git -C "$VKD3D_SRC" status --porcelain --untracked-files=no --ignore-submodules=all | head -1)" ]; then
+    for ((i = ${#PATCHES[@]} - 1; i >= 0; i--)); do
+        git -C "$VKD3D_SRC" apply -R "${PATCHES[i]}" 2>/dev/null || true
+    done
+fi
 dirty=$(git -C "$VKD3D_SRC" status --porcelain --untracked-files=no --ignore-submodules=none | head -5)
-[ -z "$dirty" ] || die "$VKD3D_SRC differs from $VKD3D_COMMIT; vkd3d-proton is built unmodified:
+[ -z "$dirty" ] || die "$VKD3D_SRC differs from $VKD3D_COMMIT by more than the patches in $PATCH_DIR:
 $dirty"
 describe=$(git -C "$VKD3D_SRC" describe --always --tags)
+for patch in ${PATCHES[@]+"${PATCHES[@]}"}; do
+    git -C "$VKD3D_SRC" apply "$patch" || die "$(basename "$patch") does not apply to $VKD3D_COMMIT"
+    log "applied $(basename "$patch")"
+done
+[ ${#PATCHES[@]} -eq 0 ] || describe="$describe + ${#PATCHES[@]} patch(es)"
 log "vkd3d-proton $describe ($VKD3D_COMMIT)"
 
 ########################################################################

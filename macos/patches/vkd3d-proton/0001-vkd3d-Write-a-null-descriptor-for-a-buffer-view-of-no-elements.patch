@@ -1,0 +1,45 @@
+vkd3d: Write a null descriptor for a buffer view of no elements.
+
+A buffer SRV or UAV with NumElements 0 went to vkCreateBufferView with a range
+of 0, which Vulkan does not allow (VUID-VkBufferViewCreateInfo-range-00928).
+Most drivers make an empty view of it. KosmicKrisp asks Metal for a texture of
+width 0, and Metal's descriptor validation aborts the process:
+
+  -[MTLTextureDescriptorInternal validateWithDevice:]: failed assertion
+  `MTLTextureDescriptor has width of zero.'
+    mtl_new_texture_with_descriptor_linear
+    kk_CreateBufferView
+    vkCreateBufferView
+
+The Last of Us Part II Remastered makes such a view on its main thread a few
+seconds after its swap chain, and never got a frame out.
+
+A null descriptor reads as zero, which is what Direct3D 12 gives for a read
+out of the bounds of a view; both callers already write one when there is no
+view.
+
+Applied by macos/build-vkd3d-proton.sh to github.com/athei/vkd3d-proton at
+c5e2c9b8c55872893e3ba47d60448dd4f35185ef. Written with an AI assistant
+(Claude); vkd3d-proton states no policy on that.
+---
+diff --git a/libs/vkd3d/resource.c b/libs/vkd3d/resource.c
+index 794e8b25..64573bcb 100644
+--- a/libs/vkd3d/resource.c
++++ b/libs/vkd3d/resource.c
+@@ -6423,6 +6423,16 @@ static bool vkd3d_buffer_view_get_aligned_view(
+         }
+     }
+ 
++    if (!num_elements)
++    {
++        /* Vulkan has no buffer view of no elements: the range of one must be greater than 0,
++         * and KosmicKrisp asks Metal for a texture of width 0 for it, which aborts the process.
++         * A null descriptor reads as zero, which is what a read out of the bounds of a view
++         * gives in Direct3D 12, and every read of this view is one. */
++        *view = NULL;
++        return true;
++    }
++
+     if (!vkd3d_create_buffer_view_for_resource(device, resource, format,
+             first_element, num_elements,
+             structured_stride, vk_flags, view))
