@@ -24,7 +24,7 @@
 #                   the one Steam chose)
 #   STEAMPLAY_LOG   where Wine's output goes (default <prefix>/../steamplay-run.log; the run
 #                   before keeps its own as steamplay-run.prev.log)
-#   WINEDEBUG       Wine's debug channels (default +loaddll)
+#   WINEDEBUG       Wine's debug channels (default +loaddll,+msgbox)
 
 set -euo pipefail
 
@@ -92,8 +92,9 @@ done
 logfile=${STEAMPLAY_LOG:-$compat/steamplay-run.log}
 # the run before this one keeps its log, since the next start is often how a crash gets looked at
 [ -f "$logfile" ] && mv -f "$logfile" "${logfile%.log}.prev.log"
-# where each module is loaded, so that the PE addresses of a crash can be given their DLLs
-export WINEDEBUG="${WINEDEBUG:-+loaddll}"
+# where each module is loaded, so that the PE addresses of a crash can be given their DLLs, and
+# what a message box says, which is often all a game tells of what it could not do
+export WINEDEBUG="${WINEDEBUG:-+loaddll,+msgbox}"
 log "app $appid: $exe (log: $logfile)"
 cd "$(dirname "$exe")"
 # steam.exe starts the game by its full Windows path (Wine's Z: drive is the host's /)
