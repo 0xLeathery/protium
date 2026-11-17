@@ -4,6 +4,8 @@
     macos/steamplay list              Windows games in Steam's libraries
     macos/steamplay sync [--dry-run]  give each one a shortcut in Steam's library (Steam quit)
     macos/steamplay play <app id>     start one now, through Steam Play.app
+    macos/steamplay hook [--dry-run] [--remove] [app id...]
+                                      make each one's own library entry start it (Steam quit)
 
 Mac Steam downloads a Windows build when its download platform is forced, but will not launch
 it. "sync" adds a non-Steam shortcut per game to the signed-in user's shortcuts.vdf, named
@@ -14,8 +16,18 @@ playing and counts its playtime. Shortcuts made earlier by sync are replaced, ot
 and shortcuts.vdf is backed up first. Steam must be quit while it is written, since Steam
 rewrites the file when it quits.
 
+"hook" is the other way to a Play button, without a second entry per game: it sets the game's
+launch option, in the signed-in user's localconfig.vdf, to macos/steamplay-launch followed by
+%command%, so that Steam's own Play starts the game through that script (which see). A launch
+option the user already has stays, after %command%; one with its own %command% is left alone.
+With app ids it does those games whatever is in their folders, without them every Windows game
+"list" shows; --remove takes the script out again. Steam only offers Play for a Windows game
+while it takes the Mac for a Windows machine.
+
 Environment: STEAM_ROOT (default ~/Library/Application Support/Steam), STEAMPLAY_APP (default
-<build root>/steamplay-apps/Steam Play.app), STEAMPLAY_BACKUPS (default <build root>/steamplay/backups).
+<build root>/steamplay-apps/Steam Play.app), STEAMPLAY_BACKUPS (default <build root>/steamplay/backups),
+STEAMPLAY_LAUNCH (default steamplay-launch next to this script), and STEAMPLAY_FAKE_STEAM=1 to try
+sync or hook on a copy of a Steam folder while Steam runs.
 """
 import os
 import re
@@ -30,6 +42,7 @@ BUILD_ROOT = os.environ.get("BUILD_ROOT", "/Users/annon/projects/proton-macos-bu
 STEAM_ROOT = os.environ.get("STEAM_ROOT", os.path.expanduser("~/Library/Application Support/Steam"))
 STEAMPLAY_APP = os.environ.get("STEAMPLAY_APP", os.path.join(BUILD_ROOT, "steamplay-apps", "Steam Play.app"))
 BACKUPS = os.environ.get("STEAMPLAY_BACKUPS", os.path.join(BUILD_ROOT, "steamplay", "backups"))
+LAUNCH = os.environ.get("STEAMPLAY_LAUNCH", os.path.join(os.path.dirname(os.path.abspath(__file__)), "steamplay-launch"))
 TAG = "Steam Play"          # marks the shortcuts that sync owns
 OPEN = "/usr/bin/open"
 
@@ -71,6 +84,59 @@ def windows_games():
             if any(f.lower().endswith(".exe") for f in files) and not any(f.endswith(".app") for f in files):
                 games.append((int(m.group(1)), name, lib, folder))
     return games
+
+
+def vdf_quote(value):
+    return value.replace("\\", "\\\\").replace('"', '\\"')
+
+
+def vdf_unquote(value):
+    return re.sub(r"\\(.)", r"\1", value)
+
+
+def app_setting(text, appid, key, change):
+    """A user's localconfig.vdf with one setting of one app changed: `change` gets the setting's
+    value (None when it is not there) and returns the new one (None to remove it). Returns the new
+    text and the old and new values. The file is as Steam writes it: a key or a brace a line."""
+    want = ["userlocalconfigstore", "software", "valve", "steam", "apps", str(appid)]
+    lines = text.split("\n")
+    path, out, old, new, done, pending = [], [], None, None, False, None
+    setting = re.compile(r'^(\s*)"' + re.escape(key) + r'"\s+"(.*)"\s*$', re.I)
+    for line in lines:
+        stripped = line.strip()
+        here = [p.lower() for p in path]
+        if stripped == "{":
+            path.append(pending or "")
+            pending = None
+        elif stripped == "}":
+            indent = line[:len(line) - len(line.lstrip())]
+            if here == want and not done:           # the app's block ends without the setting
+                new = change(None)
+                if new is not None:
+                    out.append('%s\t"%s"\t\t"%s"' % (indent, key, vdf_quote(new)))
+                done = True
+            elif here == want[:-1] and not done:    # the apps block ends without the app
+                new = change(None)
+                if new is not None:
+                    out += ['%s\t"%d"' % (indent, appid), indent + "\t{",
+                            '%s\t\t"%s"\t\t"%s"' % (indent, key, vdf_quote(new)), indent + "\t}"]
+                done = True
+            path.pop()
+        elif here == want and setting.match(line) and not done:
+            m = setting.match(line)
+            old = vdf_unquote(m.group(2))
+            new = change(old)
+            done = True
+            if new is None:
+                continue
+            line = '%s"%s"\t\t"%s"' % (m.group(1), key, vdf_quote(new))
+        else:
+            m = re.fullmatch(r'"((?:[^"\\]|\\.)*)"', stripped)
+            pending = m.group(1) if m else None
+        out.append(line)
+    if not done:
+        die("no Software/Valve/Steam/apps section in localconfig.vdf")
+    return "\n".join(out), old, new
 
 
 # ---------------------------------------------------------------- binary VDF (shortcuts.vdf)
@@ -177,7 +243,9 @@ def cmd_list():
 
 
 def steam_running():
-    return subprocess.run(["pgrep", "-f", "steam_osx"], stdout=subprocess.DEVNULL).returncode == 0
+    if os.environ.get("STEAMPLAY_FAKE_STEAM"):
+        return False
+    return subprocess.run(["pgrep", "-x", "steam_osx"], stdout=subprocess.DEVNULL).returncode == 0
 
 
 def cmd_sync(dry_run):
@@ -224,6 +292,40 @@ def cmd_sync(dry_run):
     print("%d shortcut(s) written to %s, %d other shortcut(s) kept; start Steam to see them" % (len(made), path, len(kept)))
 
 
+def cmd_hook(appids, remove, dry_run):
+    if not remove and not os.access(LAUNCH, os.X_OK):
+        die("no launch script " + LAUNCH)
+    if not dry_run and steam_running():
+        die("quit Steam first: it rewrites its settings when it quits")
+    hook = '"%s" %%command%%' % LAUNCH
+    names = {appid: name for appid, name, _, _ in windows_games()}
+    path = os.path.join(steam_user_config(), "localconfig.vdf")
+    with open(path, encoding="utf-8", errors="surrogateescape") as f:
+        text = original = f.read()
+
+    def change(old):
+        ours = old is not None and "steamplay-launch" in old and "%command%" in old
+        rest = old.split("%command%", 1)[1].strip() if ours else (old or "")
+        if remove:
+            return (rest or None) if ours else old
+        if old and not ours and "%command%" in old:
+            return old                      # someone else's wrapper: leave it
+        return hook + (" " + rest if rest else "")
+
+    for appid in appids or sorted(names):
+        text, old, new = app_setting(text, appid, "LaunchOptions", change)
+        what = "unchanged" if old == new else ("would set" if dry_run else "set") if new is not None else \
+               ("would clear" if dry_run else "cleared")
+        print("%-11s %-9d %s: %s" % (what, appid, names.get(appid, "?"), new if new is not None else "(no launch option)"))
+    if dry_run or text == original:
+        return
+    os.makedirs(BACKUPS, exist_ok=True)
+    shutil.copy2(path, os.path.join(BACKUPS, "localconfig.vdf.%s" % time.strftime("%Y%m%d-%H%M%S")))
+    with open(path, "w", encoding="utf-8", errors="surrogateescape") as f:
+        f.write(text)
+    print("written to %s; start Steam" % path)
+
+
 def cmd_play(appid):
     subprocess.run([OPEN, "-a", STEAMPLAY_APP, "--args", str(appid)], check=True)
 
@@ -235,6 +337,8 @@ def main(argv):
         cmd_sync("--dry-run" in argv[1:])
     elif len(argv) == 2 and argv[0] == "play" and argv[1].isdigit():
         cmd_play(int(argv[1]))
+    elif len(argv) >= 1 and argv[0] == "hook" and all(a.isdigit() or a in ("--dry-run", "--remove") for a in argv[1:]):
+        cmd_hook([int(a) for a in argv[1:] if a.isdigit()], "--remove" in argv[1:], "--dry-run" in argv[1:])
     else:
         sys.exit(__doc__)
 
