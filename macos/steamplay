@@ -8,9 +8,14 @@
     macos/steamplay play <app id>     start one now, through Steam Play.app
     macos/steamplay hook [--dry-run] [--remove] [app id...]
                                       make each one's own library entry start it (Steam quit)
-    macos/steamplay tools             install the compatibility tools into Steam (Steam quit)
+    macos/steamplay setup [--dry-run] set Steam Play up: the tools, Steam's platform switch and a
+                                      compatibility tool for every game (Steam quit)
+    macos/steamplay status            the switch, the tools and each installed game's choice
+    macos/steamplay prefer <app id> native|proton|auto
+                                      your own choice for one game (Steam quit)
+    macos/steamplay tools             install the compatibility tools only (Steam quit)
     macos/steamplay map <app id> <tool|none> [<app id> <tool|none>...]
-                                      choose a game's compatibility tool (Steam quit)
+                                      write a game's compatibility tool directly (Steam quit)
 
 Mac Steam downloads a Windows build when its download platform is forced, but will not launch
 it. "sync" adds a non-Steam shortcut per game to the signed-in user's shortcuts.vdf, named
@@ -29,17 +34,29 @@ With app ids it does those games whatever is in their folders, without them ever
 "list" shows; --remove takes the script out again. Steam only offers Play for a Windows game
 while it takes the Mac for a Windows machine.
 
-"tools" and "map" are Steam Play's own way, which Mac Steam runs only while it takes the Mac for a
-Linux machine (@sSteamCmdForcePlatformType linux): "tools" copies the tools in macos/steamplay-tools
-(proton-macos: a game's Windows build through Proton; macos-native: its Mac build, unchanged) into
-Steam's compatibilitytools.d, and "map" writes a game's choice into Steam's config.vdf
-(CompatToolMapping; app id 0 is the default for all games, "none" removes a choice).
+"setup" is Steam Play's own way, and the one to use: Mac Steam has Linux's Steam Play, which it
+runs only while it takes the Mac for a Linux machine (@sSteamCmdForcePlatformType linux in the
+steam_dev.cfg next to its executables). Each game then goes by its compatibility tool, and Steam
+does the rest itself: the right depots, Play, the prefix path, cloud saves. The two tools are in
+macos/steamplay-tools: proton-macos runs a game's Windows build through Proton, macos-native makes
+Steam install the Mac build and runs it unchanged. The rule, from what Steam's app cache says of
+each game: a Mac build that runs on this Mac (64-bit or Apple Silicon) wins; every other game
+gets Proton (a 32-bit Mac build cannot run here, and a Linux build must not be chosen). "prefer"
+overrides the rule for one game and is remembered in <build root>/steamplay/choices.json.
+"setup" installs the tools into /usr/local/share/steam/compatibilitytools.d (one of the few folders
+Steam looks in, and the one no Steam update touches), writes the switch, maps the games in
+config.vdf (CompatToolMapping; app id 0 is the default for games it does not know yet) and takes
+"hook"'s launch options out. Run it again after buying games: a new game with a Mac or Linux
+build needs its own mapping. WARNING: with the switch on linux and the tools missing, or the
+switch gone, Steam takes Windows installs for wrong and removes them at its next start: "status"
+says so, and "setup" puts both right. "tools" and "map" are the single steps.
 
 Environment: STEAM_ROOT (default ~/Library/Application Support/Steam), STEAMPLAY_APP (default
 <build root>/steamplay-apps/Steam Play.app), STEAMPLAY_BACKUPS (default <build root>/steamplay/backups),
 STEAMPLAY_LAUNCH (default steamplay-launch next to this script), and STEAMPLAY_FAKE_STEAM=1 to try
 sync or hook on a copy of a Steam folder while Steam runs.
 """
+import json
 import os
 import re
 import shutil
@@ -397,6 +414,253 @@ TOOLS = sorted(t for t in os.listdir(TOOLS_SRC)) if os.path.isdir(TOOLS_SRC) els
 # inside its app bundle (steamclient.dylib's CLoadLocalToolListJob). /usr/local is the one outside
 # everything Steam manages, so client updates do not touch it.
 TOOLS_DIR = os.environ.get("STEAMPLAY_TOOLS_DIR", "/usr/local/share/steam/compatibilitytools.d")
+CHOICES = os.path.join(BUILD_ROOT, "steamplay", "choices.json")
+SWITCH = "@sSteamCmdForcePlatformType"
+# Steam reads the second, next to its executables; the first is kept the same for whoever looks
+SWITCH_FILES = [os.path.join(STEAM_ROOT, "steam_dev.cfg"),
+                os.path.join(STEAM_ROOT, "Steam.AppBundle", "Steam", "Contents", "MacOS", "steam_dev.cfg")]
+PROTON, NATIVE = "proton-macos", "macos-native"
+
+
+def app_cache():
+    """Steam's cache of app metadata, appcache/appinfo.vdf: {app id: {name, type, oslist, osextended}}."""
+    path = os.path.join(STEAM_ROOT, "appcache", "appinfo.vdf")
+    with open(path, "rb") as f:
+        d = f.read()
+    magic, = struct.unpack_from("<I", d, 0)
+    if magic != 0x07564429:
+        die("%s has format %#x, not the one this reads (0x7564429)" % (path, magic))
+    table, = struct.unpack_from("<q", d, 8)
+    count, = struct.unpack_from("<I", d, table)
+    strings, pos = [], table + 4
+    for _ in range(count):
+        end = d.index(b"\0", pos)
+        strings.append(d[pos:end].decode("utf-8", "replace"))
+        pos = end + 1
+
+    def block(pos):
+        out = {}
+        while True:
+            kind = d[pos]
+            pos += 1
+            if kind == 8:
+                return out, pos
+            key = strings[struct.unpack_from("<I", d, pos)[0]]
+            pos += 4
+            if kind == 0:
+                value, pos = block(pos)
+            elif kind == 1:
+                end = d.index(b"\0", pos)
+                value, pos = d[pos:end].decode("utf-8", "replace"), end + 1
+            elif kind == 2:
+                value, pos = struct.unpack_from("<i", d, pos)[0], pos + 4
+            elif kind == 7:
+                value, pos = struct.unpack_from("<Q", d, pos)[0], pos + 8
+            else:
+                raise ValueError("value type %d" % kind)
+            out[key] = value
+
+    apps, pos = {}, 16
+    while pos < table:
+        appid, size = struct.unpack_from("<II", d, pos)
+        if not appid:
+            break
+        try:    # after id and size: state, time, token, a hash, change number, a hash
+            root = block(pos + 8 + 60)[0]
+            common = root.get("appinfo", root).get("common", {})
+            apps[appid] = {"name": str(common.get("name", "?")), "type": str(common.get("type", "")).lower(),
+                           "oslist": [x for x in str(common.get("oslist", "")).split(",") if x],
+                           "osextended": [x for x in str(common.get("osextended", "")).split(",") if x]}
+        except (ValueError, IndexError, struct.error):
+            pass
+        pos += 8 + size
+    return apps
+
+
+def rule(app):
+    """The tool for a game by the rule, and why."""
+    if "macos" in app["oslist"]:
+        if "macosapplesilicon" in app["osextended"]:
+            return NATIVE, "has a Mac build for Apple Silicon"
+        if "macos64" in app["osextended"]:
+            return NATIVE, "has a 64-bit Mac build (runs under Rosetta)"
+        return PROTON, "its Mac build is 32-bit, which this macOS cannot run"
+    if "linux" in app["oslist"]:
+        return PROTON, "no Mac build (and its Linux build must not be chosen)"
+    return PROTON, "Windows only"
+
+
+def read_choices():
+    try:
+        with open(CHOICES) as f:
+            return {int(k): v for k, v in json.load(f).items() if v in ("native", "proton")}
+    except (OSError, ValueError):
+        return {}
+
+
+def switch_state():
+    """The platform each steam_dev.cfg sets, or None."""
+    out = []
+    for path in SWITCH_FILES:
+        try:
+            with open(path) as f:
+                found = [l.split()[1] for l in f.read().splitlines() if l.startswith(SWITCH + " ") and len(l.split()) > 1]
+        except OSError:
+            found = []
+        out.append(found[-1] if found else None)
+    return out
+
+
+def write_switch(platform):
+    for path in SWITCH_FILES:
+        if not os.path.isdir(os.path.dirname(path)):
+            continue
+        try:
+            with open(path) as f:
+                lines = [l for l in f.read().splitlines() if not l.startswith(SWITCH + " ")]
+        except OSError:
+            lines = []
+        with open(path, "w") as f:
+            f.write("\n".join(lines + ["%s %s" % (SWITCH, platform)]) + "\n")
+
+
+def tools_installed():
+    return all(os.access(os.path.join(TOOLS_DIR, t, "run"), os.X_OK) for t in TOOLS)
+
+
+def current_mapping():
+    path = os.path.join(STEAM_ROOT, "config", "config.vdf")
+    with open(path, encoding="utf-8", errors="surrogateescape") as f:
+        tree = vdf_parse(f.read())
+    mapping = vdf_block(tree, ["InstallConfigStore", "Software", "Valve", "Steam", "CompatToolMapping"])
+    return {int(k): next((x for n, x in v if n == "name"), None) for k, v in mapping if isinstance(v, list) and k.isdigit()}
+
+
+def wanted_mapping():
+    """{app id: (tool, why)} for the default and every cached game that needs its own entry."""
+    choices = read_choices()
+    out = {0: (PROTON, "the default, for games Steam's cache does not have yet")}
+    for appid, app in app_cache().items():
+        if app["type"] not in ("game", "demo", "application", "beta") or not app["oslist"]:
+            continue
+        tool, why = rule(app)
+        if appid in choices:
+            tool, why = (NATIVE if choices[appid] == "native" else PROTON), "your choice"
+        if tool == NATIVE or app["oslist"] != ["windows"] or appid in choices:
+            out[appid] = (tool, why)
+    return out
+
+
+def cmd_setup(dry_run):
+    if not dry_run and steam_running():
+        die("quit Steam first: it reads its tools and settings when it starts")
+    wanted = wanted_mapping()
+    have = current_mapping()
+    changes = {a: t for a, (t, _) in wanted.items() if have.get(a) != t}
+    native = sum(1 for t, _ in wanted.values() if t == NATIVE)
+    print("%d games get their Mac build, %d with a Mac or Linux build get Proton, every other game Proton by default"
+          % (native, len(wanted) - native - 1))
+    cache = app_cache()
+    names = {a: cache[a]["name"] for a in cache}
+    for appid, _, lib, _ in installed_apps():
+        if appid in cache and cache[appid]["type"] in ("game", "demo", "application", "beta"):
+            tool, why = wanted.get(appid, (PROTON, "Windows only"))
+            print("  installed  %-9d %-45s %s: %s" % (appid, names.get(appid, "?")[:45], tool, why))
+    if dry_run:
+        print("would write %d mapping(s), the switch to linux, and the tools into %s" % (len(changes), TOOLS_DIR))
+        return
+    cmd_tools()
+    write_switch("linux")
+    print("switch: %s linux" % SWITCH)
+    if changes:
+        cmd_map(changes, quiet=True)
+    else:
+        print("mappings already as wanted")
+    hooked = hooked_apps()
+    if hooked:
+        cmd_hook(hooked, True, False)
+    print("done; start Steam")
+
+
+def cmd_prefer(appid, choice):
+    if steam_running():
+        die("quit Steam first: it rewrites its settings when it quits")
+    cache = app_cache()
+    if appid not in cache:
+        die("Steam's cache has no app %d" % appid)
+    choices = read_choices()
+    choices.pop(appid, None)
+    if choice != "auto":
+        if choice == "native" and "macos" not in cache[appid]["oslist"]:
+            die("%s has no Mac build" % cache[appid]["name"])
+        choices[appid] = choice
+    os.makedirs(os.path.dirname(CHOICES), exist_ok=True)
+    with open(CHOICES, "w") as f:
+        json.dump({str(k): v for k, v in sorted(choices.items())}, f, indent=1)
+    tool, why = wanted_mapping().get(appid, (None, "Windows only: Proton by default"))
+    print("%d %s: %s (%s)" % (appid, cache[appid]["name"], tool or PROTON, why))
+    cmd_map({appid: tool}, quiet=True)
+
+
+def installed_apps():
+    """(app id, name, library, installed depot ids) of every app with a manifest."""
+    out = []
+    for lib in libraries():
+        apps = os.path.join(lib, "steamapps")
+        for entry in sorted(os.listdir(apps)):
+            m = re.fullmatch(r"appmanifest_(\d+)\.acf", entry)
+            if not m:
+                continue
+            with open(os.path.join(apps, entry), encoding="utf-8", errors="replace") as f:
+                tree = vdf_parse(f.read())
+            state = vdf_block(tree, ["AppState"])
+            name = next((v for k, v in state if k == "name" and isinstance(v, str)), m.group(1))
+            depots = [k for k, v in vdf_block(state, ["InstalledDepots"]) if isinstance(v, list)]
+            out.append((int(m.group(1)), name, lib, depots))
+    return out
+
+
+def hooked_apps():
+    """App ids whose launch option is hook's."""
+    path = os.path.join(steam_user_config(), "localconfig.vdf")
+    with open(path, encoding="utf-8", errors="surrogateescape") as f:
+        tree = vdf_parse(f.read())
+    apps = vdf_block(tree, ["UserLocalConfigStore", "Software", "Valve", "Steam", "apps"])
+    return [int(k) for k, v in apps if isinstance(v, list) and k.isdigit()
+            and any(n == "LaunchOptions" and "steamplay-launch" in x for n, x in v if isinstance(x, str))]
+
+
+def cmd_status():
+    problems = []
+    root, bundle = switch_state()
+    print("Steam is %s" % ("running" if steam_running() else "not running"))
+    print("switch: %s (the copy Steam reads, next to its executables); %s (Steam root)" % (bundle or "none", root or "none"))
+    if bundle != "linux":
+        problems.append("the switch is not on linux: Steam Play is off, and Steam will take Windows installs for "
+                        "wrong at its next start")
+    present = [t for t in TOOLS if os.access(os.path.join(TOOLS_DIR, t, "run"), os.X_OK)]
+    print("tools in %s: %s" % (TOOLS_DIR, ", ".join(present) or "none"))
+    if len(present) != len(TOOLS):
+        problems.append("tools are missing: Steam will take the games mapped to them for Linux games")
+    have, wanted, cache = current_mapping(), wanted_mapping(), app_cache()
+    print("default for games not listed: %s" % (have.get(0) or "none"))
+    if have.get(0) != PROTON:
+        problems.append("no default mapping to %s" % PROTON)
+    stale = sum(1 for a, (t, _) in wanted.items() if have.get(a) != t)
+    print("mappings: %d of ours in Steam's settings, %d to write" % (sum(1 for t in have.values() if t in TOOLS), stale))
+    if stale:
+        problems.append("%d game(s) are not mapped by the rule yet (new games?)" % stale)
+    for appid, name, lib, depots in installed_apps():
+        if appid not in cache or cache[appid]["type"] not in ("game", "demo", "application", "beta"):
+            continue
+        tool, why = wanted.get(appid, (PROTON, "Windows only"))
+        mapped = have.get(appid) or ("%s (default)" % have.get(0) if have.get(0) else "none")
+        print("  %-9d %-42s %-13s %s; mapped: %s; depots: %s" % (appid, name[:42], tool, why, mapped, " ".join(depots) or "none"))
+    for p in problems:
+        print("PROBLEM: " + p)
+    if problems:
+        print("Quit Steam and run: %s setup" % os.path.abspath(__file__))
+    return 1 if problems else 0
 
 
 def cmd_tools():
@@ -414,7 +678,7 @@ def cmd_tools():
         print("installed %s in %s" % (tool, target))
 
 
-def cmd_map(choices, dry_run=False):
+def cmd_map(choices, dry_run=False, quiet=False):
     """choices: {app id: tool name or None}. Writes them into config.vdf's CompatToolMapping."""
     if not dry_run and steam_running():
         die("quit Steam first: it rewrites its settings when it quits")
@@ -430,16 +694,17 @@ def cmd_map(choices, dry_run=False):
         mapping[:] = [kv for kv in mapping if kv[0] != str(appid)]
         if tool:
             mapping.append([str(appid), [["name", tool], ["config", ""], ["priority", "250"]]])
-        print("%-11s %-9d %s: %s -> %s" % ("would map" if dry_run else "map", appid,
-                                           names.get(appid, "default for all games" if appid == 0 else "?"),
-                                           oldname or "(none)", tool or "(none)"))
+        if not quiet:
+            print("%-11s %-9d %s: %s -> %s" % ("would map" if dry_run else "map", appid,
+                                               names.get(appid, "default for all games" if appid == 0 else "?"),
+                                               oldname or "(none)", tool or "(none)"))
     if dry_run:
         return
     os.makedirs(BACKUPS, exist_ok=True)
     shutil.copy2(path, os.path.join(BACKUPS, "config.vdf.%s" % time.strftime("%Y%m%d-%H%M%S")))
     with open(path, "w", encoding="utf-8", errors="surrogateescape") as f:
         f.write("\n".join(vdf_dump(tree)) + "\n")
-    print("written to %s; start Steam" % path)
+    print("%d mapping(s) written to %s" % (len(choices), path))
 
 
 def cmd_play(appid):
@@ -453,6 +718,12 @@ def main(argv):
         cmd_sync("--dry-run" in argv[1:], "--remove" in argv[1:])
     elif len(argv) == 2 and argv[0] == "play" and argv[1].isdigit():
         cmd_play(int(argv[1]))
+    elif argv in (["setup"], ["setup", "--dry-run"]):
+        cmd_setup("--dry-run" in argv)
+    elif argv == ["status"]:
+        sys.exit(cmd_status())
+    elif len(argv) == 3 and argv[0] == "prefer" and argv[1].isdigit() and argv[2] in ("native", "proton", "auto"):
+        cmd_prefer(int(argv[1]), argv[2])
     elif argv == ["tools"]:
         cmd_tools()
     elif len(argv) >= 3 and argv[0] == "map" and len(argv[1:]) % 2 == 0 \

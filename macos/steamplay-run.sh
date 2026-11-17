@@ -60,7 +60,8 @@ else
 fi
 [ -f "$exe" ] || die "no game executable in $game_dir (set GAME_EXE)"
 
-compat="$library/steamapps/compatdata/$appid"
+# Steam Play names the game's compatibility data folder itself; it is the same one
+compat=${STEAM_COMPAT_DATA_PATH:-"$library/steamapps/compatdata/$appid"}
 prefix="$compat/pfx"
 mkdir -p "$prefix"
 export WINEPREFIX="$prefix"

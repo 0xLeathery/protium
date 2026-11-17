@@ -4,8 +4,9 @@
 # this hands the Windows game to the macOS Proton build. See macos/steamplay.
 PROTON_DIR=${PROTON_DIR:-/Users/annon/projects/Proton/macos}
 LOG=${STEAMPLAY_TOOL_LOG:-/Users/annon/projects/proton-macos-build/evidence/steamplay/probe.log}
+# what Steam asked for, for diagnosis (not the account's name, which Steam also passes)
 { echo "=== $(date '+%F %T') proton-macos argv: $*"; echo "cwd: $(pwd)"
-  env | grep -E '^(STEAM|Steam|SteamApp|DYLD)' | sort; } >> "$LOG" 2>/dev/null
+  env | grep -E '^(STEAM_COMPAT|STEAM_DYLD|SteamAppId|SteamGameId)' | sort; } >> "$LOG" 2>/dev/null
 verb=${1:-}; shift || true
 case $verb in
     waitforexitandrun|run) exec "$PROTON_DIR/steamplay-launch" "$@" ;;
