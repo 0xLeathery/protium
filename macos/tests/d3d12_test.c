@@ -8,6 +8,8 @@
  * maps it. Then it makes a shader resource view and an unordered access view of no elements
  * (NumElements 0) on a buffer, as The Last of Us Part II does while it starts: Vulkan has no
  * buffer view of range 0, and the driver aborted the process on the one vkd3d-proton asked for.
+ * Last it registers a video memory budget event with the adapter and expects it signalled at
+ * once, as Windows does: Red Dead Redemption 2 waits for that before it makes its window.
  *
  * Prints one line, e.g.
  *   d3d12: vkd3d 1, adapter "Apple M4 Pro", feature level c100, pixel 4080bfff, expected 4080bfff
@@ -248,6 +250,26 @@ int main(void)
         ID3D12Device_CreateUnorderedAccessView( device, empty_buffer, NULL, &uav_desc, handle );
         if (FAILED(hr = ID3D12Device_GetDeviceRemovedReason( device )))
             return fail( "the device was removed by the views of no elements, GetDeviceRemovedReason", hr );
+    }
+
+    /* Windows signals a video memory budget event once as it is registered. Red Dead Redemption 2
+     * registers one after it has made its devices and waits for it without a timeout. */
+    {
+        HANDLE budget_event = CreateEventW( NULL, FALSE, FALSE, NULL );
+        IDXGIAdapter3 *adapter3;
+        DWORD cookie = 0;
+
+        if (FAILED(hr = IDXGIAdapter1_QueryInterface( adapter, &IID_IDXGIAdapter3, (void **)&adapter3 )))
+            return fail( "QueryInterface (IDXGIAdapter3)", hr );
+        if (FAILED(hr = IDXGIAdapter3_RegisterVideoMemoryBudgetChangeNotificationEvent( adapter3, budget_event, &cookie )))
+            return fail( "RegisterVideoMemoryBudgetChangeNotificationEvent", hr );
+        if (WaitForSingleObject( budget_event, 2000 ) != WAIT_OBJECT_0)
+        {
+            printf( "d3d12: the video memory budget event was not signalled when it was registered\n" );
+            return 2;
+        }
+        IDXGIAdapter3_UnregisterVideoMemoryBudgetChangeNotification( adapter3, cookie );
+        IDXGIAdapter3_Release( adapter3 );
     }
 
     ok = close_to( pixel[0], expected[0] ) && close_to( pixel[1], expected[1] ) && close_to( pixel[2], expected[2] ) && close_to( pixel[3], expected[3] );
