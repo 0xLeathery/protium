@@ -17,6 +17,7 @@
     macos/steamplay guard install|remove
                                       have that done by itself, as a login item of this user
     macos/steamplay tools             install the compatibility tools only (Steam quit)
+    macos/steamplay links [app id...] put back the symbolic links Steam left out of a Mac build
     macos/steamplay map <app id> <tool|none> [<app id> <tool|none>...]
                                       write a game's compatibility tool directly (Steam quit)
 
@@ -64,6 +65,13 @@ a background job may read them, and adds a LaunchAgent that keeps "guard watch" 
 login on: a small process that looks every two seconds and runs the guard when the switch or a
 tool is gone, when Steam starts (its compatibility log grows) or its settings change, and every
 five minutes. It logs what it did to ~/Library/Logs/SteamPlay/guard.log.
+
+"links" mends what the switch breaks in a Mac build: while Steam takes the Mac for a Linux
+machine it installs a Mac depot without the symbolic links the depot lists, and an app bundle
+whose frameworks lack theirs does not start (dyld: Library not loaded). It reads the links from
+the depot manifests Steam keeps in its depotcache and makes the ones that are missing, inside
+the game's folder only. Without app ids it does every installed game mapped to macos-native;
+the macos-native tool runs it for its game before each start.
 
 Environment: STEAM_ROOT (default ~/Library/Application Support/Steam), STEAMPLAY_APP (default
 <build root>/steamplay-apps/Steam Play.app), STEAMPLAY_HOME (default ~/Library/Application
@@ -732,6 +740,111 @@ def cmd_tools():
         print("installed %s in %s" % (tool, os.path.join(TOOLS_DIR, tool)))
 
 
+# ---------------------------------------------------------------- symbolic links of Mac builds
+
+def depot_links(path):
+    """(file name, link target) of every symbolic link in a depot manifest of Steam's depotcache:
+    sections of magic, length and a protobuf message; in the payload section each file is
+    field 1, with its name in field 1 and, for a link, the target in field 7."""
+    def varint(data, pos):
+        value = shift = 0
+        while True:
+            byte = data[pos]
+            pos += 1
+            value |= (byte & 0x7f) << shift
+            shift += 7
+            if byte < 0x80:
+                return value, pos
+
+    def fields(data):
+        pos = 0
+        while pos < len(data):
+            key, pos = varint(data, pos)
+            kind = key & 7
+            if kind == 0:
+                value, pos = varint(data, pos)
+            elif kind == 2:
+                size, pos = varint(data, pos)
+                value = data[pos:pos + size]
+                pos += size
+            elif kind in (1, 5):
+                size = 8 if kind == 1 else 4
+                value = data[pos:pos + size]
+                pos += size
+            else:
+                raise ValueError("unknown protobuf wire type %d" % kind)
+            yield key >> 3, value
+
+    with open(path, "rb") as f:
+        data = f.read()
+    links, pos = [], 0
+    while pos + 8 <= len(data):
+        magic, size = struct.unpack_from("<II", data, pos)
+        pos += 8
+        if magic == 0x71F617D0:
+            for field, entry in fields(data[pos:pos + size]):
+                if field != 1:
+                    continue
+                parts = dict((n, v) for n, v in fields(entry) if n in (1, 7) and isinstance(v, bytes))
+                if parts.get(7):
+                    links.append((parts.get(1, b"").decode("utf-8"), parts[7].decode("utf-8")))
+        pos += size
+    return links
+
+
+def restore_links(appid):
+    """Makes the symbolic links of an installed game's depots that are missing in its folder.
+    Returns (made, problems)."""
+    made, problems = [], []
+    for lib in libraries():
+        manifest = os.path.join(lib, "steamapps", "appmanifest_%d.acf" % appid)
+        if not os.path.isfile(manifest):
+            continue
+        with open(manifest, encoding="utf-8", errors="replace") as f:
+            state = vdf_block(vdf_parse(f.read()), ["AppState"])
+        installdir = next((v for k, v in state if k == "installdir" and isinstance(v, str)), None)
+        if not installdir:
+            continue
+        root = os.path.realpath(os.path.join(lib, "steamapps", "common", installdir))
+        for depot, info in vdf_block(state, ["InstalledDepots"]):
+            gid = next((v for k, v in info if k == "manifest" and isinstance(v, str)), None) if isinstance(info, list) else None
+            path = os.path.join(STEAM_ROOT, "depotcache", "%s_%s.manifest" % (depot, gid))
+            if not gid or not os.path.isfile(path):
+                continue
+            try:
+                links = depot_links(path)
+            except (OSError, ValueError, IndexError, struct.error) as e:
+                problems.append("depot %s: %s" % (depot, e))
+                continue
+            for name, target in links:
+                link = os.path.normpath(os.path.join(root, name.replace("\\", "/")))
+                parent = os.path.realpath(os.path.dirname(link))
+                # a link goes inside the game's folder and nowhere else, whatever a manifest says
+                if not (parent + os.sep).startswith(root + os.sep) and parent != root:
+                    problems.append("%s is outside %s" % (name, root))
+                elif not os.path.lexists(link) and os.path.isdir(parent):
+                    try:
+                        os.symlink(target, link)
+                        made.append(link)
+                    except OSError as e:
+                        problems.append("%s: %s" % (link, e))
+    return made, problems
+
+
+def cmd_links(appids):
+    if not appids:
+        mapped = current_mapping()
+        appids = [a for a, _, _, _ in installed_apps() if mapped.get(a) == NATIVE]
+    status = 0
+    for appid in appids:
+        made, problems = restore_links(appid)
+        for p in problems:
+            print("PROBLEM: %d: %s" % (appid, p))
+        print("%d: %d link(s) made%s" % (appid, len(made), "".join("\n    " + m for m in made)))
+        status = status or (1 if problems else 0)
+    return status
+
+
 # ---------------------------------------------------------------- the guard
 
 def session_state():
@@ -903,7 +1016,14 @@ def cmd_guard_install():
         plistlib.dump(plist, f)
     domain = "gui/%d" % os.getuid()
     subprocess.run(["/bin/launchctl", "bootout", "%s/%s" % (domain, GUARD_LABEL)], stderr=subprocess.DEVNULL)
-    r = subprocess.run(["/bin/launchctl", "bootstrap", domain, GUARD_PLIST])
+    # launchd is still taking the old job down when bootout returns, and refuses to load the
+    # new one until it has (error 5): the guard must not stay unloaded, so try for a while
+    for attempt in range(10):
+        r = subprocess.run(["/bin/launchctl", "bootstrap", domain, GUARD_PLIST],
+                           stderr=subprocess.DEVNULL if attempt < 9 else None)
+        if not r.returncode:
+            break
+        time.sleep(1)
     if r.returncode:
         die("launchctl could not load %s" % GUARD_PLIST)
     print("the guard is installed: %s keeps %s guard watch running" % (GUARD_PLIST, script))
@@ -973,6 +1093,8 @@ def main(argv):
         cmd_guard_remove()
     elif argv == ["tools"]:
         cmd_tools()
+    elif len(argv) >= 1 and argv[0] == "links" and all(a.isdigit() for a in argv[1:]):
+        sys.exit(cmd_links([int(a) for a in argv[1:]]))
     elif len(argv) >= 3 and argv[0] == "map" and len(argv[1:]) % 2 == 0 \
             and all(a.isdigit() for a in argv[1::2] if a != "--dry-run"):
         args = [a for a in argv[1:] if a != "--dry-run"]
