@@ -50,6 +50,7 @@ BREW=$(brew --prefix)
 for f in glib libogg libvorbis opus theora libvpx mpg123; do
     [ -d "$BREW/opt/$f" ] || die "Homebrew $f not installed: brew install $f"
 done
+mkdir -p "$BUILD_ROOT"
 free_gb=$(df -g "$BUILD_ROOT" | awk 'NR==2 {print $4}')
 [ "$free_gb" -ge "$MIN_FREE_GB" ] || die "only ${free_gb} GB free on $BUILD_ROOT (minimum ${MIN_FREE_GB} GB)"
 if [ "$("$VENV/bin/meson" --version 2>/dev/null)" != "$MESON_VERSION" ]; then

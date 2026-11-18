@@ -296,7 +296,7 @@ def read_shortcuts(path):
 def write_shortcuts(path, shortcuts):
     root = {"shortcuts": {str(i): s for i, s in enumerate(shortcuts)}}
     with open(path + ".new", "wb") as f:
-        f.write(bvdf_write(root) + b"\x08")
+        f.write(bvdf_write(root))    # which ends the root map as well: nothing follows it
     os.replace(path + ".new", path)
 
 
@@ -457,7 +457,9 @@ def cmd_hook(appids, remove, dry_run):
 
 
 TOOLS_SRC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "steamplay-tools")
-TOOLS = sorted(t for t in os.listdir(TOOLS_SRC)) if os.path.isdir(TOOLS_SRC) else []
+# a tool is a folder: Finder's .DS_Store, for one, is not
+TOOLS = sorted(t for t in os.listdir(TOOLS_SRC)
+               if not t.startswith(".") and os.path.isdir(os.path.join(TOOLS_SRC, t))) if os.path.isdir(TOOLS_SRC) else []
 # Mac Steam looks for tools only in /usr/share/steam, /usr/local/share/steam (each with a
 # compatibilitytools.d), $STEAM_EXTRA_COMPAT_TOOLS_PATHS and the folder of its own client library
 # inside its app bundle (steamclient.dylib's CLoadLocalToolListJob). /usr/local is the one outside
