@@ -1,0 +1,42 @@
+LookupCache: Take the range off the overcommit list before freeing it.
+
+A thread's lookup cache is reserved without being committed, and its range is
+put on the frontend's list of ranges to commit at the first access
+(MarkOvercommitRange). The destructor freed the memory first and took the
+range off the list afterwards.
+
+Between the two, a thread that is starting can be given the same address for
+its own cache (Wine allocates top down, so the address just freed is the next
+one given out) and mark the same range, which the thread that is ending then
+unmarks. The first lookup of the new thread is an access violation that the
+overcommit tracker does not know, nobody handles it, and the thread never
+reaches its first instruction.
+
+With 50 threads at a time, each ending at once, about one thread in 1,500 was
+lost this way under Wine on macOS (macos/tests/sync_test.c, "threads that
+start while others end").
+
+LOCAL TO THIS PORT, NOT FOR FEX. Applied by macos/build-fex.sh to
+github.com/athei/FEX at 8425ea974e072821c75969723efe49cca605200c. Written
+with an AI assistant (Claude). FEX takes no AI-generated code contributions
+(its CLAUDE.md, AGENTS.md and CONTRIBUTING.md), so this patch must not be
+sent to it as a pull request. What was found may be reported to its
+developers, for them to write their own fix; this patch leaves here when the
+pinned commit has one.
+---
+diff --git a/FEXCore/Source/Interface/Core/LookupCache.cpp b/FEXCore/Source/Interface/Core/LookupCache.cpp
+index 4518a2a9e..dd83da1a5 100644
+--- a/FEXCore/Source/Interface/Core/LookupCache.cpp
++++ b/FEXCore/Source/Interface/Core/LookupCache.cpp
+@@ -76,8 +76,10 @@ LookupCache::LookupCache(FEXCore::Context::ContextImpl* CTX)
+ }
+ 
+ LookupCache::~LookupCache() {
+-  FEXCore::Allocator::VirtualFree(reinterpret_cast<void*>(CacheBase), TotalCacheSize);
++  // Before the memory is freed: once it is, the cache of a thread that is starting can be given the same address and
++  // mark the same range, which this would then unmark.
+   ctx->SyscallHandler->UnmarkOvercommitRange(CacheBase, TotalCacheSize);
++  FEXCore::Allocator::VirtualFree(reinterpret_cast<void*>(CacheBase), TotalCacheSize);
+ 
+   // No need to free BlockLinks map.
+   // These will get freed when their memory allocators are deallocated.
