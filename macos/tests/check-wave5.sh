@@ -47,7 +47,8 @@
 #  15  synchronisation: sync_test.exe, x86_64 and i386, passes all of its groups with the
 #      wineserver's own waits and with fsync (WINEFSYNC=1), which keeps events, semaphores and
 #      mutexes in shared memory; its ten thousand threads also check that a thread which
-#      starts while another ends gets to its first instruction under FEX
+#      starts while another ends gets to its first instruction under FEX, and its last group
+#      that a process whose threads are ending gets to exit
 #  16  session end: session_end_test.exe, started by its full path as steamplay-run.sh starts
 #      steam.exe, gets the wineserver's shutdown event when its child ("the game") has ended;
 #      Steam shows a game as running for as long as that session lasts
@@ -228,7 +229,7 @@ if want 15; then
                 winrun "$log" "$T/sync_test_$a.exe"
             fi
             line=$(grep -a '^sync test:' "$log.out" | tail -1 | tr -d '\r')
-            [ "$line" = "sync test: 15/15 passed" ] || ok=no
+            [ "$line" = "sync test: 16/16 passed" ] || ok=no
             lines="$lines $mode $a: '${line:-$(tail -1 "$log.out" | tr -d '\r')}'$(grep -a 'FAIL' "$log.out" | head -3 | tr -d '\r' | sed 's/^/ [/; s/$/]/' | tr -d '\n')"
         done
     done

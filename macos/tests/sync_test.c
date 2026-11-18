@@ -14,11 +14,13 @@
  * with every token counted, the same with an event per worker, churn of creating and closing,
  * two thousand threads that each wait alertably and end (files opened before must still be
  * readable), ten thousand threads of which some start while others end (each must get to its
- * first instruction: under FEX one in a few thousand did not, see emulator_thread_section in
- * Wine's signal_arm64ec.c), and SuspendThread across a wait.
+ * first instruction: under FEX one in a few thousand did not, see macos/patches/fex/0001),
+ * SuspendThread across a wait, and processes that exit while their threads end (each must
+ * exit: FEX stops the other threads first, and a thread that cannot be stopped holds the exit
+ * up for good, which a lock around FEX's thread start and end in Wine once did).
  *
  * Prints one line per group and at the end, e.g.
- *   sync test: 15/15 passed
+ *   sync test: 16/16 passed
  * and exits 0 when all passed. The results must be the same with WINEFSYNC=1 and without.
  *
  * Built for x86_64 and i686 with the mingw compiler: -luser32 -lntdll.
@@ -159,6 +161,15 @@ static DWORD CALLBACK wait_then_flag( void *arg )
 
 /* ---------------------------------------------------------------- the other process */
 
+static volatile LONG spin_quit;
+
+static DWORD WINAPI spin_until_told( void *arg )
+{
+    volatile double x = 1;
+    while (!spin_quit) x = x * 1.0000001 + 0.1;
+    return 0;
+}
+
 static int child_main( int argc, char **argv )
 {
     if (!strcmp( argv[1], "exit" )) return 7;
@@ -181,6 +192,14 @@ static int child_main( int argc, char **argv )
             ReleaseSemaphore( pong, 1, NULL );
         }
         return 0;
+    }
+    if (!strcmp( argv[1], "endrace" ))
+    {
+        int i;
+        for (i = 0; i < 12; i++) CloseHandle( CreateThread( NULL, 0x10000, spin_until_told, NULL, 0, NULL ) );
+        Sleep( 50 );
+        spin_quit = 1;   /* they all end now, and so does the process */
+        return 9;
     }
     if (!strcmp( argv[1], "sleeper" ))
     {
@@ -749,6 +768,29 @@ static void test_suspend(void)
     result( "suspended across a wait", ok );
 }
 
+static void test_exit_while_threads_end(void)
+{
+    BOOL ok = TRUE;
+    DWORD code = 0;
+    int i;
+
+    for (i = 0; i < 20 && ok; i++)
+    {
+        HANDLE child = spawn( "endrace" );
+        CHECK( child != NULL );
+        if (!child) break;
+        if (WaitForSingleObject( child, 15000 ) != WAIT_OBJECT_0)
+        {
+            snprintf( detail, sizeof(detail), "process %d of 20 did not exit in 15 s", i + 1 );
+            ok = FALSE;
+            TerminateProcess( child, 1 );
+        }
+        else CHECK( GetExitCodeProcess( child, &code ) && code == 9 );
+        CloseHandle( child );
+    }
+    result( "processes that exit while their threads end", ok );
+}
+
 int main( int argc, char **argv )
 {
     if (argc > 1) return child_main( argc, argv );
@@ -768,6 +810,7 @@ int main( int argc, char **argv )
     test_thread_churn();
     test_thread_overlap();
     test_suspend();
+    test_exit_while_threads_end();
     printf( "sync test: %d/%d passed\n", passed, groups );
     fflush( stdout );
     return passed == groups ? 0 : 1;
