@@ -25,6 +25,11 @@
 #   STEAMPLAY_LOG   where Wine's output goes (default <prefix>/../steamplay-run.log; the run
 #                   before keeps its own as steamplay-run.prev.log)
 #   WINEDEBUG       Wine's debug channels (default +loaddll,+msgbox)
+#   PROTON_NO_FSYNC 1 to have every wait for, and change to, an event, semaphore or mutex go to
+#                   the wineserver again. By default they are kept in shared memory
+#                   (WINEFSYNC=1), as Proton does on Linux.
+#   WINE_FSYNC_STATS  seconds between lines in the log that say how each process slept and
+#                   what it woke; WINE_FSYNC_PARANOID=1 reports a wake-up that did not arrive
 #
 # Steam's STEAM_COMPAT_CONFIG is read for nativevulkanloader. When a thread of the game waits a
 # minute for a lock, samples of the game's processes are left as steamplay-run.hang.<pid>.txt.
@@ -77,6 +82,14 @@ export STEAM_COMPAT_INSTALL_PATH="$game_dir"
 export STEAM_COMPAT_LIBRARY_PATHS="$library/steamapps"
 export SteamAppId=$appid SteamGameId=$appid SteamOverlayGameId=$appid
 export WINEDLLOVERRIDES="${WINEDLLOVERRIDES:-mscoree,mshtml=}"
+# fsync: the wineserver decides as it starts and the game's processes follow it, so this is set
+# before anything of Wine's runs here. A server that an earlier run left in the prefix keeps
+# what it started with.
+if [ "${PROTON_NO_FSYNC:-0}" = 1 ]; then
+    export WINEFSYNC=0
+else
+    export WINEFSYNC="${WINEFSYNC:-1}"
+fi
 unset VK_DRIVER_FILES VK_ICD_FILENAMES VK_ADD_DRIVER_FILES PROTON_DISABLE_LSTEAMCLIENT
 
 if [ ! -f "$prefix/system.reg" ]; then
