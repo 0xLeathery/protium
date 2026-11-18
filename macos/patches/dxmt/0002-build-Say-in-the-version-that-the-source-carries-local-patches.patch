@@ -1,0 +1,26 @@
+build: Say in the version that the source carries local patches.
+
+DXMT names its version in the device description it logs ("DXMT D3D11 FL_..
+<version>"), from `git describe --always`. With `--dirty=+local` a build of a
+tree that our patches have changed says so, e.g. "01e59e9+local", so that
+nobody takes a log of this build for one of DXMT as its authors wrote it.
+
+LOCAL TO THIS PORT, NOT FOR DXMT. Applied by macos/build-dxmt.sh to
+github.com/athei/dxmt at 01e59e9bde030f105937f249afaac92ada01b4d7. Written
+with an AI assistant (Claude). DXMT does not accept contributions made or
+co-authored by AI (its CONTRIBUTING.md), so this patch must not be sent to it
+as a pull request.
+---
+diff --git a/meson.build b/meson.build
+index e10c901..470712b 100644
+--- a/meson.build
++++ b/meson.build
+@@ -140,7 +140,7 @@ endif
+ add_project_arguments('-DDXMT_PAGE_SIZE=4096', language: 'cpp')
+ 
+ dxmt_version = vcs_tag(
+-  command: ['git', 'describe', '--always'],
++  command: ['git', 'describe', '--always', '--dirty=+local'],
+   input:  'version.h.in',
+   output: 'version.h',
+ )

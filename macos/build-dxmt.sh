@@ -20,10 +20,13 @@
 # cross file for that is written into the build directory, since DXMT's build-win32.txt names
 # MinGW-w64 GCC.
 #
-# The source is the macos-patched branch of github.com/athei/dxmt at a fixed commit, built as
-# it is, the way github.com/athei/mach9 builds it. DXMT does not take AI-generated code (its
-# AGENTS.md), so this script must never patch the source: a change that DXMT needs is for its
-# authors to write. The script refuses a source tree that differs from the commit.
+# The source is the macos-patched branch of github.com/athei/dxmt at a fixed commit, the way
+# github.com/athei/mach9 builds it, with the patches in macos/patches/dxmt applied in the order
+# of their names. Each patch says at its head what it is for. They are local to this port: DXMT
+# does not accept contributions made or co-authored by AI (its AGENTS.md and CONTRIBUTING.md),
+# so none of them may be sent to DXMT as a pull request; what was found may be reported to its
+# developers, and a patch leaves here when the pinned commit has their fix. A source tree that
+# differs from the commit by anything else is refused.
 #
 # Environment overrides:
 #   BUILD_ROOT     (default /Users/annon/projects/proton-macos-build)
@@ -35,6 +38,7 @@
 #   DXMT_SRC       (default $BUILD_ROOT/dxmt-src), cloned when missing
 #   DXMT_DIST      (default $BUILD_ROOT/dxmt-dist)
 #   VENV           Python environment that gets meson (default $BUILD_ROOT/py-venv)
+#   JOBS           build parallelism (default: ninja's own, every core)
 #   MIN_FREE_GB    abort if less free disk space than this (default 10)
 
 set -euo pipefail
@@ -52,6 +56,11 @@ DXMT_DIST=${DXMT_DIST:-$BUILD_ROOT/dxmt-dist}
 VENV=${VENV:-$BUILD_ROOT/py-venv}
 MIN_FREE_GB=${MIN_FREE_GB:-10}
 MESON_VERSION=1.11.2
+JOBS=${JOBS:-}
+PATCH_DIR=$SCRIPT_DIR/patches/dxmt
+shopt -s nullglob
+PATCHES=("$PATCH_DIR"/*.patch)
+shopt -u nullglob
 DLLS="dxgi d3d10core d3d11 winemetal"
 BLD=$BUILD_ROOT/dxmt-build/arm64x
 BLD32=$BUILD_ROOT/dxmt-build/i386
@@ -85,7 +94,7 @@ if [ "$("$VENV/bin/meson" --version 2>/dev/null)" != "$MESON_VERSION" ]; then
 fi
 
 ########################################################################
-# 2. Source at the fixed commit, unmodified
+# 2. Source at the fixed commit, with our patches
 ########################################################################
 if [ ! -d "$DXMT_SRC/.git" ]; then
     log "cloning $DXMT_REPO -> $DXMT_SRC"
@@ -95,10 +104,30 @@ git -C "$DXMT_SRC" cat-file -e "$DXMT_COMMIT^{commit}" 2>/dev/null || git -C "$D
 [ "$(git -C "$DXMT_SRC" rev-parse HEAD 2>/dev/null)" = "$DXMT_COMMIT" ] \
     || git -C "$DXMT_SRC" -c advice.detachedHead=false checkout -q --detach "$DXMT_COMMIT"
 git -C "$DXMT_SRC" submodule update -q --init --recursive
-dirty=$(git -C "$DXMT_SRC" status --porcelain --untracked-files=no --ignore-submodules=none | head -5)
-[ -z "$dirty" ] || die "$DXMT_SRC differs from $DXMT_COMMIT; DXMT is built unmodified:
+# A tree that already is the commit with these patches is left alone, so that the build after
+# it compiles nothing again. Otherwise the patches of the build before come off first, and what
+# is left is compared with the commit.
+patch_key=none
+[ ${#PATCHES[@]} -eq 0 ] || patch_key=$(cat "${PATCHES[@]}" | shasum | cut -c1-12)
+tree_key() { git -C "$DXMT_SRC" diff --ignore-submodules=none | shasum | cut -c1-12; }
+applied=$DXMT_SRC/.git/build-dxmt-patches
+if [ "$(cat "$applied" 2>/dev/null)" != "$patch_key $(tree_key)" ]; then
+    if [ -n "$(git -C "$DXMT_SRC" status --porcelain --untracked-files=no --ignore-submodules=all | head -1)" ]; then
+        for ((i = ${#PATCHES[@]} - 1; i >= 0; i--)); do
+            git -C "$DXMT_SRC" apply -R "${PATCHES[i]}" 2>/dev/null || true
+        done
+    fi
+    dirty=$(git -C "$DXMT_SRC" status --porcelain --untracked-files=no --ignore-submodules=none | head -5)
+    [ -z "$dirty" ] || die "$DXMT_SRC differs from $DXMT_COMMIT by more than the patches in $PATCH_DIR:
 $dirty"
+    for patch in ${PATCHES[@]+"${PATCHES[@]}"}; do
+        git -C "$DXMT_SRC" apply "$patch" || die "$(basename "$patch") does not apply to $DXMT_COMMIT"
+        log "applied $(basename "$patch")"
+    done
+    echo "$patch_key $(tree_key)" >"$applied"
+fi
 describe=$(git -C "$DXMT_SRC" describe --always --tags)
+[ ${#PATCHES[@]} -eq 0 ] || describe="$describe + ${#PATCHES[@]} local patch(es)"
 log "DXMT $describe ($DXMT_COMMIT)"
 
 ########################################################################
@@ -117,7 +146,7 @@ if [ "$(cat "$BLD/.build-dxmt-key" 2>/dev/null)" != "$key" ]; then
     echo "$key" >"$BLD/.build-dxmt-key"
 fi
 log "building"
-ninja -C "$BLD" src/dxgi/dxgi.dll.postproc src/d3d10/d3d10core.dll.postproc src/d3d11/d3d11.dll.postproc \
+ninja ${JOBS:+-j "$JOBS"} -C "$BLD" src/dxgi/dxgi.dll.postproc src/d3d10/d3d10core.dll.postproc src/d3d11/d3d11.dll.postproc \
     src/winemetal/winemetal.dll.postproc src/winemetal/unix/winemetal.so >"$BUILD_ROOT/dxmt-build.ninja.log" 2>&1 \
     || die "ninja failed, see $BUILD_ROOT/dxmt-build.ninja.log"
 
@@ -156,7 +185,7 @@ CROSS
         echo "$key" >"$BLD32/.build-dxmt-key"
     fi
     log "building the 32-bit DLLs"
-    ninja -C "$BLD32/build" src/dxgi/dxgi.dll.postproc src/d3d10/d3d10core.dll.postproc src/d3d11/d3d11.dll.postproc \
+    ninja ${JOBS:+-j "$JOBS"} -C "$BLD32/build" src/dxgi/dxgi.dll.postproc src/d3d10/d3d10core.dll.postproc src/d3d11/d3d11.dll.postproc \
         src/winemetal/winemetal.dll.postproc >"$BUILD_ROOT/dxmt-build-i386.ninja.log" 2>&1 \
         || die "ninja (i386) failed, see $BUILD_ROOT/dxmt-build-i386.ninja.log"
 fi

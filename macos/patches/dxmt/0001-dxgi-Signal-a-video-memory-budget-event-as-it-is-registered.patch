@@ -1,0 +1,33 @@
+dxgi: Signal a video memory budget event as it is registered.
+
+Windows signals the event passed to
+IDXGIAdapter3::RegisterVideoMemoryBudgetChangeNotificationEvent once at
+registration, and DXVK's DXGI does the same ("This method seems to fire the
+event immediately on Windows"). Red Dead Redemption 2 depends on it: after it
+has tried out its Direct3D 12 devices it registers an event and, on its main
+thread, waits for it without a timeout before it makes its window. With the
+registration only noted, the game sat with no window until the Rockstar
+launcher was closed.
+
+No budget change is reported after that one signal, as before.
+
+LOCAL TO THIS PORT, NOT FOR DXMT. Applied by macos/build-dxmt.sh to
+github.com/athei/dxmt at 01e59e9bde030f105937f249afaac92ada01b4d7. Written
+with an AI assistant (Claude). DXMT does not accept contributions made or
+co-authored by AI (its CONTRIBUTING.md), so this patch must not be sent to it
+as a pull request. What was found may be reported to its developers, for them
+to write their own fix; this patch leaves here when the pinned commit has one.
+---
+diff --git a/src/dxgi/dxgi_adapter.cpp b/src/dxgi/dxgi_adapter.cpp
+index 7ae5b54..cb18761 100644
+--- a/src/dxgi/dxgi_adapter.cpp
++++ b/src/dxgi/dxgi_adapter.cpp
+@@ -274,6 +274,8 @@ public:
+     if (!event || !cookie)
+       return DXGI_ERROR_INVALID_CALL;
+     *cookie = 0;
++    // Windows signals the event once as it is registered, and a game may wait for that
++    SetEvent(event);
+     return S_OK;
+   }
+ 
