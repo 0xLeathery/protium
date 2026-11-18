@@ -21,9 +21,13 @@
 # under $FEX_DIST. Run Wine with WINEDLLPATH=$FEX_DIST/lib/wine to use them.
 #
 # The source is not Proton's FEX submodule, which has no macOS support. It is the macos-patched
-# branch of github.com/athei/FEX at a fixed commit, built as it is. FEX does not take
-# AI-generated code (its CLAUDE.md), so this script must never patch the source: a change that
-# FEX needs is for its authors to write.
+# branch of github.com/athei/FEX at a fixed commit, with the patches in macos/patches/fex applied
+# in the order of their names. Each patch says at its head what it is for. They are local to
+# this port: FEX takes no AI-generated code contributions (its CLAUDE.md, AGENTS.md and
+# CONTRIBUTING.md), so none of them may be sent to FEX as a pull request; what was found may be
+# reported to its developers, and a patch leaves here when the pinned commit has their fix. A
+# source tree that differs from the commit by anything else is refused, and the version that
+# the modules carry ends in "+local" when they were built with patches.
 #
 # Environment overrides:
 #   BUILD_ROOT     (default /Users/annon/projects/proton-macos-build)
@@ -37,6 +41,7 @@
 
 set -euo pipefail
 
+SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 BUILD_ROOT=${BUILD_ROOT:-/Users/annon/projects/proton-macos-build}
 TOOLCHAIN_DIR=${TOOLCHAIN_DIR:-/Users/annon/projects/proton-macos-toolchain/llvm-mingw-20261020-ucrt-macos-universal}
 FEX_REPO=${FEX_REPO:-https://github.com/athei/FEX}
@@ -48,6 +53,10 @@ MIN_FREE_GB=${MIN_FREE_GB:-10}
 # What the MinGW build uses of FEX's nested submodules; the test binaries and the Linux-only
 # ones are left out.
 FEX_SUBMODULES="External/fmt External/range-v3 External/rpmalloc External/unordered_dense External/xxhash External/vixl External/zydis Source/Common/cpp-optparse"
+PATCH_DIR=$SCRIPT_DIR/patches/fex
+shopt -s nullglob
+PATCHES=("$PATCH_DIR"/*.patch)
+shopt -u nullglob
 
 log() { echo ":: $*" >&2; }
 die() { echo "build-fex.sh: error: $*" >&2; exit 1; }
@@ -66,7 +75,7 @@ log "free disk space: ${free_gb} GB"
 [ "$free_gb" -ge "$MIN_FREE_GB" ] || die "only ${free_gb} GB free on $BUILD_ROOT (minimum ${MIN_FREE_GB} GB)"
 
 ########################################################################
-# 1. Source at the fixed commit, unmodified
+# 1. Source at the fixed commit, with our patches
 ########################################################################
 if [ ! -d "$FEX_SRC/.git" ]; then
     log "cloning $FEX_REPO -> $FEX_SRC"
@@ -76,12 +85,39 @@ git -C "$FEX_SRC" cat-file -e "$FEX_COMMIT^{commit}" 2>/dev/null || git -C "$FEX
 [ "$(git -C "$FEX_SRC" rev-parse HEAD 2>/dev/null)" = "$FEX_COMMIT" ] || git -C "$FEX_SRC" checkout -q --detach "$FEX_COMMIT"
 # shellcheck disable=SC2086
 git -C "$FEX_SRC" submodule update -q --init --depth 1 -- $FEX_SUBMODULES
-dirty=$(git -C "$FEX_SRC" status --porcelain --untracked-files=no --ignore-submodules=none | head -5)
-[ -z "$dirty" ] || die "$FEX_SRC differs from $FEX_COMMIT; FEX is built unmodified:
+# A tree that already is the commit with these patches is left alone, so that the build after
+# it compiles nothing again. Otherwise the patches of the build before come off first, and what
+# is left is compared with the commit.
+patch_key=none
+[ ${#PATCHES[@]} -eq 0 ] || patch_key=$(cat "${PATCHES[@]}" | shasum | cut -c1-12)
+tree_key() { git -C "$FEX_SRC" diff --ignore-submodules=none | shasum | cut -c1-12; }
+applied=$FEX_SRC/.git/build-fex-patches
+if [ "$(cat "$applied" 2>/dev/null)" != "$patch_key $(tree_key)" ]; then
+    if [ -n "$(git -C "$FEX_SRC" status --porcelain --untracked-files=no --ignore-submodules=all | head -1)" ]; then
+        for ((i = ${#PATCHES[@]} - 1; i >= 0; i--)); do
+            git -C "$FEX_SRC" apply -R "${PATCHES[i]}" 2>/dev/null || true
+        done
+    fi
+    dirty=$(git -C "$FEX_SRC" status --porcelain --untracked-files=no --ignore-submodules=none | head -5)
+    [ -z "$dirty" ] || die "$FEX_SRC differs from $FEX_COMMIT by more than the patches in $PATCH_DIR:
 $dirty"
+    for patch in ${PATCHES[@]+"${PATCHES[@]}"}; do
+        git -C "$FEX_SRC" apply "$patch" || die "$(basename "$patch") does not apply to $FEX_COMMIT"
+        log "applied $(basename "$patch")"
+    done
+    echo "$patch_key $(tree_key)" >"$applied"
+fi
 describe=$(git -C "$FEX_SRC" describe --abbrev=7 --tags 2>/dev/null || git -C "$FEX_SRC" rev-parse --short=7 HEAD)
 rev=$(git -C "$FEX_SRC" rev-parse --short=7 HEAD)
-log "FEX $describe ($FEX_COMMIT)"
+if [ ${#PATCHES[@]} -eq 0 ]; then
+    log "FEX $describe ($FEX_COMMIT)"
+else
+    log "FEX $describe + ${#PATCHES[@]} local patch(es) ($FEX_COMMIT)"
+    # FEX gives the guest this text through CPUID and wants it under 32 bytes with its end
+    describe="${describe:0:24}+local"
+fi
+# what a build directory was configured for: the version says whether there are patches
+config_key="$FEX_COMMIT $describe"
 
 ########################################################################
 # 2. libarm64ecfex.dll (the arguments of FEX_CMAKE_ARGS and FEX_arm64ec_CMAKE_ARGS in Makefile.in)
@@ -89,7 +125,7 @@ log "FEX $describe ($FEX_COMMIT)"
 pe_build=$BUILD_ROOT/fex-arm64ec
 pe_libdir=$FEX_DIST/lib/wine/aarch64-windows
 export PATH="$MINGW_BIN:$PATH"
-if [ ! -f "$pe_build/build.ninja" ] || [ "$(cat "$pe_build/.build-fex-commit" 2>/dev/null)" != "$FEX_COMMIT" ]; then
+if [ ! -f "$pe_build/build.ninja" ] || [ "$(cat "$pe_build/.build-fex-commit" 2>/dev/null)" != "$config_key" ]; then
     log "configuring $pe_build"
     cmake -G Ninja -S "$FEX_SRC" -B "$pe_build" \
         -DCMAKE_TOOLCHAIN_FILE="$FEX_SRC/Data/CMake/toolchain_mingw.cmake" \
@@ -98,7 +134,7 @@ if [ ! -f "$pe_build/build.ninja" ] || [ "$(cat "$pe_build/.build-fex-commit" 2>
         -DENABLE_FEXCORE_PROFILER=True -DTUNE_CPU=none -DRANGES_NATIVE=OFF \
         -DOVERRIDE_VERSION="$describe" -DOVERRIDE_HASH="$rev" \
         -DCMAKE_INSTALL_PREFIX="$FEX_DIST" -DCMAKE_INSTALL_LIBDIR="$pe_libdir"
-    echo "$FEX_COMMIT" >"$pe_build/.build-fex-commit"
+    echo "$config_key" >"$pe_build/.build-fex-commit"
 fi
 log "building libarm64ecfex.dll"
 cmake --build "$pe_build" -j "$JOBS" --target arm64ecfex
@@ -111,14 +147,14 @@ cp "$pe_build/Bin/libarm64ecfex.dll" "$pe_libdir/libarm64ecfex.dll" 2>/dev/null 
 ########################################################################
 unix_build=$BUILD_ROOT/fex-unixlib
 unix_libdir=$FEX_DIST/lib/wine/aarch64-unix
-if [ ! -f "$unix_build/build.ninja" ] || [ "$(cat "$unix_build/.build-fex-commit" 2>/dev/null)" != "$FEX_COMMIT" ]; then
+if [ ! -f "$unix_build/build.ninja" ] || [ "$(cat "$unix_build/.build-fex-commit" 2>/dev/null)" != "$config_key" ]; then
     log "configuring $unix_build"
     # Apple's compiler by its path: llvm-mingw's clang++ comes first in PATH by now
     cmake -G Ninja -S "$FEX_SRC/Source/Windows/UnixLib" -B "$unix_build" \
         -DCMAKE_CXX_COMPILER=/usr/bin/clang++ \
         -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES=arm64 \
         -DCMAKE_INSTALL_PREFIX="$FEX_DIST" -DCMAKE_INSTALL_LIBDIR="$unix_libdir"
-    echo "$FEX_COMMIT" >"$unix_build/.build-fex-commit"
+    echo "$config_key" >"$unix_build/.build-fex-commit"
 fi
 log "building libarm64ecfex.so"
 cmake --build "$unix_build" -j "$JOBS" --target arm64ecfex_unixlib
@@ -129,7 +165,7 @@ cp "$(find "$unix_build" -name libarm64ecfex.so -type f | head -1)" "$unix_libdi
 # 4. libwow64fex.dll (FEX_aarch64_CMAKE_ARGS in Makefile.in) and libwow64fex.so
 ########################################################################
 wow_build=$BUILD_ROOT/fex-wow64
-if [ ! -f "$wow_build/build.ninja" ] || [ "$(cat "$wow_build/.build-fex-commit" 2>/dev/null)" != "$FEX_COMMIT" ]; then
+if [ ! -f "$wow_build/build.ninja" ] || [ "$(cat "$wow_build/.build-fex-commit" 2>/dev/null)" != "$config_key" ]; then
     log "configuring $wow_build"
     cmake -G Ninja -S "$FEX_SRC" -B "$wow_build" \
         -DCMAKE_TOOLCHAIN_FILE="$FEX_SRC/Data/CMake/toolchain_mingw.cmake" \
@@ -138,7 +174,7 @@ if [ ! -f "$wow_build/build.ninja" ] || [ "$(cat "$wow_build/.build-fex-commit" 
         -DENABLE_FEXCORE_PROFILER=True -DTUNE_CPU=none -DRANGES_NATIVE=OFF \
         -DOVERRIDE_VERSION="$describe" -DOVERRIDE_HASH="$rev" \
         -DCMAKE_INSTALL_PREFIX="$FEX_DIST" -DCMAKE_INSTALL_LIBDIR="$pe_libdir"
-    echo "$FEX_COMMIT" >"$wow_build/.build-fex-commit"
+    echo "$config_key" >"$wow_build/.build-fex-commit"
 fi
 log "building libwow64fex.dll"
 cmake --build "$wow_build" -j "$JOBS" --target wow64fex
