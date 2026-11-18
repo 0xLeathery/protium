@@ -1,0 +1,78 @@
+#!/usr/bin/env python3
+"""What a Windows minidump says of a crash, without a debugger:
+
+    macos/minidump-summary <file.dmp>
+
+Games leave minidumps when they crash (Call of Duty: WWII next to its program, Red Dead
+Redemption 2 under AppData/Local/Rockstar Games/.../CrashLogs/reports). This prints the
+exception, where it was raised as module+offset, the registers of the thread and every value
+on its stack that points into a module: the return addresses of its call chain, among some
+stale ones. Wine's own modules can then be named with llvm-symbolizer --relative-address.
+"""
+import sys, struct
+d = open(sys.argv[1], 'rb').read()
+sig, ver, nstreams, dir_rva = struct.unpack_from('<IIII', d, 0)
+assert sig == 0x504d444d, 'not a minidump'
+streams = {}
+for i in range(nstreams):
+    t, size, rva = struct.unpack_from('<III', d, dir_rva + 12 * i)
+    streams[t] = (rva, size)
+def u16str(rva):
+    n, = struct.unpack_from('<I', d, rva)
+    return d[rva+4:rva+4+n].decode('utf-16le', 'replace')
+mods = []
+if 4 in streams:
+    rva, size = streams[4]; n, = struct.unpack_from('<I', d, rva)
+    for i in range(n):
+        base, sz, chk, ts, name_rva = struct.unpack_from('<QIIII', d, rva + 4 + 108 * i)
+        mods.append((base, sz, u16str(name_rva).split('\\')[-1]))
+def where(a):
+    for b, s, n in mods:
+        if b <= a < b + s: return '%s+%#x' % (n, a - b)
+    return None
+# memory: Memory64List (9) or MemoryList (5)
+mem = []
+if 9 in streams:
+    rva, size = streams[9]; n, base = struct.unpack_from('<QQ', d, rva); off = base
+    for i in range(n):
+        start, sz = struct.unpack_from('<QQ', d, rva + 16 + 16 * i); mem.append((start, sz, off)); off += sz
+if 5 in streams:
+    rva, size = streams[5]; n, = struct.unpack_from('<I', d, rva)
+    for i in range(n):
+        start, sz, r = struct.unpack_from('<QII', d, rva + 4 + 16 * i); mem.append((start, sz, r))
+def read(addr, n):
+    for start, sz, off in mem:
+        if start <= addr < start + sz:
+            n = min(n, start + sz - addr); return d[off + addr - start: off + addr - start + n]
+    return b''
+threads = {}
+if 3 in streams:
+    rva, size = streams[3]; n, = struct.unpack_from('<I', d, rva)
+    for i in range(n):
+        tid, susp, pc, pr, teb, st_start, st_size, st_rva, ctx_size, ctx_rva = struct.unpack_from('<IIIIQQIIII', d, rva + 4 + 48 * i)
+        threads[tid] = (teb, st_start, st_size, st_rva, ctx_size, ctx_rva)
+print('%d modules, %d threads, %d memory ranges' % (len(mods), len(threads), len(mem)))
+def ctx_amd64(rva):
+    names = 'Rax Rcx Rdx Rbx Rsp Rbp Rsi Rdi R8 R9 R10 R11 R12 R13 R14 R15 Rip'.split()
+    vals = struct.unpack_from('<17Q', d, rva + 0x78)
+    return dict(zip(names, vals))
+if 6 in streams:
+    rva, size = streams[6]
+    tid, _, code, flags, rec, addr, nparams, _ = struct.unpack_from('<IIIIQQII', d, rva)
+    params = struct.unpack_from('<%dQ' % min(nparams, 15), d, rva + 40)
+    ctx_size, ctx_rva = struct.unpack_from('<II', d, rva + 8 + 152)
+    print('exception %#x at %#x (%s) in thread %#x, parameters %s' % (code, addr, where(addr), tid, ' '.join('%#x' % p for p in params)))
+    c = ctx_amd64(ctx_rva)
+    print('  ' + ' '.join('%s=%#x' % (k, c[k]) for k in ('Rip', 'Rsp', 'Rbp', 'Rax', 'Rcx', 'Rdx', 'Rbx')))
+    print('  ' + ' '.join('%s=%#x' % (k, c[k]) for k in ('Rsi', 'Rdi', 'R8', 'R9', 'R10', 'R11', 'R12', 'R13', 'R14', 'R15')))
+    for k in ('Rip', 'Rax', 'Rcx', 'Rdx', 'Rbx', 'Rsi', 'Rdi', 'R8', 'R9', 'R10', 'R11', 'R12', 'R13', 'R14', 'R15'):
+        w = where(c[k])
+        if w: print('  %s points into %s' % (k, w))
+    code_bytes = read(c['Rip'], 16)
+    print('  bytes at Rip: %s' % code_bytes.hex())
+    stack = read(c['Rsp'], 0x1800)
+    print('  stack (%d bytes read from Rsp):' % len(stack))
+    shown = 0
+    for i in range(0, len(stack) - 7, 8):
+        v, = struct.unpack_from('<Q', stack, i); w = where(v)
+        if w and shown < 60: print('    +%#06x  %s' % (i, w)); shown += 1
