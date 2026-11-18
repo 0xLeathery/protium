@@ -48,6 +48,9 @@
 #      wineserver's own waits and with fsync (WINEFSYNC=1), which keeps events, semaphores and
 #      mutexes in shared memory; its ten thousand threads also check that a thread which
 #      starts while another ends gets to its first instruction under FEX
+#  16  session end: session_end_test.exe, started by its full path as steamplay-run.sh starts
+#      steam.exe, gets the wineserver's shutdown event when its child ("the game") has ended;
+#      Steam shows a game as running for as long as that session lasts
 # The build comes first ("build", which takes long and can be left out with CHECK_ITEMS); the test
 # programs are compiled on every run.
 #
@@ -92,7 +95,7 @@ mkdir -p "$EVIDENCE_DIR"
 RESULTS=()
 FAILED=0
 TODO=0
-CHECK_ITEMS=${CHECK_ITEMS:-"build 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15"}
+CHECK_ITEMS=${CHECK_ITEMS:-"build 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16"}
 want() { case " $CHECK_ITEMS " in *" $1 "*) return 0 ;; esac; return 1; }
 pass() { RESULTS+=("PASS  item $1: $2"); echo "PASS  item $1: $2"; }
 fail() { RESULTS+=("FAIL  item $1: $2"); echo "FAIL  item $1: $2"; FAILED=1; }
@@ -172,14 +175,15 @@ if true; then
     cc x86_64 d3d11_resize_test.exe d3d11_resize_test.c -ld3d11 -ldxguid -luuid -luser32
     cc x86_64 d3d12_window_test.exe d3d12_window_test.c -ld3d12 -ldxgi -ldxguid -luuid -luser32
     cc x86_64 steam_api_test.exe steam_api_test.c
+    cc x86_64 session_end_test.exe session_end_test.c -lntdll
     # one second of a single colour with a tone, as H.264/AAC and VP9/Opus
     "$FFMPEG_CLI" -loglevel error -y -f lavfi -i color=c=0x3366cc:s=320x240:r=30:d=1 -f lavfi -i sine=f=440:d=1 \
         -c:v libx264 -profile:v baseline -pix_fmt yuv420p -c:a aac -shortest "$T/h264_aac.mp4" >>"$T/build.log" 2>&1
     "$FFMPEG_CLI" -loglevel error -y -f lavfi -i color=c=0x3366cc:s=320x240:r=30:d=1 -f lavfi -i sine=f=440:d=1 \
         -c:v libvpx-vp9 -pix_fmt yuv420p -c:a libopus -shortest "$T/vp9_opus.webm" >>"$T/build.log" 2>&1
     n=$(ls "$T"/*.exe 2>/dev/null | wc -l | tr -d ' ')
-    [ "$n" -eq 22 ] && [ -s "$T/h264_aac.mp4" ] && [ -s "$T/vp9_opus.webm" ] \
-        && pass programs "22 test programs and 2 video files ($T)" || fail programs "$n of 22 test programs ($T/build.log)"
+    [ "$n" -eq 23 ] && [ -s "$T/h264_aac.mp4" ] && [ -s "$T/vp9_opus.webm" ] \
+        && pass programs "23 test programs and 2 video files ($T)" || fail programs "$n of 23 test programs ($T/build.log)"
 fi
 
 if [ ! -x "$WINE" ]; then
@@ -230,6 +234,22 @@ if want 15; then
     done
     WINEPREFIX=$PREFIX "$SERVER" -k >/dev/null 2>&1
     [ $ok = yes ] && pass 15 "sync_test$lines ($EVIDENCE_DIR/item15-*)" || fail 15 "sync_test$lines ($EVIDENCE_DIR/item15-*)"
+fi
+
+if want 16; then
+    # In a session of its own, and from the place and by the kind of name steam.exe is started by.
+    # Its server is the one Wine starts, as for a game: one asked to stay for ten seconds
+    # (hold_server) sets the shutdown event that much later.
+    WINEPREFIX=$PREFIX "$SERVER" -k >/dev/null 2>&1
+    cp "$T/session_end_test.exe" "$PREFIX/drive_c/windows/system32/session_end_test.exe"
+    WINEPREFIX=$PREFIX run_timeout "$RUN_TIMEOUT" "$WINE" 'c:\windows\system32\session_end_test.exe' \
+        >"$EVIDENCE_DIR/item16.out" 2>"$EVIDENCE_DIR/item16.err" </dev/null
+    line=$(head -1 "$EVIDENCE_DIR/item16.out" | tr -d '\r')
+    case $line in
+        "session end: the shutdown event came"*) pass 16 "session_end_test: '$line' ($EVIDENCE_DIR/item16.*)" ;;
+        *) fail 16 "session_end_test: '$line' ($EVIDENCE_DIR/item16.*)" ;;
+    esac
+    WINEPREFIX=$PREFIX "$SERVER" -k >/dev/null 2>&1
 fi
 
 if want 3; then

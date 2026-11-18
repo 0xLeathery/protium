@@ -177,5 +177,9 @@ rm -f "$hang".*.txt
     done
 ) </dev/null >/dev/null 2>&1 &
 cd "$(dirname "$exe")"
-# steam.exe starts the game by its full Windows path (Wine's Z: drive is the host's /)
-exec "$WINE_INSTALL/bin/wine" steam.exe "Z:${exe//\//\\}" "$@" >"$logfile" 2>&1 </dev/null
+# steam.exe starts the game by its full Windows path (Wine's Z: drive is the host's /). It is
+# named by its own full path too, as Proton does: by its bare name Wine has start.exe look for
+# it and wait for it, and steam.exe, which ends when no other program is left, waits for
+# start.exe in turn. Nothing of the session then ever ends, and Steam goes on showing the game
+# as running after it was quit.
+exec "$WINE_INSTALL/bin/wine" 'c:\windows\system32\steam.exe' "Z:${exe//\//\\}" "$@" >"$logfile" 2>&1 </dev/null
