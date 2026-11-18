@@ -57,7 +57,7 @@ X18_ENTITLEMENT=com.apple.security.custom-x18-abi-toggle
 WAVE_FILES="configure.ac include/winnt.h dlls/ntdll/signal_arm64.c dlls/ntdll/unix/signal_arm64.c dlls/ntdll/unix/virtual.c dlls/ntdll/unix/server.c dlls/ntdll/unix/unix_private.h dlls/ntdll/unix/loader.c loader/main.c dlls/ntdll/unix/system.c dlls/winemac.drv/macdrv.h dlls/winemac.drv/window.c dlls/uiautomationcore/uia_client.c dlls/winegstreamer/media-converter/media-converter.h dlls/winebus.sys/bus_iohid.c"
 # Wine files that later waves change, which check-wave5.sh checks the guards of (PE code, guarded
 # by configure's WINE_MACOS_AARCH64, and configure.ac itself)
-LATER_WAVE_FILES="dlls/mfreadwrite/reader.c configure.ac dlls/winegstreamer/video_decoder.c dlls/winegstreamer/video_processor.c dlls/winemac.drv/cocoa_display.m programs/tabtip/tabtip.c dlls/win32u/font.c dlls/kernelbase/process.c dlls/win32u/vulkan.c dlls/winemac.drv/cocoa_app.m dlls/winemac.drv/cocoa_event.m dlls/winemac.drv/macdrv_cocoa.h dlls/winemac.drv/mouse.c"
+LATER_WAVE_FILES="dlls/mfreadwrite/reader.c configure.ac dlls/winegstreamer/video_decoder.c dlls/winegstreamer/video_processor.c dlls/winemac.drv/cocoa_display.m programs/tabtip/tabtip.c dlls/win32u/font.c dlls/kernelbase/process.c dlls/win32u/vulkan.c dlls/winemac.drv/cocoa_app.m dlls/winemac.drv/cocoa_event.m dlls/winemac.drv/macdrv_cocoa.h dlls/winemac.drv/mouse.c dlls/ntdll/signal_arm64ec.c"
 # PE sources whose objects item 9 compares with the wave base (without the old slot define)
 PE_COMPARE="dlls/ntdll/aarch64-windows/signal_arm64.o:dlls/ntdll/signal_arm64.c
 dlls/ntdll/aarch64-windows/thread.o:dlls/ntdll/thread.c
