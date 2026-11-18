@@ -23,12 +23,17 @@
 #
 #   macos/bundle-wine.sh
 #   LOADER_PROFILE=/path/to/loader.provisionprofile macos/bundle-wine.sh
+#   LOADER_PROFILE= macos/bundle-wine.sh          (ad hoc, though a profile is kept)
 #
 # Environment overrides:
 #   BUILD_ROOT      (default /Users/annon/projects/proton-macos-build)
 #   BUILD_DIR       (default $BUILD_ROOT/wine-aarch64), as build-wine.sh built it; the bundle goes
 #                   into the prefix it was configured with
-#   LOADER_PROFILE  provisioning profile to embed (default: none)
+#   LOADER_PROFILE  provisioning profile to embed (default: $BUILD_ROOT/signing/
+#                   loader.provisionprofile when that file is there, else none; set but empty
+#                   is none). Without one a 32-bit program cannot start and x86-64 ones
+#                   crash: an install that had the profile must not lose it to a run that
+#                   left the variable out.
 #   BUNDLE_ID       bundle identifier (default: the profile's, or org.winehq.wine without a
 #                   profile); with a profile it has to be the one the profile is for
 #   FEX_DIST        output of build-fex.sh (default $BUILD_ROOT/fex-dist); its ARM64EC module is
@@ -76,6 +81,9 @@ set -euo pipefail
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 BUILD_ROOT=${BUILD_ROOT:-/Users/annon/projects/proton-macos-build}
 BUILD_DIR=${BUILD_DIR:-$BUILD_ROOT/wine-aarch64}
+if [ -z "${LOADER_PROFILE+set}" ] && [ -f "$BUILD_ROOT/signing/loader.provisionprofile" ]; then
+    LOADER_PROFILE=$BUILD_ROOT/signing/loader.provisionprofile
+fi
 LOADER_PROFILE=${LOADER_PROFILE:-}
 BUNDLE_ID=${BUNDLE_ID:-}
 FEX_DIST=${FEX_DIST:-$BUILD_ROOT/fex-dist}
