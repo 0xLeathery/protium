@@ -44,6 +44,10 @@
 #  14  thread context: thread_context_test.exe, x86_64 and i386: GetThreadContext() and
 #      SetThreadContext() with a null or unmapped context fail with ERROR_NOACCESS and raise no
 #      exception in the caller (Call of Duty: WWII asks with a null one as it starts)
+#  15  synchronisation: sync_test.exe, x86_64 and i386, passes all of its groups with the
+#      wineserver's own waits and with fsync (WINEFSYNC=1), which keeps events, semaphores and
+#      mutexes in shared memory; its ten thousand threads also check that a thread which
+#      starts while another ends gets to its first instruction under FEX
 # The build comes first ("build", which takes long and can be left out with CHECK_ITEMS); the test
 # programs are compiled on every run.
 #
@@ -88,7 +92,7 @@ mkdir -p "$EVIDENCE_DIR"
 RESULTS=()
 FAILED=0
 TODO=0
-CHECK_ITEMS=${CHECK_ITEMS:-"build 1 2 3 4 5 6 7 8 9 10 11 12 13 14"}
+CHECK_ITEMS=${CHECK_ITEMS:-"build 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15"}
 want() { case " $CHECK_ITEMS " in *" $1 "*) return 0 ;; esac; return 1; }
 pass() { RESULTS+=("PASS  item $1: $2"); echo "PASS  item $1: $2"; }
 fail() { RESULTS+=("FAIL  item $1: $2"); echo "FAIL  item $1: $2"; FAILED=1; }
@@ -160,6 +164,7 @@ if true; then
         cc $a opengl_test_$a.exe opengl_test.c -lopengl32 -lgdi32 -luser32
         cc $a adapter_id_test_$a.exe adapter_id_test.c -ldxgi -ldxguid -luuid -luser32
         cc $a thread_context_test_$a.exe thread_context_test.c
+        cc $a sync_test_$a.exe sync_test.c -luser32 -lntdll
     done
     cc x86_64 cursor_clip_test.exe cursor_clip_test.c -luser32 -lgdi32
     cc x86_64 fullscreen_test.exe fullscreen_test.c -ld3d11 -ldxgi -ldxguid -luuid -luser32
@@ -173,8 +178,8 @@ if true; then
     "$FFMPEG_CLI" -loglevel error -y -f lavfi -i color=c=0x3366cc:s=320x240:r=30:d=1 -f lavfi -i sine=f=440:d=1 \
         -c:v libvpx-vp9 -pix_fmt yuv420p -c:a libopus -shortest "$T/vp9_opus.webm" >>"$T/build.log" 2>&1
     n=$(ls "$T"/*.exe 2>/dev/null | wc -l | tr -d ' ')
-    [ "$n" -eq 18 ] && [ -s "$T/h264_aac.mp4" ] && [ -s "$T/vp9_opus.webm" ] \
-        && pass programs "18 test programs and 2 video files ($T)" || fail programs "$n of 18 test programs ($T/build.log)"
+    [ "$n" -eq 22 ] && [ -s "$T/h264_aac.mp4" ] && [ -s "$T/vp9_opus.webm" ] \
+        && pass programs "22 test programs and 2 video files ($T)" || fail programs "$n of 22 test programs ($T/build.log)"
 fi
 
 if [ ! -x "$WINE" ]; then
@@ -200,6 +205,32 @@ want 1 && two_arch 1 https_test 'status 200'
 want 2 && two_arch 2 bcrypt_test 'rsa sign 0 verify 0, ecdh agree 0 0 same 1'
 want 13 && two_arch 13 adapter_id_test 'match 1'
 want 14 && two_arch 14 thread_context_test 'null get 0 error 998, null set 0 error 998, bad get 0 error 998, good get 1 ip set 1, exceptions 0'
+
+if want 15; then
+    # The server decides as it starts whether fsync is used, and its clients follow it: each
+    # mode gets a server of its own, and the one for fsync says that it is on.
+    ok=yes; lines=""
+    for mode in off on; do
+        WINEPREFIX=$PREFIX "$SERVER" -k >/dev/null 2>&1
+        if [ $mode = on ]; then
+            WINEFSYNC=1 WINEPREFIX=$PREFIX run_timeout 30 "$SERVER" -p10 >"$EVIDENCE_DIR/item15-server.err" 2>&1
+            grep -q 'fsync: up and running' "$EVIDENCE_DIR/item15-server.err" || { ok=no; lines="$lines (the server did not turn fsync on)"; }
+        fi
+        for a in x86_64 i686; do
+            log=$EVIDENCE_DIR/item15-$mode-$a
+            if [ $mode = on ]; then
+                WINEFSYNC=1 WINEPREFIX=$PREFIX run_timeout "$RUN_TIMEOUT" "$WINE" "$T/sync_test_$a.exe" >"$log.out" 2>"$log.err" </dev/null
+            else
+                winrun "$log" "$T/sync_test_$a.exe"
+            fi
+            line=$(grep -a '^sync test:' "$log.out" | tail -1 | tr -d '\r')
+            [ "$line" = "sync test: 15/15 passed" ] || ok=no
+            lines="$lines $mode $a: '${line:-$(tail -1 "$log.out" | tr -d '\r')}'$(grep -a 'FAIL' "$log.out" | head -3 | tr -d '\r' | sed 's/^/ [/; s/$/]/' | tr -d '\n')"
+        done
+    done
+    WINEPREFIX=$PREFIX "$SERVER" -k >/dev/null 2>&1
+    [ $ok = yes ] && pass 15 "sync_test$lines ($EVIDENCE_DIR/item15-*)" || fail 15 "sync_test$lines ($EVIDENCE_DIR/item15-*)"
+fi
 
 if want 3; then
     ok=yes; lines=""
