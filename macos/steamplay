@@ -18,6 +18,8 @@
                                       have that done by itself, as a login item of this user
     macos/steamplay tools             install the compatibility tools only (Steam quit)
     macos/steamplay links [app id...] put back the symbolic links Steam left out of a Mac build
+    macos/steamplay installscript <app id> [--dry-run] [--again] [--mark-done]
+                                      do what a Windows game's install scripts ask for, in its prefix
     macos/steamplay map <app id> <tool|none> [<app id> <tool|none>...]
                                       write a game's compatibility tool directly (Steam quit)
 
@@ -845,6 +847,186 @@ def cmd_links(appids):
     return status
 
 
+# ---------------------------------------------------------------- install scripts
+
+# What Steam for Windows, and Steam for Linux through Proton, does before a game's first start and
+# Mac Steam never does: the game's install scripts (the "InstallScripts" of its manifest, VDF
+# files in its folder) name registry values to write and installers to run once, such as the
+# Vulkan runtime Red Dead Redemption 2 loads its overlay through, or the PlayStation runtime The
+# Last of Us Part II asks for. Without them such a game starts and then waits or complains.
+
+INSTALLSCRIPT_TIMEOUT = 900
+
+
+def install_scripts(appid):
+    """(game folder, [script path...]) of an installed game, or (None, [])."""
+    for lib in libraries():
+        manifest = os.path.join(lib, "steamapps", "appmanifest_%d.acf" % appid)
+        if not os.path.isfile(manifest):
+            continue
+        with open(manifest, encoding="utf-8", errors="replace") as f:
+            state = vdf_block(vdf_parse(f.read()), ["AppState"])
+        installdir = next((v for k, v in state if k == "installdir" and isinstance(v, str)), None)
+        if not installdir:
+            continue
+        root = os.path.realpath(os.path.join(lib, "steamapps", "common", installdir))
+        scripts = []
+        for _, rel in vdf_block(state, ["InstallScripts"]):
+            path = os.path.normpath(os.path.join(root, rel.replace("\\", "/"))) if isinstance(rel, str) else ""
+            # a script is a file inside the game's folder and nowhere else, whatever a manifest says
+            if path.startswith(root + os.sep) and os.path.isfile(path) and path not in scripts:
+                scripts.append(path)
+        return root, scripts
+    return None, []
+
+
+def windows_path(path):
+    """A host path as Wine's Z: drive has it."""
+    return "Z:" + path.replace("/", "\\")
+
+
+def command_words(command):
+    """A Windows command line in words: split at blanks outside double quotes, quotes dropped."""
+    words, word, quoted, any_ = [], "", False, False
+    for c in command:
+        if c == '"':
+            quoted, any_ = not quoted, True
+        elif c in " \t" and not quoted:
+            if word or any_:
+                words.append(word)
+            word, any_ = "", False
+        else:
+            word += c
+    if word or any_:
+        words.append(word)
+    return words
+
+
+def install_script_steps(root, scripts):
+    """The steps the scripts ask for, in order: ("reg", key, name, type, data) and
+    ("run", done key, done name, done value, program, [argument...])."""
+    variables = {
+        "installdir": windows_path(root),
+        "rootdrive": "C:",
+        "steampath": "C:\\Program Files (x86)\\Steam",
+        "windir": "C:\\windows",
+        "user_mydocs": "C:\\users\\steamuser\\Documents",
+        "appdata": "C:\\users\\steamuser\\AppData\\Roaming",
+        "localappdata": "C:\\users\\steamuser\\AppData\\Local",
+        "allusersprofile": "C:\\ProgramData",
+    }
+
+    def expand(text):
+        return re.sub(r"%(\w+)%", lambda m: variables.get(m.group(1).lower(), m.group(0)), text)
+
+    def get(pairs, name):
+        return next((v for k, v in pairs if k.lower() == name and isinstance(v, str)), None)
+
+    steps = []
+    for script in scripts:
+        with open(script, encoding="utf-8", errors="replace") as f:
+            top = vdf_parse(f.read())
+        body = next((v for k, v in top if k and k.lower() == "installscript" and isinstance(v, list)), [])
+        for section, content in body:
+            if not isinstance(content, list):
+                continue
+            if section.lower() == "registry":
+                for key, kinds in content:
+                    for kind, values in kinds if isinstance(kinds, list) else []:
+                        # per-language blocks hold the same kinds one level down; English will do
+                        if isinstance(values, list) and kind.lower() not in ("string", "dword"):
+                            continue
+                        for name, data in values if isinstance(values, list) else []:
+                            if isinstance(data, str):
+                                steps.append(("reg", key, name, "REG_DWORD" if kind.lower() == "dword" else "REG_SZ", expand(data)))
+            elif section.lower() == "run process":
+                for name, entry in content:
+                    if not isinstance(entry, list):
+                        continue
+                    wants = next((v for k, v in entry if k.lower() == "requirement_os" and isinstance(v, list)), [])
+                    if get(wants, "is64bitwindows") == "0":
+                        continue
+                    done_key = get(entry, "hasrunkey") or "HKEY_LOCAL_MACHINE\\Software\\Valve\\Steam\\Apps\\%d" % 0
+                    done_value = get(entry, "minimumhasrunvalue") or "1"
+                    number = 1
+                    while get(entry, "process %d" % number):
+                        program = expand(get(entry, "process %d" % number))
+                        arguments = command_words(expand(get(entry, "command %d" % number) or ""))
+                        steps.append(("run", done_key, name if number == 1 else "%s %d" % (name, number),
+                                      done_value, program, arguments))
+                        number += 1
+    return steps
+
+
+def cmd_installscript(appid, dry_run, again, mark_done):
+    root, scripts = install_scripts(appid)
+    if root is None:
+        die("app %d is not installed" % appid)
+    steps = install_script_steps(root, scripts)
+    steps = [("run", s[1].replace("\\Apps\\0", "\\Apps\\%d" % appid)) + s[2:] if s[0] == "run" else s for s in steps]
+    if dry_run:
+        for step in steps:
+            print("\t".join(str(x) if not isinstance(x, list) else " ".join(x) for x in step))
+        print("%d: %d step(s) in %d install script(s)" % (appid, len(steps), len(scripts)))
+        return 0
+    if not steps:
+        return 0
+    prefix, wine = os.environ.get("WINEPREFIX"), os.environ.get("STEAMPLAY_WINE")
+    if not prefix or not os.path.isdir(prefix) or not wine or not os.access(wine, os.X_OK):
+        die("installscript needs WINEPREFIX (the game's prefix) and STEAMPLAY_WINE (the wine to run) set")
+    stamps = os.path.join(prefix, "steamplay-installscripts.txt")
+    done = set()
+    if os.path.isfile(stamps) and not again:
+        with open(stamps, encoding="utf-8") as f:
+            done = set(f.read().splitlines())
+
+    def run(words, cwd=None):
+        try:
+            return subprocess.run([wine] + words, cwd=cwd, timeout=INSTALLSCRIPT_TIMEOUT,
+                                  stdin=subprocess.DEVNULL).returncode
+        except subprocess.TimeoutExpired:
+            return None
+
+    def reg_add(key, name, kind, data):
+        for view in ("/reg:64", "/reg:32"):
+            run(["reg", "add", key, "/v", name, "/t", kind, "/d", data, "/f", view])
+
+    status = 0
+    for step in steps:
+        stamp = "\t".join(step[:4]) if step[0] == "run" else "\t".join(step)
+        if stamp in done:
+            continue
+        if step[0] == "reg":
+            _, key, name, kind, data = step
+            if not mark_done:
+                print("install script: %s\\%s = %s" % (key, name, data), flush=True)
+                reg_add(key, name, kind, data)
+        else:
+            _, done_key, name, done_value, program, arguments = step
+            if not mark_done:
+                host = program[2:].replace("\\", "/") if program[:2].upper() == "Z:" else None
+                if host and not os.path.isfile(host):
+                    print("install script: %s: no %s" % (name, program), flush=True)
+                    status = 1
+                    continue
+                print("install script: %s: %s %s" % (name, program, " ".join(arguments)), flush=True)
+                words = [program] + arguments
+                if program.lower().endswith((".bat", ".cmd")):
+                    words = ["cmd", "/c"] + words
+                code = run(words, cwd=os.path.dirname(host) if host else None)
+                # Steam counts a step as done whatever its installer returned (3010, "restart
+                # needed", is common), and so does this; one that never ends is stopped
+                print("install script: %s: %s" % (name, "stopped after %d s" % INSTALLSCRIPT_TIMEOUT if code is None
+                                                  else "exit %d" % code), flush=True)
+                if code is None:
+                    status = 1
+            reg_add(done_key, name, "REG_DWORD", done_value)
+        done.add(stamp)
+        with open(stamps, "a", encoding="utf-8") as f:
+            f.write(stamp + "\n")
+    return status
+
+
 # ---------------------------------------------------------------- the guard
 
 def session_state():
@@ -1095,6 +1277,9 @@ def main(argv):
         cmd_tools()
     elif len(argv) >= 1 and argv[0] == "links" and all(a.isdigit() for a in argv[1:]):
         sys.exit(cmd_links([int(a) for a in argv[1:]]))
+    elif len(argv) >= 2 and argv[0] == "installscript" and argv[1].isdigit() \
+            and all(a in ("--dry-run", "--again", "--mark-done") for a in argv[2:]):
+        sys.exit(cmd_installscript(int(argv[1]), "--dry-run" in argv, "--again" in argv, "--mark-done" in argv))
     elif len(argv) >= 3 and argv[0] == "map" and len(argv[1:]) % 2 == 0 \
             and all(a.isdigit() for a in argv[1::2] if a != "--dry-run"):
         args = [a for a in argv[1:] if a != "--dry-run"]

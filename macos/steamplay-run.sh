@@ -31,6 +31,7 @@
 
 set -euo pipefail
 
+SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 WINE_INSTALL=${WINE_INSTALL:-/Users/annon/projects/proton-macos-build/install-aarch64}
 STEAM_ROOT=${STEAM_ROOT:-$HOME/Library/Application Support/Steam}
 WIN_STEAM_DLLS=${WIN_STEAM_DLLS:-/Volumes/Samsung T7/Windows Games/Steam}
@@ -107,10 +108,16 @@ tahomabd.ttf|Tahoma Bold.ttf
 times.ttf|Times New Roman.ttf
 wingdings.ttf|Wingdings.ttf
 FONTS
+# What the game's install scripts ask for, once per prefix: Steam for Windows and for Linux run
+# them before a game's first start, Mac Steam does not (see "installscript" in macos/steamplay).
+# Red Dead Redemption 2's installs the Vulkan runtime that the option below is about.
+STEAMPLAY_WINE="$WINE_INSTALL/bin/wine" WINEDEBUG=-all python3 "$SCRIPT_DIR/steamplay" installscript "$appid" \
+    || log "app $appid: an install script step did not finish (macos/steamplay installscript $appid --again repeats them)"
 # Steam's own compatibility options for the game, which Proton's script takes the same way.
 # nativevulkanloader: the game is to load Khronos's vulkan-1.dll, which its own installer puts
-# into the prefix (Red Dead Redemption 2; wine.inf says the same for RDR2.exe). Mac Steam runs no
-# installer of a Windows game, so where the prefix has only Wine's loader, that one has to do.
+# into the prefix (Red Dead Redemption 2; wine.inf says the same for RDR2.exe): only that loader
+# takes the layer Rockstar's overlay comes in, and without the overlay the game never finished
+# loading a story. Where a prefix has only Wine's loader all the same, that one has to do.
 case ",${STEAM_COMPAT_CONFIG:-}," in
     *,nativevulkanloader,*)
         vulkan_dll="$prefix/drive_c/windows/system32/vulkan-1.dll"
