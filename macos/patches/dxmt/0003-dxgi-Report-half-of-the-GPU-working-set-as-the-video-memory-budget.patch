@@ -1,0 +1,65 @@
+dxgi: Report half of the GPU's working set as the video memory budget, with unified memory.
+
+QueryVideoMemoryInfo() reported recommendedMaxWorkingSetSize, the most the GPU should
+hold, as the budget. With unified memory that is three quarters of the memory of the whole
+system: 17.8 GB on a 24 GB Mac. A game plans its texture streaming by the budget (Call of
+Duty: WWII registers for its changes), and one that fills it leaves too little for itself and
+the system, which then compresses and swaps. Call of Duty: WWII grew to 18 GB in a mission,
+7.4 GB of the system went to swap, and its frame rate fell from 120 to under 50 with the GPU
+idle part of each frame.
+
+The budget is now what the adapter already reports as its DedicatedVideoMemory, half of the
+working set with unified memory. DXMT_VIDEO_MEMORY_BUDGET_MB sets another.
+
+LOCAL TO THIS PORT, NOT FOR DXMT. Applied by macos/build-dxmt.sh to
+github.com/athei/dxmt at 01e59e9bde030f105937f249afaac92ada01b4d7, after 0001 and 0002.
+Written with an AI assistant (Claude). DXMT does not accept contributions made or
+co-authored by AI (its CONTRIBUTING.md), so this patch must not be sent to it as a pull
+request. What was found may be reported to its developers, for them to write their own fix;
+this patch leaves here when the pinned commit has one.
+---
+--- a/src/dxgi/dxgi_adapter.cpp
++++ b/src/dxgi/dxgi_adapter.cpp
+@@ -8,6 +8,8 @@
+ #include "dxgi_object.hpp"
+ #include "d3d10_1.h"
+ #include "util_luid.hpp"
++#include "util_env.hpp"
++#include <cstdlib>
+ #include "Metal.hpp"
+ 
+ namespace dxmt {
+@@ -234,6 +236,24 @@
+   void STDMETHODCALLTYPE
+   UnregisterHardwareContentProtectionTeardownStatus(DWORD cookie) override {
+     assert(0 && "TODO");
++  }
++
++  // The budget a game plans its use of video memory by. With unified memory that is the
++  // memory of the whole system, and recommendedMaxWorkingSetSize, the most the GPU should
++  // hold, is three quarters of it: a game that fills it leaves too little for itself and the
++  // system, which then compresses and swaps (Call of Duty: WWII grew to 18 GB on a 24 GB Mac
++  // and its frame rate fell from 120 to under 50). So it is the DedicatedVideoMemory the
++  // adapter reports, half of that. DXMT_VIDEO_MEMORY_BUDGET_MB sets it.
++  uint64_t videoMemoryBudget() {
++    std::string value = env::getEnvVar("DXMT_VIDEO_MEMORY_BUDGET_MB");
++    if (!value.empty()) {
++      uint64_t mb = strtoull(value.c_str(), nullptr, 10);
++      if (mb)
++        return mb << 20;
++    }
++    if (device_.hasUnifiedMemory())
++      return device_.recommendedMaxWorkingSetSize() / 2;
++    return device_.recommendedMaxWorkingSetSize();
+   }
+ 
+   HRESULT STDMETHODCALLTYPE QueryVideoMemoryInfo(
+@@ -247,7 +267,7 @@
+       return E_INVALIDARG;
+ 
+     // we don't actually care about MemorySegmentGroup
+-    pVideoMemoryInfo->Budget = device_.recommendedMaxWorkingSetSize();
++    pVideoMemoryInfo->Budget = videoMemoryBudget();
+     pVideoMemoryInfo->CurrentUsage = device_.currentAllocatedSize();
+     pVideoMemoryInfo->AvailableForReservation = 0;
+     pVideoMemoryInfo->CurrentReservation =
