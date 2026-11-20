@@ -434,6 +434,13 @@ cat >"$app/Contents/Info.plist" <<EOF
     <string>WineApplication</string>
     <key>LSUIElement</key>
     <true/>
+    <!-- a game to macOS, so that Game Mode can turn on for a Windows game in full screen:
+         first call on the processors and the GPU, background work held back, and AirPods
+         and wireless controllers polled twice as often -->
+    <key>LSApplicationCategoryType</key>
+    <string>public.app-category.games</string>
+    <key>LSSupportsGameMode</key>
+    <true/>
 </dict>
 </plist>
 EOF
