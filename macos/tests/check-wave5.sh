@@ -52,6 +52,11 @@
 #  16  session end: session_end_test.exe, started by its full path as steamplay-run.sh starts
 #      steam.exe, gets the wineserver's shutdown event when its child ("the game") has ended;
 #      Steam shows a game as running for as long as that session lasts
+#  17  memory queries: vprot_run_test.exe, x86_64 and aarch64, commits, decommits, protects and
+#      releases pieces of 8 GB reservations and gets from VirtualQuery() what its own model says
+#      every time, and one commit in a 16 GB reservation takes under 50 microseconds (an x86
+#      emulator queries the region before each commit, and Wine read the protection bytes of
+#      all of it: 700 microseconds there, which made Call of Duty: WWII's level load crawl)
 # The build comes first ("build", which takes long and can be left out with CHECK_ITEMS); the test
 # programs are compiled on every run.
 #
@@ -96,7 +101,7 @@ mkdir -p "$EVIDENCE_DIR"
 RESULTS=()
 FAILED=0
 TODO=0
-CHECK_ITEMS=${CHECK_ITEMS:-"build 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16"}
+CHECK_ITEMS=${CHECK_ITEMS:-"build 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17"}
 want() { case " $CHECK_ITEMS " in *" $1 "*) return 0 ;; esac; return 1; }
 pass() { RESULTS+=("PASS  item $1: $2"); echo "PASS  item $1: $2"; }
 fail() { RESULTS+=("FAIL  item $1: $2"); echo "FAIL  item $1: $2"; FAILED=1; }
@@ -170,6 +175,8 @@ if true; then
         cc $a thread_context_test_$a.exe thread_context_test.c
         cc $a sync_test_$a.exe sync_test.c -luser32 -lntdll
     done
+    cc x86_64 vprot_run_test_x86_64.exe vprot_run_test.c
+    cc aarch64 vprot_run_test_aarch64.exe vprot_run_test.c
     cc x86_64 cursor_clip_test.exe cursor_clip_test.c -luser32 -lgdi32
     cc x86_64 fullscreen_test.exe fullscreen_test.c -ld3d11 -ldxgi -ldxguid -luuid -luser32
     cc x86_64 controller_test.exe controller_test.c -lxinput -ldinput8 -ldxguid -luuid -lole32
@@ -183,8 +190,8 @@ if true; then
     "$FFMPEG_CLI" -loglevel error -y -f lavfi -i color=c=0x3366cc:s=320x240:r=30:d=1 -f lavfi -i sine=f=440:d=1 \
         -c:v libvpx-vp9 -pix_fmt yuv420p -c:a libopus -shortest "$T/vp9_opus.webm" >>"$T/build.log" 2>&1
     n=$(ls "$T"/*.exe 2>/dev/null | wc -l | tr -d ' ')
-    [ "$n" -eq 23 ] && [ -s "$T/h264_aac.mp4" ] && [ -s "$T/vp9_opus.webm" ] \
-        && pass programs "23 test programs and 2 video files ($T)" || fail programs "$n of 23 test programs ($T/build.log)"
+    [ "$n" -eq 25 ] && [ -s "$T/h264_aac.mp4" ] && [ -s "$T/vp9_opus.webm" ] \
+        && pass programs "25 test programs and 2 video files ($T)" || fail programs "$n of 25 test programs ($T/build.log)"
 fi
 
 if [ ! -x "$WINE" ]; then
@@ -251,6 +258,19 @@ if want 16; then
         *) fail 16 "session_end_test: '$line' ($EVIDENCE_DIR/item16.*)" ;;
     esac
     WINEPREFIX=$PREFIX "$SERVER" -k >/dev/null 2>&1
+fi
+
+if want 17; then
+    ok=yes; lines=""
+    for a in x86_64 aarch64; do
+        log=$EVIDENCE_DIR/item17-$a
+        winrun "$log" "$T/vprot_run_test_$a.exe"
+        line=$(grep -a '^vprot run test:' "$log.out" | tail -1 | tr -d '\r')
+        us=$(printf '%s' "$line" | sed -n 's/.*, 0 wrong, commit \([0-9]*\)\.[0-9]* us$/\1/p')
+        [ -n "$us" ] && [ "$us" -lt 50 ] || ok=no
+        lines="$lines $a: '${line:-$(tail -1 "$log.out" | tr -d '\r')}'"
+    done
+    [ $ok = yes ] && pass 17 "vprot_run_test$lines ($EVIDENCE_DIR/item17-*)" || fail 17 "vprot_run_test$lines ($EVIDENCE_DIR/item17-*)"
 fi
 
 if want 3; then
