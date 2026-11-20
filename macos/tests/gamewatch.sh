@@ -17,11 +17,15 @@
 # someone judges how the game plays, and tell them it is on.
 #
 # <output directory>/log.txt (default $BUILD_ROOT/evidence/gamewatch/<date-time>) gets, per round:
-#   12:03:13 #22 cpu 284 server 19 loader 55 video [normandy_load.bik]
+#   12:03:13 #22 cpu 284 server 19 loader 55 mem 7419 free 61 swap 812 video [normandy_load.bik]
 #      Main 84, Server 80, Backend 54, ?#5 95, Database 55
 # cpu and server are the per cent of a core the game and the wineserver use; loader is that
 # of the thread named Database (Call of Duty's level loader; 0 when it is idle or absent);
-# video lists the .bik files the game has open; the second line is every thread over 3%.
+# mem is the game's memory footprint in MB, free the per cent of the Mac's memory that is
+# free, swap the MB of swap in use; video lists the .bik files the game has open; the second
+# line is every thread over 3%. A game that slows down as it goes on shows here whether its
+# memory grows and the Mac runs out of it. (Whether the Mac throttles for heat is not here:
+# an Apple Silicon Mac only tells root, through powermetrics.)
 # With STACKS=1 a third part names where each busy thread is ("jit" is translated x86 code,
 # "pe" code of a Windows module, anything else a function of Wine's Unix side or of macOS),
 # and every fifth raw sample is kept as s<n>.txt.
@@ -100,8 +104,10 @@ while kill -0 "$pid" 2>/dev/null; do
     server=$(ps -o pcpu= -p "$(pgrep -x wineserver | head -1)" 2>/dev/null | tr -d ' ')
     threads=$("$out/threadcpu" "$pid" 1 2>/dev/null)
     loader=$(printf '%s' "$threads" | sed -n 's/.*Database \([0-9]*\).*/\1/p')
-    echo "$(date +%T) #$n cpu ${cpu%.*} server ${server%.*} loader ${loader:-0} video [$video]" >>"$log"
-    echo "   $threads" >>"$log"
+    mem=$(printf '%s' "$threads" | sed -n 's/^mem \([0-9]*\) .*/\1/p')
+    swap=$(sysctl -n vm.swapusage | sed -n 's/.*used = \([0-9]*\).*/\1/p')
+    echo "$(date +%T) #$n cpu ${cpu%.*} server ${server%.*} loader ${loader:-0} mem ${mem:--} free $(sysctl -n kern.memorystatus_level) swap ${swap:--} video [$video]" >>"$log"
+    echo "   ${threads#mem * | }" >>"$log"
     if [ -n "$STACKS" ]; then
         raw=$out/s$n.txt
         sample "$pid" 1 -file "$raw" >/dev/null 2>&1
@@ -119,7 +125,7 @@ python3 - "$log" <<'EOF' | tee -a "$log"
 import re, sys
 rows = []
 for l in open(sys.argv[1]):
-    m = re.match(r'^(\d\d):(\d\d):(\d\d) #\d+ cpu \S* server \S* loader (\d+) video \[(.*)\]', l)
+    m = re.match(r'^(\d\d):(\d\d):(\d\d) #\d+ cpu \S* server \S* loader (\d+) .*video \[(.*)\]', l)
     if m:
         t = int(m.group(1)) * 3600 + int(m.group(2)) * 60 + int(m.group(3))
         rows.append((t, l[:8], int(m.group(4)), m.group(5)))

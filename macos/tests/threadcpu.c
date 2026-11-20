@@ -4,14 +4,16 @@
  *   threadcpu <pid> [seconds, default 1]
  *
  * Reads every thread's CPU time (proc_pidinfo) twice, that many seconds apart, and prints one
- * line: the per cent of a core each thread used in between, busiest first, threads under 3%
- * left out, e.g.
- *   Main 84, Server 80, Backend 54, ?#5 95, Sound mix thread 41
+ * line: the process's memory footprint in MB (what Activity Monitor shows, with the memory its
+ * graphics hold), then the per cent of a core each thread used in between, busiest first,
+ * threads under 3% left out, e.g.
+ *   mem 7419 | Main 84, Server 80, Backend 54, ?#5 95, Sound mix thread 41
  * A thread without a name is "?#" and its place in the process's list. Unlike macOS's sample,
  * which stops the threads for every stack it reads (a game stutters and can lose its sound
  * while it is sampled), this only reads counters. For a native arm64 build: cc -O2.
  */
 #include <libproc.h>
+#include <sys/resource.h>
 #include <mach/mach_time.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -48,6 +50,7 @@ int main( int argc, char **argv )
 {
     int pid = argc > 1 ? atoi( argv[1] ) : 0, secs = argc > 2 ? atoi( argv[2] ) : 1;
     int i, j, k, n, m, count = 0;
+    struct rusage_info_v2 usage;
     uint64_t start, elapsed;
     mach_timebase_info_data_t tb;
 
@@ -73,6 +76,8 @@ int main( int argc, char **argv )
         busy[k].pct = used * 100 / elapsed;
         busy[k].name = after[i].name;
     }
+    if (!proc_pid_rusage( pid, RUSAGE_INFO_V2, (rusage_info_t *)&usage ))
+        printf( "mem %llu | ", (unsigned long long)(usage.ri_phys_footprint >> 20) );
     for (i = 0; i < count; i++) printf( "%s%s %d", i ? ", " : "", busy[i].name, busy[i].pct );
     printf( "\n" );
     return 0;
