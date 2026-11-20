@@ -31,8 +31,9 @@
 #   WINE_FSYNC_STATS  seconds between lines in the log that say how each process slept and
 #                   what it woke; WINE_FSYNC_PARANOID=1 reports a wake-up that did not arrive
 #   MTL_HUD_ENABLED 1 to have macOS draw its Metal performance HUD over the game: frames per
-#                   second and frame times, with lines DXMT adds. Like the others it can be set
-#                   in the game's launch options in Steam: MTL_HUD_ENABLED=1 %command%
+#                   second and frame times, with lines DXMT adds. "macos/steamplay hud on" sets
+#                   it for every game; for one game it can be set in its launch options in
+#                   Steam like the others: MTL_HUD_ENABLED=1 %command%
 #
 # Steam's STEAM_COMPAT_CONFIG is read for nativevulkanloader. When a thread of the game waits a
 # minute for a lock, samples of the game's processes are left as steamplay-run.hang.<pid>.txt.
@@ -85,6 +86,10 @@ export STEAM_COMPAT_INSTALL_PATH="$game_dir"
 export STEAM_COMPAT_LIBRARY_PATHS="$library/steamapps"
 export SteamAppId=$appid SteamGameId=$appid SteamOverlayGameId=$appid
 export WINEDLLOVERRIDES="${WINEDLLOVERRIDES:-mscoree,mshtml=}"
+# macOS's Metal performance HUD, for every game while "macos/steamplay hud on" has left its file
+if [ -z "${MTL_HUD_ENABLED:-}" ] && [ -e "${STEAMPLAY_HOME:-$HOME/Library/Application Support/SteamPlay}/hud" ]; then
+    export MTL_HUD_ENABLED=1
+fi
 # fsync: the wineserver decides as it starts and the game's processes follow it, so this is set
 # before anything of Wine's runs here. A server that an earlier run left in the prefix keeps
 # what it started with.

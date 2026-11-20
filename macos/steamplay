@@ -22,6 +22,8 @@
                                       do what a Windows game's install scripts ask for, in its prefix
     macos/steamplay map <app id> <tool|none> [<app id> <tool|none>...]
                                       write a game's compatibility tool directly (Steam quit)
+    macos/steamplay hud [on|off]      show macOS's Metal performance HUD (frames per second,
+                                      frame times) over every Windows game, from its next start
 
 Mac Steam downloads a Windows build when its download platform is forced, but will not launch
 it. "sync" adds a non-Steam shortcut per game to the signed-in user's shortcuts.vdf, named
@@ -1254,6 +1256,19 @@ def cmd_play(appid):
     subprocess.run([OPEN, "-a", STEAMPLAY_APP, "--args", str(appid)], check=True)
 
 
+HUD_FLAG = os.path.join(HOME_DIR, "hud")
+
+
+def cmd_hud(state):
+    """steamplay-run.sh sets MTL_HUD_ENABLED=1 for a game while this file is there."""
+    if state == "on":
+        os.makedirs(HOME_DIR, exist_ok=True)
+        open(HUD_FLAG, "w").close()
+    elif state == "off" and os.path.exists(HUD_FLAG):
+        os.remove(HUD_FLAG)
+    print("the performance HUD is %s for games started from now on" % ("on" if os.path.exists(HUD_FLAG) else "off"))
+
+
 def main(argv):
     if len(argv) >= 1 and argv[0] == "list":
         cmd_list()
@@ -1277,6 +1292,8 @@ def main(argv):
         cmd_guard_remove()
     elif argv == ["tools"]:
         cmd_tools()
+    elif argv in (["hud"], ["hud", "on"], ["hud", "off"]):
+        cmd_hud(argv[1] if len(argv) > 1 else None)
     elif len(argv) >= 1 and argv[0] == "links" and all(a.isdigit() for a in argv[1:]):
         sys.exit(cmd_links([int(a) for a in argv[1:]]))
     elif len(argv) >= 2 and argv[0] == "installscript" and argv[1].isdigit() \
