@@ -57,6 +57,12 @@
 #      every time, and one commit in a 16 GB reservation takes under 50 microseconds (an x86
 #      emulator queries the region before each commit, and Wine read the protection bytes of
 #      all of it: 700 microseconds there, which made Call of Duty: WWII's level load crawl)
+#  18  thread information: thread_info_test.exe, x86_64 and i386: a thread's priority, exit
+#      code and id are right the moment they change (set by itself or by another thread, a
+#      handle value that comes back for another thread, a thread that has just ended), and a
+#      thread learns its own priority in under 3 microseconds (Wine keeps what the server
+#      said about the calling thread for a short time; each question was a request before,
+#      8 microseconds, and Call of Duty: WWII's main thread spent 30% of its time asking)
 # The build comes first ("build", which takes long and can be left out with CHECK_ITEMS); the test
 # programs are compiled on every run.
 #
@@ -91,7 +97,7 @@ SUPER_WAVE_BASE=${SUPER_WAVE_BASE:-43acb634}
 # trampolines, winemac.drv's update of DXMT's client surfaces, ntdll's GStreamer paths, an include
 # in winegstreamer's media converter, winebus's IOHID game controllers, and the source reader's
 # drain of a decoder, which is PE code and so is guarded by configure's WINE_MACOS_AARCH64
-WAVE_FILES="dlls/ntdll/unix/virtual.c dlls/ntdll/unix/loader.c dlls/winemac.drv/window.c dlls/winegstreamer/media-converter/media-converter.h dlls/winebus.sys/bus_iohid.c dlls/mfreadwrite/reader.c configure.ac dlls/winegstreamer/video_decoder.c dlls/winegstreamer/video_processor.c dlls/ntdll/unix/signal_arm64.c dlls/winemac.drv/cocoa_display.m programs/tabtip/tabtip.c dlls/win32u/font.c dlls/kernelbase/process.c dlls/win32u/vulkan.c dlls/winemac.drv/cocoa_app.m dlls/winemac.drv/cocoa_event.m dlls/winemac.drv/macdrv_cocoa.h dlls/winemac.drv/mouse.c dlls/ntdll/signal_arm64ec.c dlls/ntdll/unix/fsync.c server/fsync.c server/inproc_sync.c dlls/ntdll/unix/thread.c dlls/ntdll/unwind.c dlls/ntdll/unix/sync.c"
+WAVE_FILES="dlls/ntdll/unix/virtual.c dlls/ntdll/unix/loader.c dlls/winemac.drv/window.c dlls/winegstreamer/media-converter/media-converter.h dlls/winebus.sys/bus_iohid.c dlls/mfreadwrite/reader.c configure.ac dlls/winegstreamer/video_decoder.c dlls/winegstreamer/video_processor.c dlls/ntdll/unix/signal_arm64.c dlls/winemac.drv/cocoa_display.m programs/tabtip/tabtip.c dlls/win32u/font.c dlls/kernelbase/process.c dlls/win32u/vulkan.c dlls/winemac.drv/cocoa_app.m dlls/winemac.drv/cocoa_event.m dlls/winemac.drv/macdrv_cocoa.h dlls/winemac.drv/mouse.c dlls/ntdll/signal_arm64ec.c dlls/ntdll/unix/fsync.c server/fsync.c server/inproc_sync.c dlls/ntdll/unix/thread.c dlls/ntdll/unwind.c dlls/ntdll/unix/sync.c dlls/ntdll/unix/server.c dlls/ntdll/unix/unix_private.h"
 SUPER_FILES="lsteamclient/unixlib.cpp lsteamclient/unix_steam_input_manual.cpp"
 export MIN_FREE_GB=${MIN_FREE_GB:-4}
 export WINEDLLOVERRIDES=${WINEDLLOVERRIDES:-mscoree,mshtml=}
@@ -101,7 +107,7 @@ mkdir -p "$EVIDENCE_DIR"
 RESULTS=()
 FAILED=0
 TODO=0
-CHECK_ITEMS=${CHECK_ITEMS:-"build 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17"}
+CHECK_ITEMS=${CHECK_ITEMS:-"build 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18"}
 want() { case " $CHECK_ITEMS " in *" $1 "*) return 0 ;; esac; return 1; }
 pass() { RESULTS+=("PASS  item $1: $2"); echo "PASS  item $1: $2"; }
 fail() { RESULTS+=("FAIL  item $1: $2"); echo "FAIL  item $1: $2"; FAILED=1; }
@@ -174,6 +180,7 @@ if true; then
         cc $a adapter_id_test_$a.exe adapter_id_test.c -ldxgi -ldxguid -luuid -luser32
         cc $a thread_context_test_$a.exe thread_context_test.c
         cc $a sync_test_$a.exe sync_test.c -luser32 -lntdll
+        cc $a thread_info_test_$a.exe thread_info_test.c
     done
     cc x86_64 vprot_run_test_x86_64.exe vprot_run_test.c
     cc aarch64 vprot_run_test_aarch64.exe vprot_run_test.c
@@ -190,8 +197,8 @@ if true; then
     "$FFMPEG_CLI" -loglevel error -y -f lavfi -i color=c=0x3366cc:s=320x240:r=30:d=1 -f lavfi -i sine=f=440:d=1 \
         -c:v libvpx-vp9 -pix_fmt yuv420p -c:a libopus -shortest "$T/vp9_opus.webm" >>"$T/build.log" 2>&1
     n=$(ls "$T"/*.exe 2>/dev/null | wc -l | tr -d ' ')
-    [ "$n" -eq 25 ] && [ -s "$T/h264_aac.mp4" ] && [ -s "$T/vp9_opus.webm" ] \
-        && pass programs "25 test programs and 2 video files ($T)" || fail programs "$n of 25 test programs ($T/build.log)"
+    [ "$n" -eq 27 ] && [ -s "$T/h264_aac.mp4" ] && [ -s "$T/vp9_opus.webm" ] \
+        && pass programs "27 test programs and 2 video files ($T)" || fail programs "$n of 27 test programs ($T/build.log)"
 fi
 
 if [ ! -x "$WINE" ]; then
@@ -271,6 +278,19 @@ if want 17; then
         lines="$lines $a: '${line:-$(tail -1 "$log.out" | tr -d '\r')}'"
     done
     [ $ok = yes ] && pass 17 "vprot_run_test$lines ($EVIDENCE_DIR/item17-*)" || fail 17 "vprot_run_test$lines ($EVIDENCE_DIR/item17-*)"
+fi
+
+if want 18; then
+    ok=yes; lines=""
+    for a in x86_64 i686; do
+        log=$EVIDENCE_DIR/item18-$a
+        winrun "$log" "$T/thread_info_test_$a.exe"
+        line=$(grep -a '^thread info test:' "$log.out" | tail -1 | tr -d '\r')
+        us=$(printf '%s' "$line" | sed -n 's/^thread info test: 5\/5 passed, own priority \([0-9]*\)\.[0-9]* us$/\1/p')
+        [ -n "$us" ] && [ "$us" -lt 3 ] || ok=no
+        lines="$lines $a: '${line:-$(tail -1 "$log.out" | tr -d '\r')}'"
+    done
+    [ $ok = yes ] && pass 18 "thread_info_test$lines ($EVIDENCE_DIR/item18-*)" || fail 18 "thread_info_test$lines ($EVIDENCE_DIR/item18-*)"
 fi
 
 if want 3; then
