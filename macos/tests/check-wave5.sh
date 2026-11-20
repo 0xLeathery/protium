@@ -67,6 +67,11 @@
 #      adapter's dedicated video memory (half of the GPU's working set with unified memory;
 #      three quarters of the Mac's memory before, which Call of Duty: WWII filled until the Mac
 #      swapped), and DXMT_VIDEO_MEMORY_BUDGET_MB=6000 makes it 6000 MB
+#  20  FEX's code cache: with FEX_DISKCACHE=1 and FEX_DISKCACHEPRUNESTALEENTRIES=0, as
+#      steamplay-run.sh sets them for games, jit_x64.exe (x86_64 and i386), callback_x64.exe and
+#      sync_test.exe (x86_64 and i386) give the same results with a cold cache and a warm one,
+#      and the 64-bit and the 32-bit caches are both still there at the end (with pruning on,
+#      each mode's FEX deletes the other's, as their host features differ)
 # The build comes first ("build", which takes long and can be left out with CHECK_ITEMS); the test
 # programs are compiled on every run.
 #
@@ -111,7 +116,7 @@ mkdir -p "$EVIDENCE_DIR"
 RESULTS=()
 FAILED=0
 TODO=0
-CHECK_ITEMS=${CHECK_ITEMS:-"build 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19"}
+CHECK_ITEMS=${CHECK_ITEMS:-"build 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20"}
 want() { case " $CHECK_ITEMS " in *" $1 "*) return 0 ;; esac; return 1; }
 pass() { RESULTS+=("PASS  item $1: $2"); echo "PASS  item $1: $2"; }
 fail() { RESULTS+=("FAIL  item $1: $2"); echo "FAIL  item $1: $2"; FAILED=1; }
@@ -188,6 +193,9 @@ if true; then
     done
     cc x86_64 vprot_run_test_x86_64.exe vprot_run_test.c
     cc x86_64 vram_budget_test.exe vram_budget_test.c -ldxgi -ldxguid -luuid
+    cc x86_64 jit_x86_64.exe jit_x64.c
+    cc i686 jit_i686.exe jit_x64.c
+    cc x86_64 callback_x64.exe callback_x64.c
     cc aarch64 vprot_run_test_aarch64.exe vprot_run_test.c
     cc x86_64 cursor_clip_test.exe cursor_clip_test.c -luser32 -lgdi32
     cc x86_64 fullscreen_test.exe fullscreen_test.c -ld3d11 -ldxgi -ldxguid -luuid -luser32
@@ -202,8 +210,8 @@ if true; then
     "$FFMPEG_CLI" -loglevel error -y -f lavfi -i color=c=0x3366cc:s=320x240:r=30:d=1 -f lavfi -i sine=f=440:d=1 \
         -c:v libvpx-vp9 -pix_fmt yuv420p -c:a libopus -shortest "$T/vp9_opus.webm" >>"$T/build.log" 2>&1
     n=$(ls "$T"/*.exe 2>/dev/null | wc -l | tr -d ' ')
-    [ "$n" -eq 28 ] && [ -s "$T/h264_aac.mp4" ] && [ -s "$T/vp9_opus.webm" ] \
-        && pass programs "28 test programs and 2 video files ($T)" || fail programs "$n of 28 test programs ($T/build.log)"
+    [ "$n" -eq 31 ] && [ -s "$T/h264_aac.mp4" ] && [ -s "$T/vp9_opus.webm" ] \
+        && pass programs "31 test programs and 2 video files ($T)" || fail programs "$n of 31 test programs ($T/build.log)"
 fi
 
 if [ ! -x "$WINE" ]; then
@@ -310,6 +318,33 @@ if want 19; then
     else
         fail 19 "vram_budget_test: '${line:-$(tail -1 "$EVIDENCE_DIR/item19.out")}', with 6000: '$line2' ($EVIDENCE_DIR/item19*)"
     fi
+fi
+
+if want 20; then
+    cache=$EVIDENCE_DIR/item20-fex-diskcache
+    rm -rf "$cache"; mkdir -p "$cache"
+    export FEX_DISKCACHE=1 FEX_DISKCACHEPRUNESTALEENTRIES=0 FEX_DISKCACHEPATH="$(winpath "$cache")\\"
+    ok=yes; lines=""
+    for round in cold warm; do
+        out=""
+        for prog in jit_x86_64 jit_i686; do
+            winrun "$EVIDENCE_DIR/item20-$round-$prog" "$T/$prog.exe" 3
+            out="$out $(grep -a '^jit:' "$EVIDENCE_DIR/item20-$round-$prog.out" | sed 's/, first round.*//' | tr -d '\r')"
+        done
+        winrun "$EVIDENCE_DIR/item20-$round-callback" "$T/callback_x64.exe"
+        out="$out $(grep -a '^callback:' "$EVIDENCE_DIR/item20-$round-callback.out" | tr -d '\r')"
+        for a in x86_64 i686; do
+            winrun "$EVIDENCE_DIR/item20-$round-sync-$a" "$T/sync_test_$a.exe"
+            out="$out $(grep -a '^sync test:' "$EVIDENCE_DIR/item20-$round-sync-$a.out" | tr -d '\r')"
+        done
+        eval "result_$round=\$out"
+    done
+    unset FEX_DISKCACHE FEX_DISKCACHEPRUNESTALEENTRIES FEX_DISKCACHEPATH
+    buckets=$(find "$cache" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')
+    case $result_cold in *"sorted 1"*"16/16 passed"*"16/16 passed"*) ;; *) ok=no ;; esac
+    [ "$result_cold" = "$result_warm" ] && [ "$buckets" -eq 2 ] || ok=no
+    lines="cold:$result_cold; warm $([ "$result_cold" = "$result_warm" ] && echo same || echo "DIFFERENT:$result_warm"); $buckets cache buckets"
+    [ $ok = yes ] && pass 20 "FEX code cache: $lines ($cache)" || fail 20 "FEX code cache: $lines ($cache)"
 fi
 
 if want 3; then
