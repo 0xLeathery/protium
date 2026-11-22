@@ -1,0 +1,96 @@
+dxgi: List the display's modes for every format a display can be driven in.
+
+GetDisplayModeList1() returned no modes for a format that Metal cannot present, such as
+B8G8R8X8_UNORM or R10G10B10_XR_BIAS_A2_UNORM, where Wine's own DXGI and DXVK list the
+display's 32-bit modes for it. The formats a display can be driven in now get the display's
+modes whatever Metal can present; other formats are still checked as before.
+
+Each format's first query in a process is also logged ("DXGI: display modes of format <n>
+(flags <f>): <count>"), so that a game's log says what it asked for and got. That ruled DXGI
+out for Red Dead Redemption 2's empty resolution lists: it asks for B8G8R8A8_UNORM and got
+49 modes before this change too. Their cause was the order of its Vulkan surface formats,
+which Wine's win32u now gives as Windows' drivers do.
+
+LOCAL TO THIS PORT, NOT FOR DXMT. Applied by macos/build-dxmt.sh to
+github.com/athei/dxmt at 01e59e9bde030f105937f249afaac92ada01b4d7, after 0001 to 0003.
+Written with an AI assistant (Claude). DXMT does not accept contributions made or
+co-authored by AI (its CONTRIBUTING.md), so this patch must not be sent to it as a pull
+request. What was found may be reported to its developers, for them to write their own fix;
+this patch leaves here when the pinned commit has one.
+---
+--- a/src/dxgi/dxgi_output.cpp
++++ b/src/dxgi/dxgi_output.cpp
+@@ -1,4 +1,5 @@
+ #include <algorithm>
++#include <atomic>
+ #include <numeric>
+ 
+ #include "com/com_guid.hpp"
+@@ -42,6 +43,45 @@ uint32_t GetMonitorFormatBpp(DXGI_FORMAT Format) {
+   }
+ }
+ 
++/*
++ * The formats a display can be driven in, whether or not Metal can present
++ * them: Wine's own DXGI and DXVK list the display's modes for each of these.
++ * B8G8R8X8 has no Metal backbuffer, but a game may still ask for the modes in
++ * it, and one that gets none offers no resolutions.
++ */
++bool IsMonitorFormat(DXGI_FORMAT Format) {
++  switch (Format) {
++  case DXGI_FORMAT_R8G8B8A8_UNORM:
++  case DXGI_FORMAT_B8G8R8A8_UNORM:
++  case DXGI_FORMAT_B8G8R8X8_UNORM:
++  case DXGI_FORMAT_R8G8B8A8_UNORM_SRGB:
++  case DXGI_FORMAT_B8G8R8A8_UNORM_SRGB:
++  case DXGI_FORMAT_B8G8R8X8_UNORM_SRGB:
++  case DXGI_FORMAT_R10G10B10A2_UNORM:
++  case DXGI_FORMAT_R10G10B10_XR_BIAS_A2_UNORM:
++  case DXGI_FORMAT_R16G16B16A16_FLOAT:
++    return true;
++  default:
++    return false;
++  }
++}
++
++/*
++ * Logs, the first time for each format in a process, which display modes were
++ * asked for and how many were found: a game that finds none may offer no
++ * resolutions, or crash when it looks one up.
++ */
++void LogModeQuery(DXGI_FORMAT Format, UINT Flags, UINT Count) {
++  static std::atomic<uint64_t> seen[4];
++  uint32_t format = uint32_t(Format);
++  if (format >= 256)
++    return;
++  uint64_t bit = uint64_t(1) << (format % 64);
++  if (seen[format / 64].fetch_or(bit) & bit)
++    return;
++  Logger::info(str::format("DXGI: display modes of format ", format, " (flags ", Flags, "): ", Count));
++}
++
+ DXGI_MODE_DESC1 ConvertDisplayMode(const wsi::WsiMode &WsiMode) {
+   DXGI_MODE_DESC1 dxgiMode = {};
+   dxgiMode.Width = WsiMode.width;
+@@ -413,8 +453,10 @@ public:
+       return S_OK;
+     }
+     MTL_DXGI_FORMAT_DESC formatDesc;
+-    if (FAILED(MTLQueryDXGIFormat(this->adapter_->GetMTLDevice(), EnumFormat, formatDesc))
+-      || !(formatDesc.Flag & MTL_DXGI_FORMAT_BACKBUFFER)) {
++    if (!IsMonitorFormat(EnumFormat) &&
++        (FAILED(MTLQueryDXGIFormat(this->adapter_->GetMTLDevice(), EnumFormat, formatDesc))
++         || !(formatDesc.Flag & MTL_DXGI_FORMAT_BACKBUFFER))) {
++      LogModeQuery(EnumFormat, Flags, 0);
+       *pNumModes = 0;
+       return S_OK;
+     }
+@@ -466,6 +508,8 @@ public:
+                        (b.RefreshRate.Numerator / b.RefreshRate.Denominator);
+               });
+ 
++    LogModeQuery(EnumFormat, Flags, dstModeId);
++
+     // If requested, write out the first set of display
+     // modes to the destination array.
+     if (pDesc != nullptr) {
