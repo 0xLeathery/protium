@@ -32,8 +32,14 @@
 #                   what it woke; WINE_FSYNC_PARANOID=1 reports a wake-up that did not arrive
 #   MTL_HUD_ENABLED 1 to have macOS draw its Metal performance HUD over the game: frames per
 #                   second and frame times, with lines DXMT adds. "macos/steamplay hud on" sets
-#                   it for every game; for one game it can be set in its launch options in
-#                   Steam like the others: MTL_HUD_ENABLED=1 %command%
+#                   it for every game.
+#
+# For one game, these go in ~/Library/Application Support/SteamPlay/env.<app id> (under
+# STEAMPLAY_HOME when that is set), one VAR=value a line, e.g.
+#   WINEDEBUG=+loaddll,+msgbox,+system,+display
+# It is read as shell and exported before anything of Wine's starts. Mac Steam does not take
+# "VAR=value %command%" in a game's launch options for this tool: it fails to start the game
+# with "OS Error 260".
 #
 # Steam's STEAM_COMPAT_CONFIG is read for nativevulkanloader. When a thread of the game waits a
 # minute for a lock, samples of the game's processes are left as steamplay-run.hang.<pid>.txt.
@@ -89,6 +95,13 @@ export WINEDLLOVERRIDES="${WINEDLLOVERRIDES:-mscoree,mshtml=}"
 # macOS's Metal performance HUD, for every game while "macos/steamplay hud on" has left its file
 if [ -z "${MTL_HUD_ENABLED:-}" ] && [ -e "${STEAMPLAY_HOME:-$HOME/Library/Application Support/SteamPlay}/hud" ]; then
     export MTL_HUD_ENABLED=1
+fi
+# One game's own settings, from env.<app id> next to that file (see the head of this file)
+game_env="${STEAMPLAY_HOME:-$HOME/Library/Application Support/SteamPlay}/env.$appid"
+if [ -f "$game_env" ]; then
+    set -a
+    . "$game_env"
+    set +a
 fi
 # fsync: the wineserver decides as it starts and the game's processes follow it, so this is set
 # before anything of Wine's runs here. A server that an earlier run left in the prefix keeps
