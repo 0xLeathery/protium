@@ -72,6 +72,10 @@
 #      sync_test.exe (x86_64 and i386) give the same results with a cold cache and a warm one,
 #      and the 64-bit and the 32-bit caches are both still there at the end (with pruning on,
 #      each mode's FEX deletes the other's, as their host features differ)
+#  21  display modes: display_modes_test.exe, x86_64, gets the display's modes in every format
+#      a display can be driven in, as many for B8G8R8X8 and R10G10B10_XR_BIAS_A2, which Metal
+#      cannot present, as for R8G8B8A8 (DXMT listed none for them before
+#      macos/patches/dxmt/0004)
 # The build comes first ("build", which takes long and can be left out with CHECK_ITEMS); the test
 # programs are compiled on every run.
 #
@@ -116,7 +120,7 @@ mkdir -p "$EVIDENCE_DIR"
 RESULTS=()
 FAILED=0
 TODO=0
-CHECK_ITEMS=${CHECK_ITEMS:-"build 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20"}
+CHECK_ITEMS=${CHECK_ITEMS:-"build 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21"}
 want() { case " $CHECK_ITEMS " in *" $1 "*) return 0 ;; esac; return 1; }
 pass() { RESULTS+=("PASS  item $1: $2"); echo "PASS  item $1: $2"; }
 fail() { RESULTS+=("FAIL  item $1: $2"); echo "FAIL  item $1: $2"; FAILED=1; }
@@ -193,6 +197,7 @@ if true; then
     done
     cc x86_64 vprot_run_test_x86_64.exe vprot_run_test.c
     cc x86_64 vram_budget_test.exe vram_budget_test.c -ldxgi -ldxguid -luuid
+    cc x86_64 display_modes_test.exe display_modes_test.c -ldxgi -ldxguid -luuid
     cc x86_64 jit_x86_64.exe jit_x64.c
     cc i686 jit_i686.exe jit_x64.c
     cc x86_64 callback_x64.exe callback_x64.c
@@ -210,8 +215,8 @@ if true; then
     "$FFMPEG_CLI" -loglevel error -y -f lavfi -i color=c=0x3366cc:s=320x240:r=30:d=1 -f lavfi -i sine=f=440:d=1 \
         -c:v libvpx-vp9 -pix_fmt yuv420p -c:a libopus -shortest "$T/vp9_opus.webm" >>"$T/build.log" 2>&1
     n=$(ls "$T"/*.exe 2>/dev/null | wc -l | tr -d ' ')
-    [ "$n" -eq 31 ] && [ -s "$T/h264_aac.mp4" ] && [ -s "$T/vp9_opus.webm" ] \
-        && pass programs "31 test programs and 2 video files ($T)" || fail programs "$n of 31 test programs ($T/build.log)"
+    [ "$n" -eq 32 ] && [ -s "$T/h264_aac.mp4" ] && [ -s "$T/vp9_opus.webm" ] \
+        && pass programs "32 test programs and 2 video files ($T)" || fail programs "$n of 32 test programs ($T/build.log)"
 fi
 
 if [ ! -x "$WINE" ]; then
@@ -345,6 +350,17 @@ if want 20; then
     [ "$result_cold" = "$result_warm" ] && [ "$buckets" -eq 2 ] || ok=no
     lines="cold:$result_cold; warm $([ "$result_cold" = "$result_warm" ] && echo same || echo "DIFFERENT:$result_warm"); $buckets cache buckets"
     [ $ok = yes ] && pass 20 "FEX code cache: $lines ($cache)" || fail 20 "FEX code cache: $lines ($cache)"
+fi
+
+if want 21; then
+    winrun "$EVIDENCE_DIR/item21" "$T/display_modes_test.exe"
+    line=$(grep -a '^display modes:' "$EVIDENCE_DIR/item21.out" | tr -d '\r')
+    counts=$(printf '%s' "$line" | grep -oE ' [0-9]+(,|$)' | tr -d ' ,' | sort -u)
+    if [ -n "$counts" ] && [ "$(printf '%s\n' "$counts" | wc -l | tr -d ' ')" -eq 1 ] && [ "$counts" -gt 0 ]; then
+        pass 21 "display_modes_test: '$line' ($EVIDENCE_DIR/item21.out)"
+    else
+        fail 21 "display_modes_test: '${line:-$(tail -1 "$EVIDENCE_DIR/item21.out")}' ($EVIDENCE_DIR/item21.out)"
+    fi
 fi
 
 if want 3; then
