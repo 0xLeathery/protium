@@ -10,3 +10,8 @@ level contents of the Proton project.
 Proton uses a variety of other software, each of which is governed
 by its own license.  Those licenses are contained in a file named
 LICENSE or COPYING in each directory.
+
+Protium, the native macOS port in this tree, adds macos/ and .github/.
+Those files are under the license in LICENSE.protium. The patches in
+macos/patches/<project>/ change other projects and are under the license
+of the project they change. The wine submodule is under Wine's license.
