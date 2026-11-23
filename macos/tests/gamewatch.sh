@@ -36,7 +36,7 @@
 set -u
 name=${1:?usage: gamewatch.sh <part of the exe name> [output directory]}
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
-BUILD_ROOT=${BUILD_ROOT:-/Users/annon/projects/proton-macos-build}
+BUILD_ROOT=${BUILD_ROOT:-$HOME/projects/proton-macos-build}
 STACKS=${STACKS:-}
 out=${2:-$BUILD_ROOT/evidence/gamewatch/$(date +%Y%m%d-%H%M%S)}
 mkdir -p "$out"

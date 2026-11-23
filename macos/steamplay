@@ -95,7 +95,7 @@ import sys
 import time
 import zlib
 
-BUILD_ROOT = os.environ.get("BUILD_ROOT", "/Users/annon/projects/proton-macos-build")
+BUILD_ROOT = os.environ.get("BUILD_ROOT", os.path.expanduser("~/projects/proton-macos-build"))
 STEAM_ROOT = os.environ.get("STEAM_ROOT", os.path.expanduser("~/Library/Application Support/Steam"))
 STEAMPLAY_APP = os.environ.get("STEAMPLAY_APP", os.path.join(BUILD_ROOT, "steamplay-apps", "Steam Play.app"))
 HOME_DIR = os.environ.get("STEAMPLAY_HOME", os.path.expanduser("~/Library/Application Support/SteamPlay"))

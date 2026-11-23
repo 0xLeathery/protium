@@ -3,7 +3,7 @@
 # Steam launch option for a Windows game in Mac Steam's own library entry, so that its Play button
 # runs the game under the macOS Proton build. In the game's Properties > General > Launch Options:
 #
-#   "/Users/annon/projects/Proton/macos/steamplay-launch" %command%
+#   "<this checkout>/macos/steamplay-launch" %command%
 #
 # Steam replaces %command% with the game's command line (the Windows executable of the launch
 # entry it chose and that entry's arguments) and starts the line itself, with the app id in

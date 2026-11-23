@@ -24,9 +24,9 @@
 # commit by anything else is refused.
 #
 # Environment overrides:
-#   BUILD_ROOT     (default /Users/annon/projects/proton-macos-build)
+#   BUILD_ROOT     (default ~/projects/proton-macos-build)
 #   BUILD_DIR      the Wine build tree whose winebuild marks the DLLs (default $BUILD_ROOT/wine-arm64ec)
-#   TOOLCHAIN_DIR  (default /Users/annon/projects/proton-macos-toolchain/llvm-mingw-20261020-ucrt-macos-universal)
+#   TOOLCHAIN_DIR  (default ~/projects/proton-macos-toolchain/llvm-mingw-20261020-ucrt-macos-universal)
 #   VKD3D_REPO     (default https://github.com/athei/vkd3d-proton)
 #   VKD3D_COMMIT   (default c5e2c9b8c55872893e3ba47d60448dd4f35185ef, macos-patched on 2026-11-15)
 #   VKD3D_SRC      (default $BUILD_ROOT/vkd3d-proton-src), cloned when missing
@@ -37,9 +37,9 @@
 
 set -euo pipefail
 
-BUILD_ROOT=${BUILD_ROOT:-/Users/annon/projects/proton-macos-build}
+BUILD_ROOT=${BUILD_ROOT:-$HOME/projects/proton-macos-build}
 BUILD_DIR=${BUILD_DIR:-$BUILD_ROOT/wine-arm64ec}
-TOOLCHAIN_DIR=${TOOLCHAIN_DIR:-/Users/annon/projects/proton-macos-toolchain/llvm-mingw-20261020-ucrt-macos-universal}
+TOOLCHAIN_DIR=${TOOLCHAIN_DIR:-$HOME/projects/proton-macos-toolchain/llvm-mingw-20261020-ucrt-macos-universal}
 VKD3D_REPO=${VKD3D_REPO:-https://github.com/athei/vkd3d-proton}
 VKD3D_COMMIT=${VKD3D_COMMIT:-c5e2c9b8c55872893e3ba47d60448dd4f35185ef}
 VKD3D_SRC=${VKD3D_SRC:-$BUILD_ROOT/vkd3d-proton-src}

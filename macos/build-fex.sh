@@ -30,8 +30,8 @@
 # the modules carry ends in "+local" when they were built with patches.
 #
 # Environment overrides:
-#   BUILD_ROOT     (default /Users/annon/projects/proton-macos-build)
-#   TOOLCHAIN_DIR  (default /Users/annon/projects/proton-macos-toolchain/llvm-mingw-20261020-ucrt-macos-universal)
+#   BUILD_ROOT     (default ~/projects/proton-macos-build)
+#   TOOLCHAIN_DIR  (default ~/projects/proton-macos-toolchain/llvm-mingw-20261020-ucrt-macos-universal)
 #   FEX_REPO       (default https://github.com/athei/FEX)
 #   FEX_COMMIT     (default 8425ea974e072821c75969723efe49cca605200c, macos-patched on 2026-11-15)
 #   FEX_SRC        (default $BUILD_ROOT/fex-src), cloned when missing
@@ -42,8 +42,8 @@
 set -euo pipefail
 
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
-BUILD_ROOT=${BUILD_ROOT:-/Users/annon/projects/proton-macos-build}
-TOOLCHAIN_DIR=${TOOLCHAIN_DIR:-/Users/annon/projects/proton-macos-toolchain/llvm-mingw-20261020-ucrt-macos-universal}
+BUILD_ROOT=${BUILD_ROOT:-$HOME/projects/proton-macos-build}
+TOOLCHAIN_DIR=${TOOLCHAIN_DIR:-$HOME/projects/proton-macos-toolchain/llvm-mingw-20261020-ucrt-macos-universal}
 FEX_REPO=${FEX_REPO:-https://github.com/athei/FEX}
 FEX_COMMIT=${FEX_COMMIT:-8425ea974e072821c75969723efe49cca605200c}
 FEX_SRC=${FEX_SRC:-$BUILD_ROOT/fex-src}

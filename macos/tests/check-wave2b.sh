@@ -32,10 +32,10 @@ set -u
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 PROTON_DIR=$(cd "$SCRIPT_DIR/../.." && pwd)
 WINE_DIR=$PROTON_DIR/wine
-BUILD_ROOT=${BUILD_ROOT:-/Users/annon/projects/proton-macos-build}
+BUILD_ROOT=${BUILD_ROOT:-$HOME/projects/proton-macos-build}
 BUILD_DIR=${BUILD_DIR:-$BUILD_ROOT/wine-aarch64}
 SRC_DIR=${SRC_DIR:-$BUILD_ROOT/wine-src}
-TOOLCHAIN_DIR=${TOOLCHAIN_DIR:-/Users/annon/projects/proton-macos-toolchain/llvm-mingw-20261020-ucrt-macos-universal}
+TOOLCHAIN_DIR=${TOOLCHAIN_DIR:-$HOME/projects/proton-macos-toolchain/llvm-mingw-20261020-ucrt-macos-universal}
 EVIDENCE_DIR=${EVIDENCE_DIR:-$BUILD_ROOT/evidence/wave2b}
 # item 2 of an earlier run on the unchanged build, for the before/after x18 counts
 BEFORE_DIR=${BEFORE_DIR:-$BUILD_ROOT/evidence/wave2b-before}

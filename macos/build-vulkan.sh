@@ -14,7 +14,7 @@
 # macos/bundle-wine.sh installs the loader. A driver is not part of this.
 #
 # Environment overrides:
-#   BUILD_ROOT     (default /Users/annon/projects/proton-macos-build)
+#   BUILD_ROOT     (default ~/projects/proton-macos-build)
 #   VULKAN_DIST    (default $BUILD_ROOT/vulkan-dist)
 #   VULKAN_TAG     release tag of both repositories (default vulkan-sdk-1.4.363.0)
 #   VULKAN_HEADERS_COMMIT, VULKAN_LOADER_COMMIT   the commits that tag has to name
@@ -23,7 +23,7 @@
 
 set -euo pipefail
 
-BUILD_ROOT=${BUILD_ROOT:-/Users/annon/projects/proton-macos-build}
+BUILD_ROOT=${BUILD_ROOT:-$HOME/projects/proton-macos-build}
 VULKAN_DIST=${VULKAN_DIST:-$BUILD_ROOT/vulkan-dist}
 VULKAN_TAG=${VULKAN_TAG:-vulkan-sdk-1.4.363.0}
 VULKAN_HEADERS_COMMIT=${VULKAN_HEADERS_COMMIT:-6802bb4733b63ed5efd3adb308a6c885ef180ea1}

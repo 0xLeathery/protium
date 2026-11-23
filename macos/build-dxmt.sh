@@ -29,9 +29,9 @@
 # differs from the commit by anything else is refused.
 #
 # Environment overrides:
-#   BUILD_ROOT     (default /Users/annon/projects/proton-macos-build)
+#   BUILD_ROOT     (default ~/projects/proton-macos-build)
 #   BUILD_DIR      the Wine build tree to link against (default $BUILD_ROOT/wine-arm64ec)
-#   TOOLCHAIN_DIR  (default /Users/annon/projects/proton-macos-toolchain/llvm-mingw-20261020-ucrt-macos-universal)
+#   TOOLCHAIN_DIR  (default ~/projects/proton-macos-toolchain/llvm-mingw-20261020-ucrt-macos-universal)
 #   LLVM15_DIST    (default $BUILD_ROOT/llvm15-dist), built when missing
 #   DXMT_REPO      (default https://github.com/athei/dxmt)
 #   DXMT_COMMIT    (default 01e59e9bde030f105937f249afaac92ada01b4d7, macos-patched on 2026-11-15)
@@ -45,9 +45,9 @@ set -euo pipefail
 
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 PROTON_DIR=$(cd "$SCRIPT_DIR/.." && pwd)
-BUILD_ROOT=${BUILD_ROOT:-/Users/annon/projects/proton-macos-build}
+BUILD_ROOT=${BUILD_ROOT:-$HOME/projects/proton-macos-build}
 BUILD_DIR=${BUILD_DIR:-$BUILD_ROOT/wine-arm64ec}
-TOOLCHAIN_DIR=${TOOLCHAIN_DIR:-/Users/annon/projects/proton-macos-toolchain/llvm-mingw-20261020-ucrt-macos-universal}
+TOOLCHAIN_DIR=${TOOLCHAIN_DIR:-$HOME/projects/proton-macos-toolchain/llvm-mingw-20261020-ucrt-macos-universal}
 LLVM15_DIST=${LLVM15_DIST:-$BUILD_ROOT/llvm15-dist}
 DXMT_REPO=${DXMT_REPO:-https://github.com/athei/dxmt}
 DXMT_COMMIT=${DXMT_COMMIT:-01e59e9bde030f105937f249afaac92ada01b4d7}

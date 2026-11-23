@@ -11,7 +11,7 @@
 # Nothing is built when $LLVM15_DIST is complete for the pinned commit.
 #
 # Environment overrides:
-#   BUILD_ROOT       (default /Users/annon/projects/proton-macos-build)
+#   BUILD_ROOT       (default ~/projects/proton-macos-build)
 #   LLVM15_DIST      (default $BUILD_ROOT/llvm15-dist)
 #   LLVM15_TAG       (default llvmorg-15.0.7)
 #   LLVM15_COMMIT    the commit that tag has to name
@@ -21,7 +21,7 @@
 
 set -euo pipefail
 
-BUILD_ROOT=${BUILD_ROOT:-/Users/annon/projects/proton-macos-build}
+BUILD_ROOT=${BUILD_ROOT:-$HOME/projects/proton-macos-build}
 LLVM15_DIST=${LLVM15_DIST:-$BUILD_ROOT/llvm15-dist}
 LLVM15_TAG=${LLVM15_TAG:-llvmorg-15.0.7}
 LLVM15_COMMIT=${LLVM15_COMMIT:-8dfdcc7b7bf66834a761bd8de445840ef68e4d1a}

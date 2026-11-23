@@ -17,20 +17,20 @@
 # (lsteamclient/unixlib.cpp).
 #
 # Environment overrides:
-#   BUILD_ROOT     (default /Users/annon/projects/proton-macos-build)
+#   BUILD_ROOT     (default ~/projects/proton-macos-build)
 #   BUILD_DIR      the Wine build tree (default $BUILD_ROOT/wine-arm64ec), built with
 #                  PE_MODE=msvc WINE_ARCHS=arm64ec,aarch64,i386
 #   BRIDGE_DIST    (default $BUILD_ROOT/steam-bridge-dist)
-#   TOOLCHAIN_DIR  (default /Users/annon/projects/proton-macos-toolchain/llvm-mingw-20261020-ucrt-macos-universal)
+#   TOOLCHAIN_DIR  (default ~/projects/proton-macos-toolchain/llvm-mingw-20261020-ucrt-macos-universal)
 
 set -euo pipefail
 
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 PROTON_DIR=$(cd "$SCRIPT_DIR/.." && pwd)
-BUILD_ROOT=${BUILD_ROOT:-/Users/annon/projects/proton-macos-build}
+BUILD_ROOT=${BUILD_ROOT:-$HOME/projects/proton-macos-build}
 BUILD_DIR=${BUILD_DIR:-$BUILD_ROOT/wine-arm64ec}
 BRIDGE_DIST=${BRIDGE_DIST:-$BUILD_ROOT/steam-bridge-dist}
-TOOLCHAIN_DIR=${TOOLCHAIN_DIR:-/Users/annon/projects/proton-macos-toolchain/llvm-mingw-20261020-ucrt-macos-universal}
+TOOLCHAIN_DIR=${TOOLCHAIN_DIR:-$HOME/projects/proton-macos-toolchain/llvm-mingw-20261020-ucrt-macos-universal}
 OBJ_ROOT=$BUILD_ROOT/steam-bridge-build
 
 log() { echo ":: $*" >&2; }

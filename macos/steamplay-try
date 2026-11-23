@@ -31,7 +31,7 @@
 set -uo pipefail
 
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
-WINE_INSTALL=${WINE_INSTALL:-/Users/annon/projects/proton-macos-build/install-aarch64}
+WINE_INSTALL=${WINE_INSTALL:-$HOME/projects/proton-macos-build/install-aarch64}
 STEAM_ROOT=${STEAM_ROOT:-$HOME/Library/Application Support/Steam}
 die() { echo "steamplay-try: error: $*" >&2; exit 64; }
 

@@ -17,7 +17,7 @@
 # so that the user's answer, or a Full Disk Access entry, outlasts a rebuild of the app.
 #
 # Environment overrides:
-#   BUILD_ROOT       (default /Users/annon/projects/proton-macos-build)
+#   BUILD_ROOT       (default ~/projects/proton-macos-build)
 #   STEAMPLAY_APPS   where the app is made (default $BUILD_ROOT/steamplay-apps)
 #   SIGN_IDENTITY    code-signing identity (default: the first "Apple Development" identity,
 #                    else ad hoc, which macOS remembers only until the app is rebuilt)
@@ -25,7 +25,7 @@
 set -euo pipefail
 
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
-BUILD_ROOT=${BUILD_ROOT:-/Users/annon/projects/proton-macos-build}
+BUILD_ROOT=${BUILD_ROOT:-$HOME/projects/proton-macos-build}
 STEAMPLAY_APPS=${STEAMPLAY_APPS:-$BUILD_ROOT/steamplay-apps}
 
 die() { echo "make-steamplay-app.sh: error: $*" >&2; exit 1; }

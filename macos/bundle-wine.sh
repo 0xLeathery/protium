@@ -26,7 +26,7 @@
 #   LOADER_PROFILE= macos/bundle-wine.sh          (ad hoc, though a profile is kept)
 #
 # Environment overrides:
-#   BUILD_ROOT      (default /Users/annon/projects/proton-macos-build)
+#   BUILD_ROOT      (default ~/projects/proton-macos-build)
 #   BUILD_DIR       (default $BUILD_ROOT/wine-aarch64), as build-wine.sh built it; the bundle goes
 #                   into the prefix it was configured with
 #   LOADER_PROFILE  provisioning profile to embed (default: $BUILD_ROOT/signing/
@@ -79,7 +79,7 @@
 set -euo pipefail
 
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
-BUILD_ROOT=${BUILD_ROOT:-/Users/annon/projects/proton-macos-build}
+BUILD_ROOT=${BUILD_ROOT:-$HOME/projects/proton-macos-build}
 BUILD_DIR=${BUILD_DIR:-$BUILD_ROOT/wine-aarch64}
 if [ -z "${LOADER_PROFILE+set}" ] && [ -f "$BUILD_ROOT/signing/loader.provisionprofile" ]; then
     LOADER_PROFILE=$BUILD_ROOT/signing/loader.provisionprofile

@@ -11,12 +11,12 @@
 # built or changed. About 530 MB with the archives.
 #
 # Environment overrides:
-#   BUILD_ROOT   (default /Users/annon/projects/proton-macos-build)
+#   BUILD_ROOT   (default ~/projects/proton-macos-build)
 #   GODOT_DIR    (default $BUILD_ROOT/third-party/godot-4.7.2-stable)
 
 set -euo pipefail
 
-BUILD_ROOT=${BUILD_ROOT:-/Users/annon/projects/proton-macos-build}
+BUILD_ROOT=${BUILD_ROOT:-$HOME/projects/proton-macos-build}
 VERSION=4.7.2-stable
 GODOT_DIR=${GODOT_DIR:-$BUILD_ROOT/third-party/godot-$VERSION}
 URL=https://github.com/godotengine/godot/releases/download/$VERSION

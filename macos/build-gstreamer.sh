@@ -23,7 +23,7 @@
 # Homebrew provides glib, libogg, libvorbis, opus, theora, libvpx and mpg123.
 #
 # Environment overrides:
-#   BUILD_ROOT     (default /Users/annon/projects/proton-macos-build)
+#   BUILD_ROOT     (default ~/projects/proton-macos-build)
 #   GST_SRC        sources (default $BUILD_ROOT/gst-src)
 #   GST_DIST       output (default $BUILD_ROOT/gst-dist)
 #   VENV           Python environment with meson (default $BUILD_ROOT/py-venv)
@@ -33,7 +33,7 @@ set -euo pipefail
 
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 PROTON_DIR=$(cd "$SCRIPT_DIR/.." && pwd)
-BUILD_ROOT=${BUILD_ROOT:-/Users/annon/projects/proton-macos-build}
+BUILD_ROOT=${BUILD_ROOT:-$HOME/projects/proton-macos-build}
 GST_SRC=${GST_SRC:-$BUILD_ROOT/gst-src}
 GST_DIST=${GST_DIST:-$BUILD_ROOT/gst-dist}
 VENV=${VENV:-$BUILD_ROOT/py-venv}

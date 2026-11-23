@@ -121,14 +121,14 @@
 # nothing, as the header of each section printed by "status" explains.
 #
 # Environment: STEAM_ROOT (default ~/Library/Application Support/Steam), BUILD_ROOT (default
-# /Users/annon/projects/proton-macos-build; state in $BUILD_ROOT/steamplay/persist-test),
+# ~/projects/proton-macos-build; state in $BUILD_ROOT/steamplay/persist-test),
 # OVERRIDE_APPS (default "500 979070 2950790": Left 4 Dead, Just Die Already, IRON NEST), CANARY
 # (default 500), and PERSIST_TEST_FAKE_STEAM=1 to try the script on a copy of a Steam folder
 # while Steam runs.
 
 set -euo pipefail
 
-BUILD_ROOT=${BUILD_ROOT:-/Users/annon/projects/proton-macos-build}
+BUILD_ROOT=${BUILD_ROOT:-$HOME/projects/proton-macos-build}
 STEAM_ROOT=${STEAM_ROOT:-$HOME/Library/Application Support/Steam}
 OVERRIDE_APPS=${OVERRIDE_APPS:-"500 979070 2950790"}
 CANARY=${CANARY:-500}

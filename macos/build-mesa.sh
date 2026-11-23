@@ -25,7 +25,7 @@
 # that differs from the commit.
 #
 # Environment overrides:
-#   BUILD_ROOT     (default /Users/annon/projects/proton-macos-build)
+#   BUILD_ROOT     (default ~/projects/proton-macos-build)
 #   MESA_REPO      (default https://github.com/athei/mesa)
 #   MESA_COMMIT    (default 7bbfd48b2e7490a2091716087647d7ddf8f7c408, macos-patched on 2026-11-15)
 #   MESA_SRC       (default $BUILD_ROOT/mesa-src), cloned when missing
@@ -39,7 +39,7 @@
 
 set -euo pipefail
 
-BUILD_ROOT=${BUILD_ROOT:-/Users/annon/projects/proton-macos-build}
+BUILD_ROOT=${BUILD_ROOT:-$HOME/projects/proton-macos-build}
 MESA_REPO=${MESA_REPO:-https://github.com/athei/mesa}
 MESA_COMMIT=${MESA_COMMIT:-7bbfd48b2e7490a2091716087647d7ddf8f7c408}
 MESA_SRC=${MESA_SRC:-$BUILD_ROOT/mesa-src}

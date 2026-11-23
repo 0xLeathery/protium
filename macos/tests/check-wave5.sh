@@ -91,9 +91,9 @@ set -u
 
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 PROTON_DIR=$(cd "$SCRIPT_DIR/../.." && pwd)
-BUILD_ROOT=${BUILD_ROOT:-/Users/annon/projects/proton-macos-build}
+BUILD_ROOT=${BUILD_ROOT:-$HOME/projects/proton-macos-build}
 BUILD_DIR=${BUILD_DIR:-$BUILD_ROOT/wine-arm64ec}
-TOOLCHAIN_DIR=${TOOLCHAIN_DIR:-/Users/annon/projects/proton-macos-toolchain/llvm-mingw-20261020-ucrt-macos-universal}
+TOOLCHAIN_DIR=${TOOLCHAIN_DIR:-$HOME/projects/proton-macos-toolchain/llvm-mingw-20261020-ucrt-macos-universal}
 EVIDENCE_DIR=${EVIDENCE_DIR:-$BUILD_ROOT/evidence/wave5}
 RUN_TIMEOUT=${RUN_TIMEOUT:-120}
 SCREENSHOTS=${SCREENSHOTS:-0}

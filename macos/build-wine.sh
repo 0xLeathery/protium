@@ -10,10 +10,10 @@
 # Re-running rebuilds incrementally.
 #
 # Environment overrides:
-#   BUILD_ROOT     (default /Users/annon/projects/proton-macos-build)
+#   BUILD_ROOT     (default ~/projects/proton-macos-build)
 #   SRC_DIR        (default $BUILD_ROOT/wine-src)
 #   BUILD_DIR      (default $BUILD_ROOT/wine-aarch64)
-#   TOOLCHAIN_DIR  (default /Users/annon/projects/proton-macos-toolchain/llvm-mingw-20261020-ucrt-macos-universal)
+#   TOOLCHAIN_DIR  (default ~/projects/proton-macos-toolchain/llvm-mingw-20261020-ucrt-macos-universal)
 #   WINE_ARCHS     PE architectures for --enable-archs (default aarch64)
 #   PE_MODE        how the PE side is compiled (default mingw):
 #                    mingw  <arch>-w64-mingw32-clang, GNU mode
@@ -35,17 +35,17 @@ set -euo pipefail
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 PROTON_DIR=$(cd "$SCRIPT_DIR/.." && pwd)
 WINE_ORIGIN=$PROTON_DIR/wine
-BUILD_ROOT=${BUILD_ROOT:-/Users/annon/projects/proton-macos-build}
+BUILD_ROOT=${BUILD_ROOT:-$HOME/projects/proton-macos-build}
 SRC_DIR=${SRC_DIR:-$BUILD_ROOT/wine-src}
 BUILD_DIR=${BUILD_DIR:-$BUILD_ROOT/wine-aarch64}
-TOOLCHAIN_DIR=${TOOLCHAIN_DIR:-/Users/annon/projects/proton-macos-toolchain/llvm-mingw-20261020-ucrt-macos-universal}
+TOOLCHAIN_DIR=${TOOLCHAIN_DIR:-$HOME/projects/proton-macos-toolchain/llvm-mingw-20261020-ucrt-macos-universal}
 WINE_ARCHS=${WINE_ARCHS:-aarch64}
 PE_MODE=${PE_MODE:-mingw}
 VULKAN_DIST=${VULKAN_DIST:-}
 GST_DIST=${GST_DIST-}
 # the GStreamer that macos/build-gstreamer.sh made, when there is one and none is named
-[ -n "${GST_DIST}" ] || [ ! -f "${BUILD_ROOT:-/Users/annon/projects/proton-macos-build}/gst-dist/lib/pkgconfig/gstreamer-1.0.pc" ] \
-    || GST_DIST=${BUILD_ROOT:-/Users/annon/projects/proton-macos-build}/gst-dist
+[ -n "${GST_DIST}" ] || [ ! -f "${BUILD_ROOT:-$HOME/projects/proton-macos-build}/gst-dist/lib/pkgconfig/gstreamer-1.0.pc" ] \
+    || GST_DIST=${BUILD_ROOT:-$HOME/projects/proton-macos-build}/gst-dist
 JOBS=${JOBS:-12}
 MIN_FREE_GB=${MIN_FREE_GB:-20}
 

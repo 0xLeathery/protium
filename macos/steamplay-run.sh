@@ -15,7 +15,7 @@
 # playtime; not the overlay, which Steam would have to inject into the game's process).
 #
 # Environment overrides:
-#   WINE_INSTALL    the bundle (default /Users/annon/projects/proton-macos-build/install-aarch64)
+#   WINE_INSTALL    the bundle (default ~/projects/proton-macos-build/install-aarch64)
 #   STEAM_ROOT      Mac Steam's data folder (default ~/Library/Application Support/Steam)
 #   WIN_STEAM_DLLS  a folder with Valve's Windows steamclient.dll and steamclient64.dll, which
 #                   Mac Steam does not ship (Linux Steam has them in legacycompat/)
@@ -47,7 +47,7 @@
 set -euo pipefail
 
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
-WINE_INSTALL=${WINE_INSTALL:-/Users/annon/projects/proton-macos-build/install-aarch64}
+WINE_INSTALL=${WINE_INSTALL:-$HOME/projects/proton-macos-build/install-aarch64}
 STEAM_ROOT=${STEAM_ROOT:-$HOME/Library/Application Support/Steam}
 WIN_STEAM_DLLS=${WIN_STEAM_DLLS:-/Volumes/Samsung T7/Windows Games/Steam}
 

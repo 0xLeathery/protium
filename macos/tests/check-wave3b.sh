@@ -76,7 +76,7 @@ set -u
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 PROTON_DIR=$(cd "$SCRIPT_DIR/../.." && pwd)
 WINE_DIR=$PROTON_DIR/wine
-BUILD_ROOT=${BUILD_ROOT:-/Users/annon/projects/proton-macos-build}
+BUILD_ROOT=${BUILD_ROOT:-$HOME/projects/proton-macos-build}
 BUILD_DIR=${BUILD_DIR:-$BUILD_ROOT/wine-arm64ec}
 MINGW_BUILD_DIR=${MINGW_BUILD_DIR:-$BUILD_ROOT/wine-aarch64}
 FEX_DIST=${FEX_DIST:-$BUILD_ROOT/fex-dist}
@@ -85,7 +85,7 @@ DXMT_DIST=${DXMT_DIST:-$BUILD_ROOT/dxmt-dist}
 MESA_DIST=${MESA_DIST:-$BUILD_ROOT/mesa-dist}
 VKD3D_DIST=${VKD3D_DIST:-$BUILD_ROOT/vkd3d-proton-dist}
 SRC_DIR=${SRC_DIR:-$BUILD_ROOT/wine-src}
-TOOLCHAIN_DIR=${TOOLCHAIN_DIR:-/Users/annon/projects/proton-macos-toolchain/llvm-mingw-20261020-ucrt-macos-universal}
+TOOLCHAIN_DIR=${TOOLCHAIN_DIR:-$HOME/projects/proton-macos-toolchain/llvm-mingw-20261020-ucrt-macos-universal}
 EVIDENCE_DIR=${EVIDENCE_DIR:-$BUILD_ROOT/evidence/wave3b}
 LOADER_PROFILE=${LOADER_PROFILE:-}
 # wine and superproject commits this wave starts from (the tips after Wave 3a)
