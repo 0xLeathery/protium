@@ -104,8 +104,8 @@ STEAM_WIN_DLLS=${STEAM_WIN_DLLS:-/Volumes/Samsung T7/Windows Games/Steam}
 FFMPEG_CLI=${FFMPEG_CLI:-/opt/homebrew/bin/ffmpeg}
 WINE_DIR=$PROTON_DIR/wine
 # where this wave starts: the tips after Wave 4's last change
-WINE_WAVE_BASE=${WINE_WAVE_BASE:-23cb2615}
-SUPER_WAVE_BASE=${SUPER_WAVE_BASE:-43acb634}
+WINE_WAVE_BASE=${WINE_WAVE_BASE:-29f96746}
+SUPER_WAVE_BASE=${SUPER_WAVE_BASE:-950f3e5a}
 # Wine files this wave changes: ntdll's dlopen of a builtin's Unix library and its steamclient
 # trampolines, winemac.drv's update of DXMT's client surfaces, ntdll's GStreamer paths, an include
 # in winegstreamer's media converter, winebus's IOHID game controllers, and the source reader's

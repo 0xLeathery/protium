@@ -29,8 +29,8 @@ TOOLCHAIN_DIR=${TOOLCHAIN_DIR:-$HOME/projects/proton-macos-toolchain/llvm-mingw-
 EVIDENCE_DIR=${EVIDENCE_DIR:-$BUILD_ROOT/evidence/wave2a}
 WAVE1_EVIDENCE_DIR=${WAVE1_EVIDENCE_DIR:-$BUILD_ROOT/evidence/wave1}
 # wine commit this wave starts from (tip of macos-arm64 after Wave 1) and the superproject equivalent
-WINE_WAVE_BASE=${WINE_WAVE_BASE:-4dd560606138bd6cfcdd5c140efa3134ea7d70bb}
-SUPER_WAVE_BASE=${SUPER_WAVE_BASE:-81346fed2c54ee8eada400b03c168e6e5c8f1c9f}
+WINE_WAVE_BASE=${WINE_WAVE_BASE:-f4e332b1235cea7db0d1dee316a252b8836f157d}
+SUPER_WAVE_BASE=${SUPER_WAVE_BASE:-06f40f3164bb29305be178ee1a56894e3287a83f}
 WINEBOOT_TIMEOUT=${WINEBOOT_TIMEOUT:-120}
 # Wine files this wave may change, plus those of later waves (Wave 2b: TEB in a TSD slot instead
 # of x18, see check-wave2b.sh item 7; Wave 3a: x18 opt-in and W^X page flipping, see check-wave3a.sh item 9;

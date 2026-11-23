@@ -107,8 +107,8 @@ GODOT_X64_TIMEOUT=${GODOT_X64_TIMEOUT:-90}
 LOADER_PROFILE=${LOADER_PROFILE:-}
 WINE_DIR=$PROTON_DIR/wine
 # wine and superproject commits this wave starts from (the tips after Wave 3b's last change)
-WINE_WAVE_BASE=${WINE_WAVE_BASE:-367c1ae9b0468f5d8b60b32be12cefe91eba0ffb}
-SUPER_WAVE_BASE=${SUPER_WAVE_BASE:-acfe76e00fbbbf49b10ef781d58e2bfdabb76ec5}
+WINE_WAVE_BASE=${WINE_WAVE_BASE:-256622cf745e4783db6d8edfbfb23c87fba77e57}
+SUPER_WAVE_BASE=${SUPER_WAVE_BASE:-5903e13670746e2825460e7ffe8ed420509effa7}
 # Wine files this wave may change: winemac.drv's table for DXMT, where ntdll tells the Vulkan
 # loader to look for drivers, and what stopped real programs: ntdll's start of a 32-bit
 # process, and uiautomationcore's use of results that a provider did not set. virtual.c is

@@ -40,8 +40,8 @@ EVIDENCE_DIR=${EVIDENCE_DIR:-$BUILD_ROOT/evidence/wave2b}
 # item 2 of an earlier run on the unchanged build, for the before/after x18 counts
 BEFORE_DIR=${BEFORE_DIR:-$BUILD_ROOT/evidence/wave2b-before}
 # wine commit this wave starts from (tip of macos-arm64 after Wave 2a) and the superproject equivalent
-WINE_WAVE_BASE=${WINE_WAVE_BASE:-d30ba1b032f90f2d2e0e7f5bbb27980bdc522ffa}
-SUPER_WAVE_BASE=${SUPER_WAVE_BASE:-5c10f7c13a672f6db7f83d69db30f908e5655832}
+WINE_WAVE_BASE=${WINE_WAVE_BASE:-56ec09d728fadfa3c8e7a47b7e266a3ba1274d8d}
+SUPER_WAVE_BASE=${SUPER_WAVE_BASE:-c3f4176552561d2dd2ae91895a936b5a83864f1f}
 WINEBOOT_TIMEOUT=${WINEBOOT_TIMEOUT:-180}
 RUN_TIMEOUT=${RUN_TIMEOUT:-120}
 TEB_TEST_RUNS=${TEB_TEST_RUNS:-20}
