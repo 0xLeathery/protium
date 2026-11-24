@@ -18,6 +18,8 @@ version, the Protium commit, and the `steamplay-run.log` from the game's
 - A change to DXMT, vkd3d-proton, FEX or Mesa goes in as a patch in `macos/patches/<project>/`,
   applied by that project's build script. Its head says what it fixes.
 - Say how you tested it: which game or `macos/tests/check-wave*.sh` item, on which Mac.
+- A change to `macos/steamplay` keeps `python3 -B -m unittest macos/tests/test_steamplay.py`
+  passing, and adds a test there when it changes how Steam's files are read or written.
 - Send your own work. Do not copy code from other projects into a pull request.
 
 ## License of contributions
