@@ -18,7 +18,9 @@
 #   WINE_INSTALL    the bundle (default ~/projects/proton-macos-build/install-aarch64)
 #   STEAM_ROOT      Mac Steam's data folder (default ~/Library/Application Support/Steam)
 #   WIN_STEAM_DLLS  a folder with Valve's Windows steamclient.dll and steamclient64.dll, which
-#                   Mac Steam does not ship (Linux Steam has them in legacycompat/)
+#                   Mac Steam does not ship (Linux Steam has them in legacycompat/); copy them from
+#                   the top folder of a Windows Steam install (default ~/Library/Application
+#                   Support/SteamPlay/steamclient-windows)
 #   GAME_EXE        the executable, relative to the install folder or as a full path, when the
 #                   largest .exe in its top folder is not the game (macos/steamplay-launch gives
 #                   the one Steam chose)
@@ -49,7 +51,7 @@ set -euo pipefail
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 WINE_INSTALL=${WINE_INSTALL:-$HOME/projects/proton-macos-build/install-aarch64}
 STEAM_ROOT=${STEAM_ROOT:-$HOME/Library/Application Support/Steam}
-WIN_STEAM_DLLS=${WIN_STEAM_DLLS:-/Volumes/Samsung T7/Windows Games/Steam}
+WIN_STEAM_DLLS=${WIN_STEAM_DLLS:-$HOME/Library/Application Support/SteamPlay/steamclient-windows}
 
 die() { echo "steamplay-run.sh: error: $*" >&2; exit 1; }
 log() { echo ":: $*" >&2; }
@@ -167,7 +169,8 @@ steam_in_pfx="$prefix/drive_c/Program Files (x86)/Steam"
 mkdir -p "$steam_in_pfx"
 for dll in steamclient.dll steamclient64.dll; do
     [ -f "$steam_in_pfx/$dll" ] && continue
-    [ -f "$WIN_STEAM_DLLS/$dll" ] || die "no $dll in $WIN_STEAM_DLLS (set WIN_STEAM_DLLS)"
+    [ -f "$WIN_STEAM_DLLS/$dll" ] || die "no $dll in $WIN_STEAM_DLLS: copy Valve's Windows steamclient.dll and" \
+        "steamclient64.dll there from the top folder of a Windows Steam install, or set WIN_STEAM_DLLS"
     cp "$WIN_STEAM_DLLS/$dll" "$steam_in_pfx/$dll"
 done
 
