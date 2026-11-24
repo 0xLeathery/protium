@@ -110,7 +110,7 @@ SUPER_WAVE_BASE=${SUPER_WAVE_BASE:-950f3e5a}
 # trampolines, winemac.drv's update of DXMT's client surfaces, ntdll's GStreamer paths, an include
 # in winegstreamer's media converter, winebus's IOHID game controllers, and the source reader's
 # drain of a decoder, which is PE code and so is guarded by configure's WINE_MACOS_AARCH64
-WAVE_FILES="dlls/ntdll/unix/virtual.c dlls/ntdll/unix/loader.c dlls/winemac.drv/window.c dlls/winegstreamer/media-converter/media-converter.h dlls/winebus.sys/bus_iohid.c dlls/mfreadwrite/reader.c configure.ac dlls/winegstreamer/video_decoder.c dlls/winegstreamer/video_processor.c dlls/ntdll/unix/signal_arm64.c dlls/winemac.drv/cocoa_display.m programs/tabtip/tabtip.c dlls/win32u/font.c dlls/kernelbase/process.c dlls/win32u/vulkan.c dlls/winemac.drv/cocoa_app.m dlls/winemac.drv/cocoa_event.m dlls/winemac.drv/macdrv_cocoa.h dlls/winemac.drv/mouse.c dlls/ntdll/signal_arm64ec.c dlls/ntdll/unix/fsync.c server/fsync.c server/inproc_sync.c dlls/ntdll/unix/thread.c dlls/ntdll/unwind.c dlls/ntdll/unix/sync.c dlls/ntdll/unix/server.c dlls/ntdll/unix/unix_private.h dlls/winecoreaudio.drv/coreaudio.c"
+WAVE_FILES="dlls/ntdll/loader.c dlls/ntdll/unix/virtual.c dlls/ntdll/unix/loader.c dlls/winemac.drv/window.c dlls/winegstreamer/media-converter/media-converter.h dlls/winebus.sys/bus_iohid.c dlls/mfreadwrite/reader.c configure.ac dlls/winegstreamer/video_decoder.c dlls/winegstreamer/video_processor.c dlls/ntdll/unix/signal_arm64.c dlls/winemac.drv/cocoa_display.m programs/tabtip/tabtip.c dlls/win32u/font.c dlls/kernelbase/process.c dlls/win32u/vulkan.c dlls/winemac.drv/cocoa_app.m dlls/winemac.drv/cocoa_event.m dlls/winemac.drv/macdrv_cocoa.h dlls/winemac.drv/mouse.c dlls/ntdll/signal_arm64ec.c dlls/ntdll/unix/fsync.c server/fsync.c server/inproc_sync.c dlls/ntdll/unix/thread.c dlls/ntdll/unwind.c dlls/ntdll/unix/sync.c dlls/ntdll/unix/server.c dlls/ntdll/unix/unix_private.h dlls/winecoreaudio.drv/coreaudio.c"
 SUPER_FILES="lsteamclient/unixlib.cpp lsteamclient/unix_steam_input_manual.cpp"
 export MIN_FREE_GB=${MIN_FREE_GB:-4}
 export WINEDLLOVERRIDES=${WINEDLLOVERRIDES:-mscoree,mshtml=}
@@ -480,6 +480,9 @@ if want 11; then
         n=$((n + $(git -C "$WINE_DIR" diff "$WINE_WAVE_BASE" HEAD -- "$f" | grep -c '^+[^+]')))
     done
     for f in $(git -C "$PROTON_DIR" diff --name-only "$SUPER_WAVE_BASE" HEAD | grep -v '^macos/'); do
+        # Protium's own project files are built into nothing: the README, contributing guide and
+        # issue template GitHub shows, the licenses, and which Wine the wine submodule is
+        case $f in .github/*|LICENSE|LICENSE.protium|.gitignore|.gitmodules|wine) continue ;; esac
         case " $SUPER_FILES " in
             *" $f "*) a=$(git -C "$PROTON_DIR" show "$SUPER_WAVE_BASE:$f" | unifdef -U__APPLE__ 2>/dev/null | shasum)
                       b=$(git -C "$PROTON_DIR" show "HEAD:$f" | unifdef -U__APPLE__ 2>/dev/null | shasum)
@@ -487,7 +490,6 @@ if want 11; then
             *) bad="$bad super:$f" ;;
         esac
     done
-    [ -n "$(git -C "$PROTON_DIR" diff --raw "$SUPER_WAVE_BASE" HEAD -- wine)" ] && bad="$bad wine(pointer)"
     [ -z "$bad" ] && pass 11 "$n lines added in $WAVE_FILES since $WINE_WAVE_BASE and the two lsteamclient files, all gone with __APPLE__ and WINE_MACOS_AARCH64 undefined (configure.ac: only the define)" \
         || fail 11 "$bad"
 fi
