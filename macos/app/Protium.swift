@@ -99,8 +99,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.activate(ignoringOtherApps: true)
         window.title = "Protium \(ownVersion)"
         afterUpdate()
-        status()
-        checkForUpdate()
+        // the status first, then the newer version: what it changes is then the last thing in
+        // the window, not scrolled away by the status
+        setBusy(true)
+        runSteamplay(["status"]) { _ in
+            self.setBusy(false)
+            self.checkForUpdate()
+        }
     }
 
     // MARK: a newer version
