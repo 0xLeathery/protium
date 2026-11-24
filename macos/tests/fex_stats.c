@@ -12,6 +12,12 @@
  *   threads 61 jit 41.2 s blocks 913022 cache hit 0 miss 0 lookup 0.0 s smc 12 lock 0.3 s
  * "threads" as a second argument adds a line per thread that translated for over 0.1 s.
  * Times are counter ticks divided by the counter's frequency (24 MHz on Apple Silicon).
+ *
+ * DO NOT USE ON A GAME YET. On 2026-11-24, with FEX_PROFILESTATS=1, Call of Duty: WWII died at
+ * its start with an access violation in FEX::SHMStats::StatAllocBase::AllocateSlot, and Red Dead
+ * Redemption 2's launcher hung with a thread faulting for ever in FEXCore's CompileBlock while
+ * it held FEX's thread creation lock; this program then read "threads 0". Small test programs
+ * run with the option. FEX's statistics need a fix on this port first.
  */
 #include <fcntl.h>
 #include <stdint.h>

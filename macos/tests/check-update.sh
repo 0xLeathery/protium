@@ -19,7 +19,14 @@
 # The installed copy must be the same afterwards, file for file. Prints PASS or FAIL per case;
 # exit status 1 when one failed.
 #
-# Environment overrides: BUILD_ROOT, RELEASE_APP, RELEASE_DMG (default: the 0.2.0 release in
+# With a notarized build of a newer version that was never published ($TEST_DMG; made with
+#   VERSION=0.2.99 NOTARIZE=0 RELEASE_DIR=$BUILD_ROOT/evidence/update-build CHANGELOG=<one with a
+#   [0.2.99] section> macos/make-release.sh
+# then the app notarized and stapled and the disk image made again), it also updates for real:
+# the new app takes the old one's place and the old one goes once the new one has started; and
+# when the new one never starts, the old one comes back.
+#
+# Environment overrides: BUILD_ROOT, TEST_VERSION, TEST_DMG, RELEASE_APP, RELEASE_DMG (default: the 0.2.0 release in
 # $BUILD_ROOT/release), SIGN_IDENTITY (default: the first Developer ID Application identity).
 
 set -u
@@ -28,6 +35,8 @@ MACOS_DIR=$(cd "$SCRIPT_DIR/.." && pwd)
 BUILD_ROOT=${BUILD_ROOT:-$HOME/projects/proton-macos-build}
 RELEASE_APP=${RELEASE_APP:-$BUILD_ROOT/release/Protium.app}
 RELEASE_DMG=${RELEASE_DMG:-$BUILD_ROOT/release/Protium-0.2.0.dmg}
+TEST_VERSION=${TEST_VERSION:-0.2.99}
+TEST_DMG=${TEST_DMG:-$BUILD_ROOT/evidence/update-build/Protium-$TEST_VERSION.dmg}
 SIGN_IDENTITY=${SIGN_IDENTITY:-$(security find-identity -v -p codesigning | awk -F'"' '/Developer ID Application/{print $2; exit}')}
 E=$BUILD_ROOT/evidence/update
 [ -d "$RELEASE_APP" ] && [ -f "$RELEASE_DMG" ] || { echo "check-update.sh: no released app and disk image in $BUILD_ROOT/release" >&2; exit 2; }
@@ -163,9 +172,52 @@ says check-off "^check off" steamplay version --check --now
 [ ! -e "$E/home/update-check.json" ] && [ -z "$(PROTIUM_NOTIFY_TEST=1 steamplay version --notify)" ] && pass off-asks-nothing "turned off: nothing is asked, kept or told" || fail off-asks-nothing "something was asked or told"
 steamplay updates on >/dev/null
 
+after=$(tree_sum "$APP")
+[ "$before" = "$after" ] && pass unchanged "after every refusal the installed copy is the same, file for file" || fail unchanged "the installed copy changed"
+codesign --verify --deep --strict "$APP" 2>/dev/null && pass seal "the installed copy's signature still verifies" || fail seal "the installed copy's signature no longer verifies"
+
+# A real update, when there is a notarized build of a newer version to update to ($TEST_DMG,
+# of version $TEST_VERSION; never published). No window opens: the check plays the new app's
+# part and writes "started" itself, or does not.
+if [ -f "$TEST_DMG" ]; then
+    echo "== a real update to $TEST_VERSION, and one whose new app never starts"
+    releases "$E/releases.json" "$TEST_VERSION" ""
+    wait_for() {    # wait_for SECONDS test...
+        local n=0 limit=$(($1 * 4))
+        shift
+        until "$@" 2>/dev/null; do n=$((n + 1)); [ $n -gt $limit ] && return 1; perl -e 'select(undef, undef, undef, 0.25)'; done
+    }
+    version_of() { cat "$1/Contents/Resources/steamplay/VERSION" 2>/dev/null; }
+    says update-fetch "^ok fetched .*Protium-$TEST_VERSION.dmg $TEST_VERSION" env PROTIUM_UPDATE_IMAGE="$TEST_DMG" bash -c "$(declare -f steamplay); E='$E' APP='$APP' MACOS_DIR='$MACOS_DIR'; steamplay update --fetch"
+    says update-install "^ok installing $TEST_VERSION" steamplay update --install "$E/cache/Protium-$TEST_VERSION.dmg" "$TEST_VERSION"
+    if wait_for 20 test "$(version_of "$APP")" = "$TEST_VERSION"; then
+        pass update-swapped "the app in place is $TEST_VERSION, the old one waits next to it"
+    else
+        fail update-swapped "the app in place is $(version_of "$APP")"
+    fi
+    # the new app would say this on its first start
+    python3 -I -c 'import json,sys; p=sys.argv[1]; d=json.load(open(p)); d["started"]=d["new"]; json.dump(d, open(p,"w"))' "$E/home/update-pending.json"
+    wait_for 10 test ! -e "$E/Applications/.Protium-old.app" && pass update-done "the old app is gone once the new one has started" || fail update-done "the old app is still there"
+    codesign --verify --deep --strict "$APP" 2>/dev/null && spctl --assess --type execute "$APP" 2>/dev/null \
+        && pass update-seal "the updated app verifies and Gatekeeper accepts it" || fail update-seal "the updated app does not verify"
+    [ -z "$(ls -A "$E/Applications" | grep -v '^Protium.app$')" ] && pass update-clean "nothing else is left in the folder" || fail update-clean "left: $(ls -A "$E/Applications" | tr '\n' ' ')"
+
+    # again from the released version, and this time nobody says "started"
+    rm -rf "$APP" "$E/home/update-pending.json"
+    cp -Rc "$RELEASE_APP" "$APP" 2>/dev/null || ditto "$RELEASE_APP" "$APP"
+    steamplay update --install "$TEST_DMG" "$TEST_VERSION" >"$E/rollback.out" 2>&1
+    wait_for 20 test "$(version_of "$APP")" = "$TEST_VERSION" || fail rollback-swapped "the new app was never put in place: $(cat "$E/rollback.out")"
+    if wait_for 45 grep -q '"failed"' "$E/home/update-pending.json" && [ "$(version_of "$APP")" = "$released" ]; then
+        pass rollback "the new app did not start, and $released is back in place"
+    else
+        fail rollback "the app in place is $(version_of "$APP"); pending: $(cat "$E/home/update-pending.json" 2>/dev/null)"
+    fi
+    codesign --verify --deep --strict "$APP" 2>/dev/null && pass rollback-seal "the app put back verifies" || fail rollback-seal "the app put back does not verify"
+    [ -z "$(ls -A "$E/Applications" | grep -v '^Protium.app$')" ] && pass rollback-clean "nothing else is left in the folder" || fail rollback-clean "left: $(ls -A "$E/Applications" | tr '\n' ' ')"
+else
+    echo "SKIP  a real update: no test build at $TEST_DMG (see the head of this file)"
+fi
+
 mount | grep -q protium-update- && fail mounts "a disk image is still mounted" || pass mounts "no disk image left mounted"
 
-after=$(tree_sum "$APP")
-[ "$before" = "$after" ] && pass unchanged "the installed copy is the same, file for file" || fail unchanged "the installed copy changed"
-codesign --verify --deep --strict "$APP" 2>/dev/null && pass seal "the installed copy's signature still verifies" || fail seal "the installed copy's signature no longer verifies"
 exit $FAILED
