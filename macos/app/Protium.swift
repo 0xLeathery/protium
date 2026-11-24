@@ -442,8 +442,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 if CommandLine.arguments.count >= 3, CommandLine.arguments[1] == "--game-notice" {
     let version = CommandLine.arguments[2]
     let line = CommandLine.arguments.dropFirst(3).joined(separator: " ")
-    let runtime = ProcessInfo.processInfo.environment["PROTIUM_RUNTIME"]
-        ?? Bundle.main.bundleURL.appendingPathComponent("Contents/SharedSupport/runtime").path
+    // PROTIUM_RUNTIME and PROTIUM_NOTICE_WAIT are for macos/tests/check-notice.sh: another Wine
+    // than the app's own, and fewer than 180 seconds of waiting for a game's window
+    let runtime = URL(fileURLWithPath: ProcessInfo.processInfo.environment["PROTIUM_RUNTIME"]
+        ?? Bundle.main.bundleURL.appendingPathComponent("Contents/SharedSupport/runtime").path).resolvingSymlinksInPath().path
+    let longestWait = Int(ProcessInfo.processInfo.environment["PROTIUM_NOTICE_WAIT"] ?? "") ?? 180
     let notice = NSApplication.shared
     notice.setActivationPolicy(.accessory)
 
@@ -524,7 +527,9 @@ if CommandLine.arguments.count >= 3, CommandLine.arguments[1] == "--game-notice"
             NSAnimationContext.runAnimationGroup({ $0.duration = 0.6; panel.animator().alphaValue = 0 },
                                                  completionHandler: { exit(0) })
         }
-        // the same, for Notification Centre, if the player allowed notifications
+        // the same, for Notification Centre, if the player allowed notifications (the binary
+        // outside an app, as the checks run it, has no Notification Centre to talk to)
+        guard Bundle.main.bundleIdentifier != nil else { return }
         let center = UNUserNotificationCenter.current()
         center.getNotificationSettings { settings in
             guard settings.authorizationStatus == .authorized || settings.authorizationStatus == .provisional else { return }
@@ -542,7 +547,7 @@ if CommandLine.arguments.count >= 3, CommandLine.arguments[1] == "--game-notice"
             timer.invalidate()
             // not over a splash screen that is gone a moment later
             DispatchQueue.main.asyncAfter(deadline: .now() + 2) { show(over: gameWindow() ?? game) }
-        } else if waited >= 180 {
+        } else if waited >= longestWait {
             exit(0)     // no game came
         }
     }

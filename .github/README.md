@@ -20,7 +20,7 @@ Valve Corporation, and Mac and Metal are trademarks of Apple Inc.
 What changed in each release is in [CHANGELOG.md](../CHANGELOG.md).
 
 Protium asks GitHub once a day whether a newer version is out, tells you in its window and with
-one notification when you start a game, and can update itself. The request is a plain look at the
+a short banner over the game when you start one, and can update itself. The request is a plain look at the
 list of releases at `api.github.com`, with nothing about your Mac or your games in it. The
 checkbox "Tell me about new versions" in Protium's window, or `steamplay updates off`, turns it
 off, and then no request is made.
