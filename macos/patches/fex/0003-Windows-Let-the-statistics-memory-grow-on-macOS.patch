@@ -1,0 +1,69 @@
+Windows: Let the statistics' shared memory grow on macOS.
+
+With FEX_PROFILESTATS=1 FEX keeps a slot of counters for each thread in the
+shared memory object fex-<pid>-stats. It starts with one page, 38 slots, and
+is made larger with ftruncate when they are used up. macOS lets the size of a
+shared memory object be set once only, so the second ftruncate fails there.
+The failed call reported a size of 0, which was taken for the new size: the
+next thread got no slot, and AllocateSlot wrote to a null pointer. Call of
+Duty: WWII died of that at its start (access violation in
+FEX::SHMStats::StatAllocBase::AllocateSlot), as does any program with more
+than 38 threads.
+
+On macOS the object now gets its full size, 4 MB, when it is made; its pages
+cost nothing until they are written, and growing only maps more of it. A
+failed call to grow leaves the size as it was, on every system, so that the
+thread goes without counters instead.
+
+LOCAL TO THIS PORT, NOT FOR FEX. Applied by macos/build-fex.sh to
+github.com/athei/FEX at 8425ea974e072821c75969723efe49cca605200c. Written
+with an AI assistant (Claude). FEX takes no AI-generated code contributions
+(its CLAUDE.md, AGENTS.md and CONTRIBUTING.md), so this patch must not be
+sent to it as a pull request. What was found may be reported to its
+developers, for them to write their own change.
+---
+diff --git a/Source/Windows/Common/SHMStats.cpp b/Source/Windows/Common/SHMStats.cpp
+index 498fc2cda..ec177817e 100644
+--- a/Source/Windows/Common/SHMStats.cpp
++++ b/Source/Windows/Common/SHMStats.cpp
+@@ -21,8 +21,8 @@ uint32_t StatAlloc::FrontendAllocateSlots(uint32_t NewSize) {
+ 
+   auto Result = UnixLib::AllocateSHMSlots(Base, std::min(NewSize, MAX_STATS_SIZE), MAX_STATS_SIZE);
+ 
+-  // Return the new size allocated, if it happened to change.
+-  return Result.MappedSize;
++  // Return the new size allocated, if it happened to change. A failed call reports no size at all.
++  return Result.SHMBase ? Result.MappedSize : CurrentSize;
+ }
+ 
+ StatAlloc::StatAlloc(FEXCore::SHMStats::AppType AppType) {
+diff --git a/Source/Windows/UnixLib/FEXUnixLib.cpp b/Source/Windows/UnixLib/FEXUnixLib.cpp
+index d8ebb540b..2b1df48c7 100644
+--- a/Source/Windows/UnixLib/FEXUnixLib.cpp
++++ b/Source/Windows/UnixLib/FEXUnixLib.cpp
+@@ -177,7 +177,13 @@ static inline void* InitializeSHM(uint32_t MapSize, uint32_t MaxSize, uint64_t M
+     return nullptr;
+   }
+ 
++#ifdef __APPLE__
++  // macOS lets the size of a shared memory object be set once only, so it gets its full size here.
++  // Its pages cost nothing until they are written.
++  if (ftruncate(fd, MaxSize) == -1) {
++#else
+   if (ftruncate(fd, MapSize) == -1) {
++#endif
+     goto err;
+   }
+ 
+@@ -229,9 +235,11 @@ static inline bool AllocateMoreSlots(void* SHMBase, uint32_t NewSize) {
+     return false;
+   }
+ 
++#ifndef __APPLE__
+   if (ftruncate(fd, NewSize) == -1) {
+     goto err;
+   }
++#endif
+ 
+   {
+     auto SharedBase = mmap(SHMBase, NewSize, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_FIXED, fd, 0);
