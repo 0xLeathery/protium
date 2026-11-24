@@ -10,6 +10,27 @@ written. "Known problems" is a heading of our own, next to Keep a Changelog's.
 
 ## [Unreleased]
 
+### Added
+
+- A Diagnostics button. It saves one text file to your Desktop that shows how Protium and Steam
+  are set up on your Mac and what their logs last said, so you can attach it when you report a
+  problem. Nothing is sent anywhere. The file includes the names of your installed games; your
+  home folder and Steam account numbers are left out.
+
+### Changed
+
+- The messages in Protium's window are clearer about what happened and what to do next.
+
+### Fixed
+
+- "Set up Steam" on a Steam that had never been opened or signed in to ended in a Python error.
+  Protium now tells you to open Steam and sign in first.
+- If Steam kept starting without Protium's tools, Protium's background helper restarted it again
+  and again, and Steam could not be used. It now stops after three tries and tells you to press
+  Repair.
+- Deleting Protium.app without pressing Uninstall left Steam changed. Protium now removes itself
+  from Steam about ten minutes after the app is deleted.
+
 ## [0.3.0] - 2026-11-24
 
 ### Added
