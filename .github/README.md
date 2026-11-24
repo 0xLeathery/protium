@@ -181,7 +181,6 @@ macos/build-dxmt.sh            # Direct3D 10 and 11
 macos/build-vkd3d-proton.sh    # Direct3D 12
 macos/build-steam-bridge.sh    # lsteamclient and the rest of Proton's Steam bridge
 macos/bundle-wine.sh           # install everything into one bundle, with mtld3d, and sign the loader
-macos/make-steamplay-app.sh    # "Steam Play.app"
 ```
 
 Each script documents its inputs, outputs and environment overrides at its head. Builds go to

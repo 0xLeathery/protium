@@ -2,12 +2,6 @@
 """Steam Play on the Mac: Windows games that Mac Steam installed, played from Steam's library.
 
     macos/steamplay list              Windows games in Steam's libraries
-    macos/steamplay sync [--dry-run] [--remove]
-                                      give each one a shortcut in Steam's library, or take the
-                                      shortcuts out again (Steam quit)
-    macos/steamplay play <app id>     start one now, through Steam Play.app
-    macos/steamplay hook [--dry-run] [--remove] [app id...]
-                                      make each one's own library entry start it (Steam quit)
     macos/steamplay setup [--dry-run] set Steam Play up: the tools, Steam's platform switch and a
                                       compatibility tool for every game (Steam quit)
     macos/steamplay status            the switch, the tools and each installed game's choice
@@ -53,24 +47,7 @@
                                       auto (the default) when the main screen is HiDPI, off
                                       never; on is always, for trying it on another screen
 
-Mac Steam downloads a Windows build when its download platform is forced, but will not launch
-it. "sync" adds a non-Steam shortcut per game to the signed-in user's shortcuts.vdf, named
-after the game and with its artwork from Steam's library cache, which opens
-"Steam Play.app" (macos/make-steamplay-app.sh) for the game's app id. The game itself then
-reports the real app id to Steam through Proton's lsteamclient, so Steam shows the game as
-playing and counts its playtime. Shortcuts made earlier by sync are replaced, others are kept,
-and shortcuts.vdf is backed up first. Steam must be quit while it is written, since Steam
-rewrites the file when it quits.
-
-"hook" is the other way to a Play button, without a second entry per game: it sets the game's
-launch option, in the signed-in user's localconfig.vdf, to macos/steamplay-launch followed by
-%command%, so that Steam's own Play starts the game through that script (which see). A launch
-option the user already has stays, after %command%; one with its own %command% is left alone.
-With app ids it does those games whatever is in their folders, without them every Windows game
-"list" shows; --remove takes the script out again. Steam only offers Play for a Windows game
-while it takes the Mac for a Windows machine.
-
-"setup" is Steam Play's own way, and the one to use: Mac Steam has Linux's Steam Play, which it
+"setup" turns on Steam Play: Mac Steam has Linux's Steam Play, which it
 runs only while it takes the Mac for a Linux machine (@sSteamCmdForcePlatformType linux in the
 steam_dev.cfg next to its executables). Each game then goes by its compatibility tool, and Steam
 does the rest itself: the right depots, Play, the prefix path, cloud saves. The two tools are in
@@ -82,7 +59,7 @@ overrides the rule for one game and is remembered in choices.json (see STEAMPLAY
 "setup" installs the tools into /usr/local/share/steam/compatibilitytools.d (one of the few folders
 Steam looks in, and the one no Steam update touches), writes the switch, maps the games in
 config.vdf (CompatToolMapping; app id 0 is the default for games it does not know yet) and takes
-"hook"'s launch options out. Run it again after buying games: a new game with a Mac or Linux
+out the launch options an early version of this tool set. Run it again after buying games: a new game with a Mac or Linux
 build needs its own mapping. WARNING: with the switch on linux and the tools missing, or the
 switch gone, Steam takes Windows installs for wrong and removes them at its next start: "status"
 says so, and "setup" puts both right. "tools" and "map" are the single steps.
@@ -105,11 +82,9 @@ the depot manifests Steam keeps in its depotcache and makes the ones that are mi
 the game's folder only. Without app ids it does every installed game mapped to macos-native;
 the macos-native tool runs it for its game before each start.
 
-Environment: STEAM_ROOT (default ~/Library/Application Support/Steam), STEAMPLAY_APP (default
-<build root>/steamplay-apps/Steam Play.app), STEAMPLAY_HOME (default ~/Library/Application
-Support/SteamPlay: choices.json, backups of what is written, the guard's copy),
-STEAMPLAY_LAUNCH (default steamplay-launch next to this script), and STEAMPLAY_FAKE_STEAM=1 to try
-sync or hook on a copy of a Steam folder while Steam runs.
+Environment: STEAM_ROOT (default ~/Library/Application Support/Steam), STEAMPLAY_HOME (default
+~/Library/Application Support/SteamPlay: choices.json, backups of what is written, the guard's
+copy), and STEAMPLAY_FAKE_STEAM=1 to try a command on a copy of a Steam folder while Steam runs.
 """
 import sys
 
@@ -128,15 +103,11 @@ import struct
 import subprocess
 import time
 import traceback
-import zlib
 
 BUILD_ROOT = os.environ.get("BUILD_ROOT", os.path.expanduser("~/projects/proton-macos-build"))
 STEAM_ROOT = os.environ.get("STEAM_ROOT", os.path.expanduser("~/Library/Application Support/Steam"))
-STEAMPLAY_APP = os.environ.get("STEAMPLAY_APP", os.path.join(BUILD_ROOT, "steamplay-apps", "Steam Play.app"))
 HOME_DIR = os.environ.get("STEAMPLAY_HOME", os.path.expanduser("~/Library/Application Support/SteamPlay"))
 BACKUPS = os.environ.get("STEAMPLAY_BACKUPS", os.path.join(HOME_DIR, "backups"))
-LAUNCH = os.environ.get("STEAMPLAY_LAUNCH", os.path.join(os.path.dirname(os.path.abspath(__file__)), "steamplay-launch"))
-TAG = "Steam Play"          # marks the shortcuts that sync owns
 OPEN = "/usr/bin/open"
 
 
@@ -285,69 +256,7 @@ def vdf_block(pairs, path):
     return pairs
 
 
-# ---------------------------------------------------------------- binary VDF (shortcuts.vdf)
-
-def bvdf_read(data, pos=0):
-    """Read a map's entries from pos up to its end byte; return (dict, position after it)."""
-    out = {}
-    while True:
-        kind = data[pos]
-        pos += 1
-        if kind == 0x08:
-            return out, pos
-        end = data.index(b"\0", pos)
-        key = data[pos:end].decode("utf-8", "replace")
-        pos = end + 1
-        if kind == 0x00:
-            out[key], pos = bvdf_read(data, pos)
-        elif kind == 0x01:
-            end = data.index(b"\0", pos)
-            out[key] = data[pos:end].decode("utf-8", "replace")
-            pos = end + 1
-        elif kind == 0x02:
-            out[key] = struct.unpack_from("<i", data, pos)[0]
-            pos += 4
-        else:
-            raise ValueError("unknown binary VDF type %#x at %d" % (kind, pos - 1))
-
-
-def bvdf_write(obj):
-    out = bytearray()
-    for key, value in obj.items():
-        k = key.encode("utf-8") + b"\0"
-        if isinstance(value, dict):
-            out += b"\x00" + k + bvdf_write(value)
-        elif isinstance(value, int):
-            out += b"\x02" + k + struct.pack("<i", value)
-        else:
-            out += b"\x01" + k + str(value).encode("utf-8") + b"\0"
-    return bytes(out) + b"\x08"
-
-
-def read_shortcuts(path):
-    if not os.path.exists(path):
-        return []
-    with open(path, "rb") as f:
-        data = f.read()
-    if not data:
-        return []
-    root, _ = bvdf_read(data, 0)
-    return [root["shortcuts"][k] for k in sorted(root.get("shortcuts", {}), key=int)]
-
-
-def write_shortcuts(path, shortcuts):
-    root = {"shortcuts": {str(i): s for i, s in enumerate(shortcuts)}}
-    with open(path + ".new", "wb") as f:
-        f.write(bvdf_write(root))    # which ends the root map as well: nothing follows it
-    os.replace(path + ".new", path)
-
-
-def shortcut_id(exe, name):
-    """The id Steam gives a non-Steam shortcut: its artwork files are named after it."""
-    return zlib.crc32((exe + name).encode("utf-8")) | 0x80000000
-
-
-# ---------------------------------------------------------------- user and artwork
+# ---------------------------------------------------------------- the signed-in user
 
 def signed_in_user_config():
     """The config folder of the user who signed in last (the one whose localconfig.vdf is newest),
@@ -389,23 +298,6 @@ def steam_ready():
     return None
 
 
-def artwork(appid):
-    """Steam's cached artwork of an app: {kind: path} for capsule, header, hero, logo, icon."""
-    cache = os.path.join(STEAM_ROOT, "appcache", "librarycache", str(appid))
-    found = {}
-    if not os.path.isdir(cache):
-        return found
-    for dirpath, _, files in os.walk(cache):
-        for f in files:
-            kind = {"library_capsule": "capsule", "library_600x900": "capsule", "library_header": "header",
-                    "header": "header", "library_hero": "hero", "logo": "logo"}.get(os.path.splitext(f)[0])
-            if kind and (kind not in found or "600x900" in f):
-                found[kind] = os.path.join(dirpath, f)
-            elif dirpath == cache and f.endswith(".jpg") and "icon" not in found:
-                found["icon"] = os.path.join(dirpath, f)
-    return found
-
-
 # ---------------------------------------------------------------- commands
 
 def cmd_list():
@@ -441,86 +333,27 @@ def write_file(path, text, **kw):
     os.replace(tmp, path)
 
 
-def cmd_sync(dry_run, remove=False):
-    if not remove and not os.path.isdir(STEAMPLAY_APP):
-        die("no %s: make it with macos/make-steamplay-app.sh" % STEAMPLAY_APP)
-    if not dry_run and steam_running():
-        die("quit Steam first: it rewrites its shortcuts when it quits")
-    cfg = steam_user_config()
-    path = os.path.join(cfg, "shortcuts.vdf")
-    before = list(read_shortcuts(path))
-    kept = [s for s in before if TAG not in s.get("tags", {}).values()]
-    exe = '"%s"' % OPEN
-    made = []
-    if remove:
-        for s in before:
-            if s not in kept:
-                print("%s %s" % ("would remove" if dry_run else "remove", s.get("AppName", "?")))
-    for appid, name, _, folder in ([] if remove else windows_games()):
-        sid = shortcut_id(exe, name)
-        art = artwork(appid)
-        made.append({
-            "appid": struct.unpack("<i", struct.pack("<I", sid))[0],
-            "AppName": name,
-            "Exe": exe,
-            "StartDir": '"%s"' % os.path.dirname(OPEN),
-            "icon": art.get("icon", ""),
-            "ShortcutPath": "",
-            "LaunchOptions": '-a "%s" --args %d' % (STEAMPLAY_APP, appid),
-            "IsHidden": 0, "AllowDesktopConfig": 1, "AllowOverlay": 1, "OpenVR": 0,
-            "Devkit": 0, "DevkitGameID": "", "DevkitOverrideAppID": 0, "LastPlayTime": 0,
-            "FlatpakAppID": "",
-            "tags": {"0": TAG},
-        })
-        print("%s %-9d %s%s" % ("would add" if dry_run else "add", appid, name,
-                                ("  (artwork: %s)" % ", ".join(sorted(art))) if art else "  (no artwork cached)"))
-        if dry_run:
-            continue
-        grid = os.path.join(cfg, "grid")
-        os.makedirs(grid, exist_ok=True)
-        for kind, suffix in (("capsule", "p"), ("header", ""), ("hero", "_hero"), ("logo", "_logo")):
-            if kind in art:
-                shutil.copyfile(art[kind], os.path.join(grid, "%d%s%s" % (sid, suffix, os.path.splitext(art[kind])[1])))
-    if dry_run:
-        return
-    os.makedirs(BACKUPS, exist_ok=True)
-    if os.path.exists(path):
-        shutil.copy2(path, os.path.join(BACKUPS, "shortcuts.vdf.%s" % time.strftime("%Y%m%d-%H%M%S")))
-    write_shortcuts(path, kept + made)
-    print("%d shortcut(s) written to %s, %d other shortcut(s) kept; start Steam to see them" % (len(made), path, len(kept)))
-
-
-def cmd_hook(appids, remove, dry_run):
-    if not remove and not os.access(LAUNCH, os.X_OK):
-        die("no launch script " + LAUNCH)
-    if not dry_run and steam_running():
-        die("quit Steam first: it rewrites its settings when it quits")
-    hook = '"%s" %%command%%' % LAUNCH
-    names = {appid: name for appid, name, _, _ in windows_games()}
+def unhook(appids):
+    """Takes out the launch option an early version of this tool set for these games (its
+    "hook" command, before Steam Play itself worked on Mac Steam). What the player had after
+    %command% stays. Steam must not be running."""
     path = os.path.join(steam_user_config(), "localconfig.vdf")
     with open(path, encoding="utf-8", errors="surrogateescape") as f:
         text = original = f.read()
 
     def change(old):
-        ours = old is not None and "steamplay-launch" in old and "%command%" in old
-        rest = old.split("%command%", 1)[1].strip() if ours else (old or "")
-        if remove:
-            return (rest or None) if ours else old
-        if old and not ours and "%command%" in old:
-            return old                      # someone else's wrapper: leave it
-        return hook + (" " + rest if rest else "")
+        if old is None or "steamplay-launch" not in old or "%command%" not in old:
+            return old
+        return old.split("%command%", 1)[1].strip() or None
 
-    for appid in appids or sorted(names):
+    for appid in appids:
         text, old, new = app_setting(text, appid, "LaunchOptions", change)
-        what = "unchanged" if old == new else ("would set" if dry_run else "set") if new is not None else \
-               ("would clear" if dry_run else "cleared")
-        print("%-11s %-9d %s: %s" % (what, appid, names.get(appid, "?"), new if new is not None else "(no launch option)"))
-    if dry_run or text == original:
+    if text == original:
         return
     os.makedirs(BACKUPS, exist_ok=True)
     shutil.copy2(path, os.path.join(BACKUPS, "localconfig.vdf.%s" % time.strftime("%Y%m%d-%H%M%S")))
     write_file(path, text, encoding="utf-8", errors="surrogateescape")
-    print("written to %s; start Steam" % path)
+    print("Removed an old launch option from %d game(s)." % len(appids))
 
 
 TOOLS_SRC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "steamplay-tools")
@@ -718,13 +551,13 @@ def cmd_setup(dry_run):
         print("Steam's game settings are already up to date.")
     hooked = hooked_apps()
     if hooked:
-        cmd_hook(hooked, True, False)
+        unhook(hooked)
     print("Steam is set up.")
 
 
 def cmd_uninstall(dry_run):
     """Undoes setup: the guard, the tools, the switch, the games' mappings to the tools and the
-    launch options hook set. Game files, prefixes (compatdata) and SteamPlay's own folder stay."""
+    launch options an early version set. Game files, prefixes (compatdata) and SteamPlay's own folder stay."""
     if not dry_run and steam_running():
         stop("Quit Steam first, then try again.")
     # a Steam that never started has no settings to undo; the rest is still taken out
@@ -733,7 +566,7 @@ def cmd_uninstall(dry_run):
     hooked = hooked_apps() if signed_in_user_config() else []
     present = [t for t in TOOLS if os.path.isdir(os.path.join(TOOLS_DIR, t))]
     if dry_run:
-        print("would remove the guard, the tools %s from %s, the switch, %d mapping(s) and %d hook(s)"
+        print("would remove the guard, the tools %s from %s, the switch, %d mapping(s) and %d old launch option(s)"
               % (", ".join(present) or "(none)", TOOLS_DIR, len(mapped), len(hooked)))
         return
     if os.environ.get("STEAMPLAY_FAKE_STEAM"):
@@ -760,7 +593,7 @@ def cmd_uninstall(dry_run):
         cmd_map({a: None for a in mapped}, quiet=True)
         print("%d game(s) no longer use Protium's tools." % len(mapped))
     if hooked:
-        cmd_hook(hooked, True, False)
+        unhook(hooked)
     print("Done. The next time Steam starts it will show only Mac games again, and it will delete the Windows\n"
           "games it installed through Protium. Their save data in steamapps/compatdata is kept.")
 
@@ -804,7 +637,7 @@ def installed_apps():
 
 
 def hooked_apps():
-    """App ids whose launch option is hook's."""
+    """App ids whose launch option is the one an early version set (see unhook)."""
     path = os.path.join(steam_user_config(), "localconfig.vdf")
     with open(path, encoding="utf-8", errors="surrogateescape") as f:
         tree = vdf_parse(f.read())
@@ -2065,10 +1898,6 @@ def cmd_map(choices, dry_run=False, quiet=False, silent=False):
         print("Updated the tool settings of %d game(s) in %s." % (len(choices), path))
 
 
-def cmd_play(appid):
-    subprocess.run([OPEN, "-a", STEAMPLAY_APP, "--args", str(appid)], check=True)
-
-
 HUD_FLAG = os.path.join(HOME_DIR, "hud")
 
 
@@ -2925,10 +2754,6 @@ def cmd_survey(args):
 def main(argv):
     if len(argv) >= 1 and argv[0] == "list":
         cmd_list()
-    elif len(argv) >= 1 and argv[0] == "sync":
-        cmd_sync("--dry-run" in argv[1:], "--remove" in argv[1:])
-    elif len(argv) == 2 and argv[0] == "play" and argv[1].isdigit():
-        cmd_play(int(argv[1]))
     elif argv == ["diagnose"]:
         sys.exit(cmd_diagnose())
     elif argv == ["setup", "--check"]:
@@ -2995,8 +2820,6 @@ def main(argv):
             and all(a.isdigit() for a in argv[1::2] if a != "--dry-run"):
         args = [a for a in argv[1:] if a != "--dry-run"]
         cmd_map({int(a): (None if t == "none" else t) for a, t in zip(args[::2], args[1::2])}, "--dry-run" in argv)
-    elif len(argv) >= 1 and argv[0] == "hook" and all(a.isdigit() or a in ("--dry-run", "--remove") for a in argv[1:]):
-        cmd_hook([int(a) for a in argv[1:] if a.isdigit()], "--remove" in argv[1:], "--dry-run" in argv[1:])
     else:
         sys.exit(__doc__)
 
