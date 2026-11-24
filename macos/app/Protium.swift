@@ -405,6 +405,18 @@ if CommandLine.arguments.count >= 3, CommandLine.arguments[1] == "--notify" {
     exit(0)
 }
 
+// "Protium --allow-notifications": asks for the permission "Set up Steam" asks for, by itself,
+// and says what the answer was. For macos/tests and for a player who said no the first time.
+if CommandLine.arguments.count == 2, CommandLine.arguments[1] == "--allow-notifications" {
+    let done = DispatchSemaphore(value: 0)
+    UNUserNotificationCenter.current().requestAuthorization(options: [.alert]) { granted, error in
+        print(granted ? "notifications allowed" : "notifications not allowed\(error.map { ": \($0.localizedDescription)" } ?? "")")
+        done.signal()
+    }
+    _ = done.wait(timeout: .now() + 120)
+    exit(0)
+}
+
 let app = NSApplication.shared
 let delegate = AppDelegate()
 app.delegate = delegate
