@@ -15,6 +15,12 @@ written. "Known problems" is a heading of our own, next to Keep a Changelog's.
 - Protium asks GitHub for new versions once a day at most and says what each one changes.
   `steamplay updates off` turns the asking off.
 
+### Fixed
+
+- Protium's own Python no longer writes files into the app. In 0.1.0 and 0.2.0 it did so the
+  first time some of its modules were used, which left the app's signature no longer matching
+  its contents.
+
 ## [0.2.0] - 2026-11-24
 
 ### Added

@@ -90,7 +90,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func checkForUpdate() {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: python)
-        process.arguments = [steamplay, "version", "--check"]
+        process.arguments = ["-B", steamplay, "version", "--check"]
         let pipe = Pipe()
         process.standardOutput = pipe
         process.standardError = FileHandle.nullDevice
@@ -138,7 +138,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         say("\n$ steamplay \(args.joined(separator: " "))\n")
         let process = Process()
         process.executableURL = URL(fileURLWithPath: python)
-        process.arguments = [steamplay] + args
+        process.arguments = ["-B", steamplay] + args     // -B: nothing is written into the app
         let pipe = Pipe()
         process.standardOutput = pipe
         process.standardError = pipe

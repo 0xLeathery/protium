@@ -177,8 +177,15 @@ py=$C/SharedSupport/python
 rm -rf "$py"/bin/idle* "$py"/bin/pip* "$py"/bin/pydoc* "$py"/lib/tcl* "$py"/lib/tk* "$py"/lib/itcl* \
     "$py"/lib/thread* "$py"/lib/libtcl* "$py"/lib/libtk* "$py"/lib/python3.14/{idlelib,tkinter,turtledemo,ensurepip,test} \
     "$py"/lib/python3.14/lib-dynload/_tkinter*
-"$py/bin/python3" -I -c 'import json, plistlib, shlex, hashlib, zipfile, subprocess, zlib' \
+"$py/bin/python3" -I -B -c 'import json, plistlib, shlex, hashlib, zipfile, subprocess, zlib' \
     || die "the bundled Python cannot import what steamplay needs"
+# Every module is compiled now, before signing, in the form Python uses without looking at dates:
+# a Python that finds no compiled file writes one next to the module, which here is inside the
+# signed app, and a file added there breaks the app's seal. (Releases 0.1.0 and 0.2.0 had only
+# the modules of the line above compiled.) steamplay and the scripts also tell Python not to write.
+find "$py" -name __pycache__ -type d -prune -exec rm -rf {} +
+"$py/bin/python3" -I -B -m compileall -q --invalidation-mode unchecked-hash "$py/lib/python3.14" >/dev/null \
+    || die "could not compile the bundled Python's library"
 
 ########################################################################
 # 2. Clean the copy

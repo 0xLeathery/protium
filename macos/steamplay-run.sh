@@ -63,6 +63,8 @@ if [ -z "${PROTIUM_PYTHON:-}" ] && [ -x "$app_support/python/bin/python3" ]; the
 fi
 WINE_INSTALL=${WINE_INSTALL:-$HOME/projects/proton-macos-build/install-aarch64}
 PROTIUM_PYTHON=${PROTIUM_PYTHON:-python3}
+# the app's Python must not write compiled files into the app, which would break its signature
+export PYTHONDONTWRITEBYTECODE=1
 STEAM_ROOT=${STEAM_ROOT:-$HOME/Library/Application Support/Steam}
 WIN_STEAM_DLLS=${WIN_STEAM_DLLS:-$HOME/Library/Application Support/SteamPlay/steamclient-windows}
 

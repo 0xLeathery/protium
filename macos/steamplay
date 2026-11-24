@@ -101,6 +101,12 @@ Support/SteamPlay: choices.json, backups of what is written, the guard's copy),
 STEAMPLAY_LAUNCH (default steamplay-launch next to this script), and STEAMPLAY_FAKE_STEAM=1 to try
 sync or hook on a copy of a Steam folder while Steam runs.
 """
+import sys
+
+# Never write compiled files next to the modules: in the app they would land inside its signed
+# bundle (its own Python's library) and break the seal macOS checks.
+sys.dont_write_bytecode = True
+
 import json
 import os
 import plistlib
@@ -110,7 +116,6 @@ import shutil
 import signal
 import struct
 import subprocess
-import sys
 import time
 import zlib
 
@@ -912,7 +917,10 @@ UPDATE_CHECK_SECONDS = 24 * 3600
 
 def protium_version():
     here = os.path.dirname(os.path.abspath(__file__))
-    for path in (os.path.join(here, "VERSION"), os.path.join(here, "app", "VERSION")):
+    paths = [os.path.join(here, "VERSION"), os.path.join(here, "app", "VERSION")]
+    if os.environ.get("PROTIUM_APP"):       # see this_app()
+        paths = [os.path.join(os.environ["PROTIUM_APP"], "Contents", "Resources", "steamplay", "VERSION")]
+    for path in paths:
         try:
             with open(path) as f:
                 return f.read().strip()
@@ -1044,6 +1052,103 @@ def cmd_updates(choice):
         if choice == "off" and os.path.exists(UPDATE_CHECK):
             os.remove(UPDATE_CHECK)
     print("telling about new versions: %s" % ("on" if update_check_wanted() else "off"))
+    return 0
+
+
+# ---- updating the app
+#
+# "update" replaces the app this script is in with a newer release. What it installs must be
+# ours: an app with Protium's identifier, signed with our Developer ID, notarized by Apple (so
+# Gatekeeper accepts it), and of the version that was announced, which must be newer than this
+# one. Every test is made on the disk image as downloaded and again on the copy that is about
+# to be put in place, and a failure installs nothing.
+
+BUNDLE_ID = "com.redshot.protium"
+APP_REQUIREMENT = ('anchor apple generic and identifier "%s" and certificate 1[field.1.2.840.113635.100.6.2.6] exists '
+                   'and certificate leaf[field.1.2.840.113635.100.6.1.13] exists and certificate leaf[subject.OU] = "922Z3D8FB9"' % BUNDLE_ID)
+UPDATE_CACHE = os.path.expanduser("~/Library/Caches/Protium")
+UPDATE_PENDING = os.path.join(HOME_DIR, "update-pending.json")
+
+
+def this_app():
+    """The Protium.app this script is in, or None in a checkout. PROTIUM_APP names another one to
+    act for: macos/tests/check-update.sh runs this checkout's script for a copy of the released
+    app, since a script put into the copy would break its seal (macOS then kills what is started
+    from it and moves the app to the Trash)."""
+    if os.environ.get("PROTIUM_APP"):
+        return os.environ["PROTIUM_APP"].rstrip("/")
+    path = os.path.abspath(__file__)
+    marker = ".app/Contents/Resources/steamplay/"
+    return path[:path.index(marker) + 4] if marker in path else None
+
+
+def games_running(app):
+    """Programs running from the app's Wine: a game, or what a game left behind."""
+    runtime = os.path.join(app, "Contents", "SharedSupport", "runtime") + "/"
+    r = subprocess.run(["/bin/ps", "-axo", "pid=,comm="], stdout=subprocess.PIPE, universal_newlines=True, errors="replace")
+    return [line.split(None, 1)[1] for line in r.stdout.splitlines() if len(line.split(None, 1)) == 2 and line.split(None, 1)[1].startswith(runtime)]
+
+
+def app_problem(app, version, current):
+    """Why this app must not be installed as release `version` over `current`, or None."""
+    import plistlib
+    if not os.path.isdir(app) or os.path.islink(app):
+        return "there is no Protium.app in it"
+    r = subprocess.run(["/usr/bin/codesign", "--verify", "--deep", "--strict", "-R=" + APP_REQUIREMENT, app],
+                       stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if r.returncode != 0:
+        return "it is not signed by Protium's developer, or was changed after signing (%s)" % (r.stderr.decode(errors="replace").strip().split("\n") or [""])[-1]
+    r = subprocess.run(["/usr/sbin/spctl", "--assess", "--type", "execute", app], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if r.returncode != 0:
+        return "macOS does not accept it (not notarized by Apple?): %s" % r.stderr.decode(errors="replace").strip()
+    try:
+        with open(os.path.join(app, "Contents", "Info.plist"), "rb") as f:
+            info = plistlib.load(f)
+    except Exception:
+        return "its Info.plist cannot be read"
+    if info.get("CFBundleIdentifier") != BUNDLE_ID:
+        return "it is not Protium (%s)" % info.get("CFBundleIdentifier")
+    found = info.get("CFBundleShortVersionString", "")
+    if not re.fullmatch(r"\d+\.\d+\.\d+", version) or found != version:
+        return "it is version %s, not the %s that was announced" % (found or "unknown", version)
+    if not current or version_key(found) <= version_key(current):
+        return "version %s is not newer than this one (%s)" % (found, current or "unknown")
+    return None
+
+
+def with_image(image, action):
+    """Mounts a disk image read-only where nothing else looks, runs action(the Protium.app in
+    it) and takes it away again. Returns action's answer, or a reason when it cannot be mounted."""
+    import tempfile
+    mount = tempfile.mkdtemp(prefix="protium-update-")
+    try:
+        r = subprocess.run(["/usr/bin/hdiutil", "attach", "-nobrowse", "-readonly", "-noautoopen", "-mountpoint", mount, image],
+                           stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        if r.returncode != 0:
+            return "the disk image cannot be opened: %s" % (r.stderr.decode(errors="replace").strip().split("\n") or [""])[-1]
+        try:
+            return action(os.path.join(mount, "Protium.app"))
+        finally:
+            subprocess.run(["/usr/bin/hdiutil", "detach", "-quiet", "-force", mount], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    finally:
+        try:
+            os.rmdir(mount)
+        except OSError:
+            pass
+
+
+def refused(why, image=None):
+    if image and os.path.dirname(os.path.abspath(image)) == UPDATE_CACHE and os.path.exists(image):
+        os.remove(image)        # a download that failed its tests does not stay
+    print("refused: %s" % why)
+    return 1
+
+
+def cmd_update_verify(image, version):
+    problem = with_image(image, lambda app: app_problem(app, version, protium_version()))
+    if problem:
+        return refused(problem, image)
+    print("ok %s is Protium %s, signed and notarized" % (os.path.basename(image), version))
     return 0
 
 
@@ -2342,6 +2447,8 @@ def main(argv):
         sys.exit(cmd_result(int(argv[1]), argv[2], " ".join(argv[3:])))
     elif argv and argv[0] == "version" and all(a in ("--check", "--now") for a in argv[1:]):
         sys.exit(cmd_version("--check" in argv, "--now" in argv))
+    elif len(argv) == 4 and argv[:2] == ["update", "--verify"]:
+        sys.exit(cmd_update_verify(argv[2], argv[3]))
     elif argv in (["updates"], ["updates", "on"], ["updates", "off"]):
         sys.exit(cmd_updates(argv[1] if len(argv) > 1 else None))
     elif argv == ["games"]:
