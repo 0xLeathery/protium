@@ -96,8 +96,12 @@ lists its other commands.
 
 ## Licenses
 
-Protium's own files (`macos/` and `.github/`) are under the BSD 3-Clause license in
-[LICENSE.protium](../LICENSE.protium), the same license as Proton's own files
-([LICENSE.proton](../LICENSE.proton)). Protium's patches in `macos/patches/<project>/` are under the
-license of the project they change, and the `wine` submodule is under Wine's license. Every other
-component keeps its own license. [LICENSE](../LICENSE) has the overview.
+Protium's own files (`macos/` and `.github/`) are under the GNU General Public License, version 3
+or later ([LICENSE.protium](../LICENSE.protium)): anyone who distributes a changed Protium must
+publish their changes under the same license. Fixes are welcome back here as pull requests; see
+[CONTRIBUTING.md](CONTRIBUTING.md).
+
+Protium's patches in `macos/patches/<project>/` are under the license of the project they change,
+and the `wine` submodule is under Wine's license (LGPL 2.1 or later). Valve's Proton files keep
+Valve's license ([LICENSE.proton](../LICENSE.proton)), and every other component keeps its own.
+[LICENSE](../LICENSE) has the overview.
