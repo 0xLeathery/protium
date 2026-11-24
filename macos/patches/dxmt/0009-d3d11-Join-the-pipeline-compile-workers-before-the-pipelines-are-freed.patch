@@ -1,0 +1,44 @@
+d3d11: Join the pipeline compile workers before the pipelines are freed.
+
+PipelineCache declared its task_scheduler before the shader and pipeline maps, and members are
+destroyed in the reverse order of their declaration, so a device released while pipelines were
+still compiling freed those pipelines first and joined the workers compiling them after: a
+worker could finish a compile on freed memory. (Commit ff4a98e fixed the scheduler's hang at
+that join, not this.)
+
+The scheduler is now declared last, so it is destroyed first: its destructor joins the workers,
+which finish what they are compiling, while every map is still there.
+
+LOCAL TO THIS PORT, NOT FOR DXMT. Applied by macos/build-dxmt.sh to
+github.com/athei/dxmt at 01e59e9bde030f105937f249afaac92ada01b4d7, after 0001 to 0008.
+Written with an AI assistant (Claude). DXMT does not accept contributions made or
+co-authored by AI (its CONTRIBUTING.md), so this patch must not be sent to it as a pull
+request. What was found may be reported to its developers, for them to write their own fix;
+this patch leaves here when the pinned commit has one.
+---
+diff --git a/src/d3d11/d3d11_pipeline_cache.cpp b/src/d3d11/d3d11_pipeline_cache.cpp
+index 0ce629f..0d7d72c 100644
+--- a/src/d3d11/d3d11_pipeline_cache.cpp
++++ b/src/d3d11/d3d11_pipeline_cache.cpp
+@@ -190,8 +190,6 @@ class PipelineCache : public MTLD3D11PipelineCacheBase {
+ 
+   ShaderCache& scache_;
+ 
+-  task_scheduler<ThreadpoolWork *> scheduler_;
+-
+   MTLD3D11Device *device;
+   StateObjectCache<D3D11_BLEND_DESC1, IMTLD3D11BlendState> blend_states;
+ 
+@@ -217,6 +215,12 @@ class PipelineCache : public MTLD3D11PipelineCacheBase {
+   std::unordered_map<ManagedShader, std::unique_ptr<MTLCompiledComputePipeline>> pipelines_cs_;
+   dxmt::mutex mutex_cs_;
+ 
++  /* Declared after everything its workers use, so that it is destroyed first: its destructor
++     joins the workers, which finish the pipeline or shader they are compiling, and only then
++     are the maps above freed. Declared earlier, a device released during compiles freed the
++     pipelines under a running worker. */
++  task_scheduler<ThreadpoolWork *> scheduler_;
++
+   CachedSM50Shader *CreateShader(const void *pBytecode,
+                                  uint32_t BytecodeLength) {
+     auto sha1 = Sha1HashState::compute(pBytecode, BytecodeLength);
