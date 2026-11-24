@@ -1,0 +1,69 @@
+{
+ "about": "Games played on Protium and how they did. \"macos/steamplay result\" adds and changes entries, and the README's table is written from this file (\"macos/steamplay games\"). verdict: works, plays-with-problems, menu-only or broken.",
+ "games": [
+  {
+   "app": 2950790,
+   "graphics": "Direct3D 11 and Direct3D 12",
+   "name": "IRON NEST: Heavy Turret Simulator",
+   "note": "Plays from its Steam library entry, with stats and cloud saves",
+   "tested": "2026-11",
+   "verdict": "works"
+  },
+  {
+   "app": 979070,
+   "graphics": "Direct3D 11",
+   "name": "Just Die Already",
+   "note": "Plays from Steam",
+   "tested": "2026-11",
+   "verdict": "works"
+  },
+  {
+   "app": 493520,
+   "graphics": "Direct3D 11",
+   "name": "GTFO",
+   "note": "Starts, and its network layer and PlayFab sign-in come up. Matches untested",
+   "tested": "2026-11",
+   "verdict": "menu-only"
+  },
+  {
+   "app": 500,
+   "graphics": "Direct3D 9, 32-bit",
+   "name": "Left 4 Dead",
+   "note": "Stats and Steam Cloud work",
+   "tested": "2026-11",
+   "verdict": "works"
+  },
+  {
+   "app": 476600,
+   "graphics": "Direct3D 11",
+   "name": "Call of Duty: WWII",
+   "note": "Loads a mission, but stutters",
+   "tested": "2026-11",
+   "verdict": "plays-with-problems"
+  },
+  {
+   "app": 1174180,
+   "graphics": "Vulkan",
+   "name": "Red Dead Redemption 2",
+   "note": "Reaches gameplay. Its frame rate is limited by CPU time",
+   "tested": "2026-11",
+   "verdict": "plays-with-problems"
+  },
+  {
+   "app": 10090,
+   "graphics": "Direct3D 9, 32-bit",
+   "name": "Call of Duty: World at War",
+   "note": "Plays well; cutscenes can be skipped",
+   "tested": "2026-11-24",
+   "verdict": "works"
+  },
+  {
+   "app": 393080,
+   "graphics": "Direct3D 11",
+   "name": "Call of Duty: Modern Warfare Remastered (2017)",
+   "note": "Plays at 60 fps at 5120x1440. The first load of a level takes several minutes while shaders compile, and mouse look is uneven",
+   "tested": "2026-11-24",
+   "verdict": "plays-with-problems"
+  }
+ ]
+}

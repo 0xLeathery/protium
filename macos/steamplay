@@ -15,7 +15,9 @@
                                       which games are likely to work, and why (see "discover" below)
     macos/steamplay data update       fetch the public anti-cheat list and ProtonDB's export
     macos/steamplay result <app id> works|plays-with-problems|menu-only|broken [note]
-                                      say how a game did; it counts before any guess
+                                      say how a game did; it counts before any guess, and goes
+                                      into compat/games.json and the README's games table
+    macos/steamplay games             write the README's games table again from compat/games.json
     macos/steamplay survey --away [--seconds N] [--games N] [--only <app id>...]
                                       start each untried installed game for a while (takes the screen)
     macos/steamplay uninstall [--dry-run]
@@ -1823,6 +1825,93 @@ def cmd_result(appid, verdict, note):
         die("Steam's cache has no app %d" % appid)
     add_result({"app": appid, "time": time.strftime("%Y-%m-%dT%H:%M:%S"), "by": "user", "verdict": verdict, "note": note})
     print("%d %s: %s" % (appid, cache[appid]["name"], verdict))
+    if os.access(GAMES, os.W_OK):
+        listed = update_games_list(appid, cache[appid]["name"], verdict, note,
+                                   game_graphics(appid, cache, results().get(appid, [])))
+        print("games list: %s%s" % (GAMES, " and the README's table" if listed else ""))
+    return 0
+
+
+# ---- the games list
+#
+# macos/compat/games.json is the list of games someone has played on Protium and judged, and
+# the table under "Status" in the README is written from it, between two marker lines. "result"
+# adds or changes a game's entry and writes both, so that the list follows what gets tried; in a
+# checkout, the change is then one to commit. Entries can also be edited by hand ("games" writes
+# the README again): the first six came from the README as it was.
+
+GAMES = os.path.join(os.path.dirname(os.path.abspath(__file__)), "compat", "games.json")
+README = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".github", "README.md")
+GAMES_START, GAMES_END = "<!-- games: written by \"macos/steamplay games\" from macos/compat/games.json -->", "<!-- games end -->"
+VERDICT_TEXT = {"works": "Works", "plays-with-problems": "Plays, with problems",
+                "menu-only": "Starts, not played further", "broken": "Does not run"}
+API_TEXT = (("d3d12", "Direct3D 12"), ("d3d11", "Direct3D 11"), ("d3d10", "Direct3D 10"), ("d3d9", "Direct3D 9"),
+            ("vulkan", "Vulkan"), ("opengl", "OpenGL"))
+
+
+def game_graphics(appid, cache, runs):
+    """"Direct3D 9, 32-bit": the graphics libraries the game loaded in its last recorded run, or,
+    for a game that was never run through steamplay-run.sh, the ones its files import."""
+    installed = installed_games(cache)
+    scan = scans(cache, {appid: installed[appid]}).get(appid, {}) if appid in installed else {}
+    loaded = next((r["loaded"] for r in reversed(runs) if r.get("by") == "run" and r.get("loaded")), None)
+    apis = set(loaded or scan.get("apis", []))
+    if len(apis) > 1:
+        apis.discard("opengl")      # Wine loads it for its own windows
+    text = " and ".join(name for key, name in reversed(API_TEXT) if key in apis)
+    if scan.get("bits") == 32:
+        text += ", 32-bit" if text else "32-bit"
+    return text
+
+
+def write_games_table():
+    """Writes the README's table from games.json. False when there is no README to write, as in
+    the installed app, or it has no marker lines."""
+    games = read_json(GAMES, {}).get("games", [])
+    try:
+        with open(README) as f:
+            text = f.read()
+    except OSError:
+        return False
+    if GAMES_START not in text or GAMES_END not in text:
+        return False
+    order = {v: i for i, v in enumerate(VERDICTS)}
+    rows = ["| Game | Graphics | Verdict | Notes | Tested |", "|---|---|---|---|---|"]
+    for g in sorted(games, key=lambda g: (order.get(g.get("verdict"), 9), g.get("name", "").lower())):
+        cell = lambda v: str(v or "").replace("|", "/").replace("\n", " ")
+        rows.append("| %s | %s | %s | %s | %s |" % (cell(g.get("name")), cell(g.get("graphics")),
+                                                 VERDICT_TEXT.get(g.get("verdict"), cell(g.get("verdict"))),
+                                                 cell(g.get("note")), cell(g.get("tested"))))
+    head, rest = text.split(GAMES_START, 1)
+    new = head + GAMES_START + "\n" + "\n".join(rows) + "\n" + GAMES_END + rest.split(GAMES_END, 1)[1]
+    if new != text:
+        write_file(README, new)
+    return True
+
+
+def update_games_list(appid, name, verdict, note, graphics):
+    data = read_json(GAMES, {})
+    games = data.setdefault("games", [])
+    entry = next((g for g in games if g.get("app") == appid), None)
+    if entry is None:
+        entry = {"app": appid}
+        games.append(entry)
+    entry.update(name=name, verdict=verdict, tested=time.strftime("%Y-%m-%d"))
+    if graphics:
+        entry["graphics"] = graphics
+    if note or "note" not in entry:
+        entry["note"] = note
+    try:
+        write_file(GAMES, json.dumps(data, indent=1, sort_keys=True, ensure_ascii=False) + "\n")
+    except OSError:
+        return False
+    return write_games_table()
+
+
+def cmd_games():
+    if not write_games_table():
+        die("no %s with the games markers to write" % README)
+    print("wrote the games table in %s from %s" % (README, GAMES))
     return 0
 
 
@@ -2095,6 +2184,8 @@ def main(argv):
         sys.exit(cmd_data_update())
     elif len(argv) >= 3 and argv[0] == "result" and argv[1].isdigit() and argv[2] in VERDICTS:
         sys.exit(cmd_result(int(argv[1]), argv[2], " ".join(argv[3:])))
+    elif argv == ["games"]:
+        sys.exit(cmd_games())
     elif len(argv) == 4 and argv[0] == "record" and argv[1].isdigit() and argv[2].isdigit():
         sys.exit(cmd_record(int(argv[1]), int(argv[2]), argv[3]))
     elif len(argv) >= 1 and argv[0] == "survey":

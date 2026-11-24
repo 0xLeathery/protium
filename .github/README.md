@@ -1,9 +1,15 @@
+<img src="protium-icon.png" width="96" align="right" alt="Protium's icon: a letter P whose bowl is an orbit, with a proton at its centre">
+
 # Protium
 
 Steam Play for Apple Silicon Macs, built natively. Protium is Valve's Proton 11 with its Wine
 compiled as an arm64 macOS program, FEX inside Wine for the game's x86 code, and Direct3D drawn on
 Metal. Nothing runs under Rosetta and there is no virtual machine: Mac Steam installs the Windows
 build of a game and starts it through Protium, the way Steam on Linux starts Proton.
+
+The name: protium is hydrogen-1, the lightest form of the lightest element, one proton and one
+electron. It is Proton with nothing added that it does not need: no Rosetta, no virtual machine.
+The icon is a letter P whose bowl is the electron's orbit, with the proton at its centre.
 
 Protium is early. It is built and tested on one Mac (an M4 Pro on macOS 27.2), and there is no
 installer for other Macs yet.
@@ -13,14 +19,18 @@ Valve Corporation, and Mac and Metal are trademarks of Apple Inc.
 
 ## Status
 
-| Game | Graphics | How far it gets |
-|---|---|---|
-| IRON NEST: Heavy Turret Simulator | Direct3D 11 and 12 | Plays from its Steam library entry, with stats and cloud saves |
-| Just Die Already | Direct3D 11 | Plays from Steam |
-| GTFO | Direct3D 11 | Starts, and its network layer and PlayFab sign-in come up. Matches untested |
-| Left 4 Dead | Direct3D 9, 32-bit | Runs. Stats and Steam Cloud work |
-| Call of Duty: WWII | Direct3D 11 | Loads a mission, but stutters |
-| Red Dead Redemption 2 | Vulkan | Reaches gameplay. Its frame rate is limited by CPU time |
+<!-- games: written by "macos/steamplay games" from macos/compat/games.json -->
+| Game | Graphics | Verdict | Notes | Tested |
+|---|---|---|---|---|
+| Call of Duty: World at War | Direct3D 9, 32-bit | Works | Plays well; cutscenes can be skipped | 2026-11-24 |
+| IRON NEST: Heavy Turret Simulator | Direct3D 11 and Direct3D 12 | Works | Plays from its Steam library entry, with stats and cloud saves | 2026-11 |
+| Just Die Already | Direct3D 11 | Works | Plays from Steam | 2026-11 |
+| Left 4 Dead | Direct3D 9, 32-bit | Works | Stats and Steam Cloud work | 2026-11 |
+| Call of Duty: Modern Warfare Remastered (2017) | Direct3D 11 | Plays, with problems | Plays at 60 fps at 5120x1440. The first load of a level takes several minutes while shaders compile, and mouse look is uneven | 2026-11-24 |
+| Call of Duty: WWII | Direct3D 11 | Plays, with problems | Loads a mission, but stutters | 2026-11 |
+| Red Dead Redemption 2 | Vulkan | Plays, with problems | Reaches gameplay. Its frame rate is limited by CPU time | 2026-11 |
+| GTFO | Direct3D 11 | Starts, not played further | Starts, and its network layer and PlayFab sign-in come up. Matches untested | 2026-11 |
+<!-- games end -->
 
 Steam Play itself works on Mac Steam:
 - installing the Windows build of a game;
