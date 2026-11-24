@@ -1,0 +1,66 @@
+dxmt: Complete an occlusion query that ends in a chunk without visibility results.
+
+An occlusion query is completed by the visibility-result readback of the command chunk it ends
+in, when that chunk finishes on the GPU. A chunk that recorded no visibility results made no
+readback, so a query that began in one chunk and ended in another with no draws of its own after
+a flush was never issued again, and GetData returned S_FALSE for it forever.
+
+Such a chunk now makes a readback too, with no results and no buffer (Metal makes no buffer of
+length 0, and no render pass of that chunk binds one), so the queries that end in it are issued
+in order, after the chunks before it.
+
+LOCAL TO THIS PORT, NOT FOR DXMT. Applied by macos/build-dxmt.sh to
+github.com/athei/dxmt at 01e59e9bde030f105937f249afaac92ada01b4d7, after 0001 to 0006.
+Written with an AI assistant (Claude). DXMT does not accept contributions made or
+co-authored by AI (its CONTRIBUTING.md), so this patch must not be sent to it as a pull
+request. What was found may be reported to its developers, for them to write their own fix;
+this patch leaves here when the pinned commit has one.
+---
+diff --git a/src/dxmt/dxmt_context.cpp b/src/dxmt/dxmt_context.cpp
+index 79d171e..6e546c2 100644
+--- a/src/dxmt/dxmt_context.cpp
++++ b/src/dxmt/dxmt_context.cpp
+@@ -1172,7 +1172,12 @@ ArgumentEncodingContext::flushCommands(WMT::CommandBuffer cmdbuf, uint64_t seqId
+ 
+   QueryReadbacks readbacks{};
+ 
+-  if (auto count = vro_state_.reset()) {
++  // A query that ends in this chunk is completed by this chunk's readback, also when the chunk
++  // recorded no visibility results: without one it was never issued again, and GetData never
++  // returned S_OK for it
++  auto count = vro_state_.reset();
++  if (count || std::any_of(pending_queries_.begin(), pending_queries_.end(),
++                           [=](auto &query) { return query->queryEndAt() == seqId; })) {
+     readbacks.visibility = std::make_unique<VisibilityResultReadback>(
+         device_, seqId, count, pending_queries_
+     );
+diff --git a/src/dxmt/dxmt_occlusion_query.hpp b/src/dxmt/dxmt_occlusion_query.hpp
+index 839674b..c7f8233 100644
+--- a/src/dxmt/dxmt_occlusion_query.hpp
++++ b/src/dxmt/dxmt_occlusion_query.hpp
+@@ -171,10 +171,14 @@ public:
+       queries(queries) {
+         visibility_result_heap_info.options = WMTResourceHazardTrackingModeUntracked;
+         visibility_result_heap_info.memory.set(nullptr);
++        visibility_result_heap_info.length = num_results * sizeof(uint64_t);
++        // a chunk with no results still issues the queries that end in it, with no buffer
++        // (Metal makes no buffer of length 0, and no render pass binds one)
++        if (!num_results)
++          return;
+ #ifdef __i386__
+         visibility_result_heap_info.memory.set(wsi::aligned_malloc(num_results * sizeof(uint64_t), DXMT_PAGE_SIZE));
+ #endif
+-        visibility_result_heap_info.length = num_results * sizeof(uint64_t);
+         visibility_result_heap = device.newBuffer(visibility_result_heap_info);
+       }
+   ~VisibilityResultReadback() {
+@@ -182,7 +186,8 @@ public:
+       query->issue(seq_id, (uint64_t *)visibility_result_heap_info.memory.get(), num_results);
+     }
+ #ifdef __i386__
+-    wsi::aligned_free(visibility_result_heap_info.memory.get());
++    if (num_results)
++      wsi::aligned_free(visibility_result_heap_info.memory.get());
+ #endif
+   }
+ 
