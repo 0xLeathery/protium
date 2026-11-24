@@ -11,6 +11,8 @@
     macos/steamplay setup [--dry-run] set Steam Play up: the tools, Steam's platform switch and a
                                       compatibility tool for every game (Steam quit)
     macos/steamplay status            the switch, the tools and each installed game's choice
+    macos/steamplay uninstall [--dry-run]
+                                      undo setup: guard, tools, switch, mappings (Steam quit)
     macos/steamplay prefer <app id> native|proton|auto
                                       your own choice for one game (Steam quit)
     macos/steamplay guard             put right what would make Steam remove installs (see below)
@@ -642,6 +644,47 @@ def cmd_setup(dry_run):
     if hooked:
         cmd_hook(hooked, True, False)
     print("done; start Steam")
+
+
+def cmd_uninstall(dry_run):
+    """Undoes setup: the guard, the tools, the switch, the games' mappings to the tools and the
+    launch options hook set. Game files, prefixes (compatdata) and SteamPlay's own folder stay."""
+    if not dry_run and steam_running():
+        die("quit Steam first: it rewrites its settings when it quits")
+    mapped = sorted(a for a, t in current_mapping().items() if t in (PROTON, NATIVE))
+    hooked = hooked_apps()
+    present = [t for t in TOOLS if os.path.isdir(os.path.join(TOOLS_DIR, t))]
+    if dry_run:
+        print("would remove the guard, the tools %s from %s, the switch, %d mapping(s) and %d hook(s)"
+              % (", ".join(present) or "(none)", TOOLS_DIR, len(mapped), len(hooked)))
+        return
+    if os.environ.get("STEAMPLAY_FAKE_STEAM"):
+        print("(a copy of a Steam folder: the guard, which is this user's, is left alone)")
+    else:
+        cmd_guard_remove()
+    for tool in present:
+        shutil.rmtree(os.path.join(TOOLS_DIR, tool))
+        print("removed %s" % os.path.join(TOOLS_DIR, tool))
+    for path in SWITCH_FILES:
+        try:
+            with open(path) as f:
+                lines = f.read().splitlines()
+        except OSError:
+            continue
+        kept = [l for l in lines if not l.startswith(SWITCH + " ")]
+        if kept != lines:
+            if any(l.strip() for l in kept):
+                write_file(path, "\n".join(kept) + "\n")
+            else:
+                os.remove(path)
+            print("switch removed from %s" % path)
+    if mapped:
+        cmd_map({a: None for a in mapped}, quiet=True)
+        print("%d game(s) no longer mapped to Protium's tools" % len(mapped))
+    if hooked:
+        cmd_hook(hooked, True, False)
+    print("done. Steam takes this Mac for a Mac again when it starts, and it removes the Windows builds\n"
+          "of games it installed through Steam Play; their prefixes in steamapps/compatdata stay.")
 
 
 def cmd_prefer(appid, choice):
@@ -1425,6 +1468,8 @@ def main(argv):
         cmd_guard_remove()
     elif argv == ["tools"]:
         cmd_tools()
+    elif argv in (["uninstall"], ["uninstall", "--dry-run"]):
+        cmd_uninstall("--dry-run" in argv)
     elif argv in (["steamclient"], ["steamclient", "--again"]):
         sys.exit(cmd_steamclient("--again" in argv))
     elif argv in (["hud"], ["hud", "on"], ["hud", "off"]):
