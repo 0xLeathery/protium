@@ -154,6 +154,10 @@ tools and each game's choice, and `macos/steamplay` with no arguments lists the 
 
 `macos/tests/check-wave*.sh` are the checks each stage of the port was accepted with.
 
+## Star history
+
+[![Star History Chart](https://api.star-history.com/svg?repos=0xleathery/protium&type=Date)](https://www.star-history.com/#0xleathery/protium&Date)
+
 ## Licenses
 
 Protium's own files (`macos/` and `.github/`) are under the GNU General Public License, version 3
