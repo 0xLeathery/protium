@@ -1,6 +1,7 @@
 #!/bin/bash
 #
-# Writes a release's page to stdout: its section of CHANGELOG.md, then what every release says
+# Writes a release's page to stdout: its section of CHANGELOG.md (kept in the form of
+# keepachangelog.com: "## [1.2.3] - 2026-01-31"), then what every release says
 # (requirements, how to install, the disk image's checksum, where the source is).
 #
 #   macos/release-notes.sh <version> <disk image>
@@ -18,7 +19,7 @@ MIN_MACOS=${MIN_MACOS:-27.0}
 commit() { git -C "$1" rev-parse --short=8 HEAD 2>/dev/null || echo unknown; }
 
 # the section, without the blank lines around it
-awk -v v="$VERSION" '/^## /{on = ($2 == v); next} on' "$PROTON_DIR/CHANGELOG.md" \
+awk -v v="[$VERSION]" '/^## /{on = ($2 == v); next} /^\[[^]]*\]: /{on = 0} on' "$PROTON_DIR/CHANGELOG.md" \
     | awk 'NF {for (; blank > 0; blank--) print ""; print; seen = 1; next} seen {blank++}'
 cat <<EOF
 

@@ -80,8 +80,9 @@ loader_app=$INSTALL_DIR/lib/wine/aarch64-unix/wine.app
 [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "VERSION $VERSION is not x.y.z"
 # the release's section of CHANGELOG.md: what the app and the release's page say is new
 CHANGELOG=$PROTON_DIR/CHANGELOG.md
-changes() { awk -v v="$VERSION" '/^## /{on = ($2 == v); next} on' "$CHANGELOG"; }
-[ -n "$(changes | tr -d '[:space:]')" ] || die "CHANGELOG.md has no section \"## $VERSION\": write what is new first"
+# (Keep a Changelog: "## [1.2.3] - 2026-01-31", and the links at the end of the file are not part of it)
+changes() { awk -v v="[$VERSION]" '/^## /{on = ($2 == v); next} /^\[[^]]*\]: /{on = 0} on' "$CHANGELOG"; }
+[ -n "$(changes | tr -d '[:space:]')" ] || die "CHANGELOG.md has no section \"## [$VERSION] - <date>\": move what is under [Unreleased] into one first"
 
 if [ -z "${SIGN_IDENTITY:-}" ]; then
     SIGN_IDENTITY=$(security find-identity -v -p codesigning | sed -n 's/^ *[0-9]*) \([0-9A-F]\{40\}\) "Developer ID Application:.*/\1/p' | head -1)

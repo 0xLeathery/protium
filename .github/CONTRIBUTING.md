@@ -27,3 +27,11 @@ files it touches:
 - the GNU GPL version 3 or later for Protium's own files (`macos/`, `.github/`);
 - the changed project's license for a patch in `macos/patches/<project>/`;
 - Wine's license (LGPL 2.1 or later) in protium-wine.
+
+
+## The changelog
+
+A change a player will notice gets a line under `## [Unreleased]` in [CHANGELOG.md](../CHANGELOG.md),
+in the same pull request, under the heading that fits: Added, Changed, Deprecated, Removed, Fixed
+or Security ([Keep a Changelog](https://keepachangelog.com/en/1.1.0/)). Write it for someone who
+plays games, not for someone who reads the code. A release moves those lines into its own section.
