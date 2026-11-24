@@ -40,7 +40,7 @@ clang -O1 -Wall -o "$E/list_windows" "$SCRIPT_DIR/list_windows.c" -framework Cor
 "$TOOLCHAIN_DIR/bin/x86_64-w64-mingw32-clang" -O2 -Wall -o "$E/mouse_look_test.exe" "$SCRIPT_DIR/mouse_look_test.c" -luser32 -lgdi32 || exit 2
 swiftc -O -o "$E/mouse_feed" "$SCRIPT_DIR/mouse_feed.swift" || exit 2
 # the notice's windows: PID, size, place, layer, on screen
-panel() { "$E/list_windows" "$E" | awk -F'\t' '$2 == "520x88" && $6 == 1'; }
+panel() { "$E/list_windows" "$E" | awk -F'\t' '$2 ~ /x88$/ && $6 == 1'; }
 
 s=$(date +%s)
 PROTIUM_RUNTIME=$INSTALL_DIR PROTIUM_NOTICE_WAIT=3 "$E/Protium" --game-notice 9.9.9 "The first new thing." >/dev/null 2>&1

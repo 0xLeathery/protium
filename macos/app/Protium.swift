@@ -497,6 +497,9 @@ if CommandLine.arguments.count >= 3, CommandLine.arguments[1] == "--game-notice"
         what.font = NSFont.systemFont(ofSize: 12)
         what.textColor = NSColor.white.withAlphaComponent(0.85)
         what.lineBreakMode = .byTruncatingTail
+        // a long line is cut short; it must not make the panel wider
+        what.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        title.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         let how = NSTextField(labelWithString: "Open Protium to update.")
         how.font = NSFont.systemFont(ofSize: 12)
         how.textColor = NSColor.white.withAlphaComponent(0.6)
@@ -519,6 +522,7 @@ if CommandLine.arguments.count >= 3, CommandLine.arguments[1] == "--game-notice"
         row.autoresizingMask = [.width, .height]
         back.addSubview(row)
         panel.contentView = back
+        panel.setFrame(frame, display: false)       // the size it was given, whatever its contents wish
 
         panel.alphaValue = 0
         panel.orderFrontRegardless()
