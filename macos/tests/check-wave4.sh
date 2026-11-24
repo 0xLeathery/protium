@@ -114,9 +114,10 @@ SUPER_WAVE_BASE=${SUPER_WAVE_BASE:-5903e13670746e2825460e7ffe8ed420509effa7}
 # process, and uiautomationcore's use of results that a provider did not set. virtual.c is
 # Wave 3b's: its work for the provisioning profile was done after this wave had begun.
 WAVE_FILES="dlls/winemac.drv/macdrv.h dlls/winemac.drv/window.c dlls/ntdll/unix/loader.c dlls/uiautomationcore/uia_client.c dlls/winegstreamer/media-converter/media-converter.h dlls/winebus.sys/bus_iohid.c dlls/ntdll/unix/virtual.c"
-# Wine files that later waves change, which check-wave5.sh checks the guards of (PE code, guarded
-# by configure's WINE_MACOS_AARCH64, and configure.ac itself)
-LATER_WAVE_FILES="dlls/mfreadwrite/reader.c configure.ac dlls/winegstreamer/video_decoder.c dlls/winegstreamer/video_processor.c dlls/ntdll/unix/signal_arm64.c dlls/winemac.drv/cocoa_display.m programs/tabtip/tabtip.c dlls/win32u/font.c dlls/kernelbase/process.c dlls/win32u/vulkan.c dlls/winemac.drv/cocoa_app.m dlls/winemac.drv/cocoa_event.m dlls/winemac.drv/macdrv_cocoa.h dlls/winemac.drv/mouse.c dlls/ntdll/signal_arm64ec.c dlls/ntdll/unix/fsync.c server/fsync.c server/inproc_sync.c dlls/ntdll/unix/thread.c dlls/ntdll/unwind.c dlls/ntdll/unix/sync.c"
+# Wine files that later waves change: every file the port changes (wine-files.txt), whose
+# guards check-wave5.sh checks
+LATER_WAVE_FILES=$(grep -v '^#' "$SCRIPT_DIR/wine-files.txt" | tr '
+' ' ')
 UNIX_DIR=aarch64-unix
 export MIN_FREE_GB=${MIN_FREE_GB:-10}
 # A new prefix would otherwise wait on the Mono and Gecko install dialogs.

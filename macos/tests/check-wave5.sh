@@ -99,18 +99,31 @@ RUN_TIMEOUT=${RUN_TIMEOUT:-120}
 SCREENSHOTS=${SCREENSHOTS:-0}
 LOADER_PROFILE=${LOADER_PROFILE:-$BUILD_ROOT/signing/loader.provisionprofile}
 STEAM_APP_ID=${STEAM_APP_ID:-2950790}
-STEAM_API_DLL=${STEAM_API_DLL:-/Volumes/Samsung T7/SteamLibrary/steamapps/common/Iron Nest Heavy Turret Simulator/Iron Nest Heavy Turret Simulator_Data/Plugins/x86_64/steam_api64.dll}
-STEAM_WIN_DLLS=${STEAM_WIN_DLLS:-/Volumes/Samsung T7/Windows Games/Steam}
+STEAM_ROOT=${STEAM_ROOT:-$HOME/Library/Application Support/Steam}
+# a 64-bit steam_api64.dll of the installed game STEAM_APP_ID, found through Steam's libraries
+find_steam_api_dll() {
+    local lib dir
+    sed -n 's/^[[:space:]]*"path"[[:space:]]*"\(.*\)"[[:space:]]*$/\1/p' "$STEAM_ROOT/steamapps/libraryfolders.vdf" 2>/dev/null |
+    while IFS= read -r lib; do
+        dir=$(sed -n 's/^[[:space:]]*"installdir"[[:space:]]*"\(.*\)"[[:space:]]*$/\1/p' \
+                  "$lib/steamapps/appmanifest_$STEAM_APP_ID.acf" 2>/dev/null)
+        [ -n "$dir" ] || continue
+        find "$lib/steamapps/common/$dir" -name steam_api64.dll 2>/dev/null | head -1
+        break
+    done
+}
+STEAM_API_DLL=${STEAM_API_DLL:-$(find_steam_api_dll)}
+STEAM_WIN_DLLS=${STEAM_WIN_DLLS:-$HOME/Library/Application Support/SteamPlay/steamclient-windows}
 FFMPEG_CLI=${FFMPEG_CLI:-/opt/homebrew/bin/ffmpeg}
 WINE_DIR=$PROTON_DIR/wine
 # where this wave starts: the tips after Wave 4's last change
 WINE_WAVE_BASE=${WINE_WAVE_BASE:-29f96746}
 SUPER_WAVE_BASE=${SUPER_WAVE_BASE:-950f3e5a}
-# Wine files this wave changes: ntdll's dlopen of a builtin's Unix library and its steamclient
-# trampolines, winemac.drv's update of DXMT's client surfaces, ntdll's GStreamer paths, an include
-# in winegstreamer's media converter, winebus's IOHID game controllers, and the source reader's
-# drain of a decoder, which is PE code and so is guarded by configure's WINE_MACOS_AARCH64
-WAVE_FILES="dlls/ntdll/loader.c dlls/ntdll/unix/virtual.c dlls/ntdll/unix/loader.c dlls/winemac.drv/window.c dlls/winegstreamer/media-converter/media-converter.h dlls/winebus.sys/bus_iohid.c dlls/mfreadwrite/reader.c configure.ac dlls/winegstreamer/video_decoder.c dlls/winegstreamer/video_processor.c dlls/ntdll/unix/signal_arm64.c dlls/winemac.drv/cocoa_display.m programs/tabtip/tabtip.c dlls/win32u/font.c dlls/kernelbase/process.c dlls/win32u/vulkan.c dlls/winemac.drv/cocoa_app.m dlls/winemac.drv/cocoa_event.m dlls/winemac.drv/macdrv_cocoa.h dlls/winemac.drv/mouse.c dlls/ntdll/signal_arm64ec.c dlls/ntdll/unix/fsync.c server/fsync.c server/inproc_sync.c dlls/ntdll/unix/thread.c dlls/ntdll/unwind.c dlls/ntdll/unix/sync.c dlls/ntdll/unix/server.c dlls/ntdll/unix/unix_private.h dlls/winecoreaudio.drv/coreaudio.c"
+# Wine files this wave checks: those of the port's list (wine-files.txt) that changed since
+# WINE_WAVE_BASE. PE code among them is guarded by configure's WINE_MACOS_AARCH64.
+WAVE_FILES=$(for f in $(grep -v '^#' "$SCRIPT_DIR/wine-files.txt"); do
+                 git -C "$WINE_DIR" diff --quiet "$WINE_WAVE_BASE" HEAD -- "$f" || printf '%s ' "$f"
+             done)
 SUPER_FILES="lsteamclient/unixlib.cpp lsteamclient/unix_steam_input_manual.cpp"
 export MIN_FREE_GB=${MIN_FREE_GB:-4}
 export WINEDLLOVERRIDES=${WINEDLLOVERRIDES:-mscoree,mshtml=}
@@ -446,7 +459,7 @@ if want 10; then
     if ! pgrep -f steam_osx >/dev/null; then
         todo "item 10: Mac Steam is not running; start it, sign in and run item 10 again"
     elif [ ! -f "$STEAM_API_DLL" ] || [ ! -f "$STEAM_WIN_DLLS/steamclient64.dll" ]; then
-        todo "item 10: no $STEAM_API_DLL or no Windows steamclient64.dll in $STEAM_WIN_DLLS"
+        todo "item 10: app $STEAM_APP_ID is not installed (no steam_api64.dll: '$STEAM_API_DLL'), or no Windows steamclient64.dll in $STEAM_WIN_DLLS (macos/steamplay steamclient fetches it)"
     else
         sdir="$PREFIX/drive_c/Program Files (x86)/Steam"
         mkdir -p "$sdir"
@@ -481,8 +494,8 @@ if want 11; then
     done
     for f in $(git -C "$PROTON_DIR" diff --name-only "$SUPER_WAVE_BASE" HEAD | grep -v '^macos/'); do
         # Protium's own project files are built into nothing: the README, contributing guide and
-        # issue template GitHub shows, the licenses, and which Wine the wine submodule is
-        case $f in .github/*|LICENSE|LICENSE.protium|.gitignore|.gitmodules|wine) continue ;; esac
+        # issue template GitHub shows, the changelog, the licenses, and which Wine the wine submodule is
+        case $f in .github/*|CHANGELOG.md|LICENSE|LICENSE.protium|.gitignore|.gitmodules|wine) continue ;; esac
         case " $SUPER_FILES " in
             *" $f "*) a=$(git -C "$PROTON_DIR" show "$SUPER_WAVE_BASE:$f" | unifdef -U__APPLE__ 2>/dev/null | shasum)
                       b=$(git -C "$PROTON_DIR" show "HEAD:$f" | unifdef -U__APPLE__ 2>/dev/null | shasum)

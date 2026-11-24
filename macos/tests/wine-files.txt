@@ -1,0 +1,51 @@
+# Every Wine file the macOS port changes, one a line. The guard item of each check-wave script
+# reads this list: a change to a Wine file that is not on it fails the check, and check-wave5.sh
+# also checks that what changed in each of them is gone with __APPLE__ and WINE_MACOS_AARCH64
+# undefined. A commit to protium-wine that touches a new file adds its line here.
+configure.ac
+dlls/kernel32/process.c
+dlls/kernel32/sync.c
+dlls/kernelbase/process.c
+dlls/kernelbase/sync.c
+dlls/mfreadwrite/reader.c
+dlls/ntdll/loader.c
+dlls/ntdll/signal_arm64ec.c
+dlls/ntdll/thread.c
+dlls/ntdll/unix/file.c
+dlls/ntdll/unix/fsync.c
+dlls/ntdll/unix/loader.c
+dlls/ntdll/unix/server.c
+dlls/ntdll/unix/signal_arm64.c
+dlls/ntdll/unix/sync.c
+dlls/ntdll/unix/system.c
+dlls/ntdll/unix/thread.c
+dlls/ntdll/unix/unix_private.h
+dlls/ntdll/unix/virtual.c
+dlls/ntdll/unwind.c
+dlls/uiautomationcore/uia_client.c
+dlls/win32u/font.c
+dlls/win32u/message.c
+dlls/win32u/opengl.c
+dlls/win32u/vulkan.c
+dlls/winebus.sys/bus_iohid.c
+dlls/winecoreaudio.drv/coreaudio.c
+dlls/winegstreamer/media-converter/media-converter.h
+dlls/winegstreamer/video_decoder.c
+dlls/winegstreamer/video_processor.c
+dlls/winemac.drv/cocoa_app.m
+dlls/winemac.drv/cocoa_display.m
+dlls/winemac.drv/cocoa_event.m
+dlls/winemac.drv/cocoa_window.h
+dlls/winemac.drv/cocoa_window.m
+dlls/winemac.drv/gdi.c
+dlls/winemac.drv/macdrv_cocoa.h
+dlls/winemac.drv/macdrv_main.c
+dlls/winemac.drv/macdrv.h
+dlls/winemac.drv/mouse.c
+dlls/winemac.drv/window.c
+include/ddk/wdm.h
+include/minwindef.h
+loader/main.c
+programs/tabtip/tabtip.c
+server/fsync.c
+server/inproc_sync.c
