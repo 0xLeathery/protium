@@ -1,0 +1,134 @@
+dxgi: Present with display sync when the game asks for a sync interval.
+
+The presenter made its CAMetalLayer with displaySyncEnabled off and never turned it on, so a
+game's Present(1, 0) only got a minimum time between presents (presentDrawable:
+afterMinimumDuration:) and never waited for the display's vertical blank as it does on
+Windows. A frame then reaches the display at any point of a refresh, which can show as uneven
+pacing at a steady frame rate.
+
+Present1 now turns display sync on when the sync interval is above 0 and the game does not pass
+DXGI_PRESENT_ALLOW_TEARING, and off otherwise. The presenter hands the change to the layer at the
+next present without rebuilding its pipeline states, so the main-thread call that setting layer
+properties makes happens only when the setting changes. A new option, dxgi.syncInterval (0 to 4;
+-1, the default, keeps the game's), replaces the game's interval for both display sync and the
+minimum time, e.g. DXMT_CONFIG="dxgi.syncInterval=0". Each change is logged as
+"DXGI: display sync on|off (sync interval <n>)".
+
+LOCAL TO THIS PORT, NOT FOR DXMT. Applied by macos/build-dxmt.sh to
+github.com/athei/dxmt at 01e59e9bde030f105937f249afaac92ada01b4d7, after 0001 to 0004.
+Written with an AI assistant (Claude). DXMT does not accept contributions made or
+co-authored by AI (its CONTRIBUTING.md), so this patch must not be sent to it as a pull
+request. What was found may be reported to its developers, for them to write their own fix;
+this patch leaves here when the pinned commit has one.
+---
+diff --git a/src/d3d11/d3d11_swapchain.cpp b/src/d3d11/d3d11_swapchain.cpp
+index 310fa16..23db7b2 100644
+--- a/src/d3d11/d3d11_swapchain.cpp
++++ b/src/d3d11/d3d11_swapchain.cpp
+@@ -245,6 +245,8 @@ public:
+ 
+     preferred_max_frame_rate =
+         Config::getInstance().getOption<int>("d3d11.preferredMaxFrameRate", 0);
++    sync_interval_override_ =
++        std::clamp(Config::getInstance().getOption<int>("dxgi.syncInterval", -1), -1, 4);
+     wsi::WsiMode current_mode;
+     if (wsi::getCurrentDisplayMode(monitor_, &current_mode) &&
+         current_mode.refreshRate.denominator != 0 &&
+@@ -1039,8 +1041,18 @@ public:
+       return hr;
+     }
+ 
++    // A sync interval above 0 waits for the display's vertical blank, as on Windows, unless the
++    // game allows tearing; dxgi.syncInterval replaces the game's interval when it is set
++    UINT sync_interval = sync_interval_override_ >= 0 ? (UINT)sync_interval_override_ : SyncInterval;
++    bool display_sync = sync_interval_override_ >= 0
++                            ? sync_interval > 0
++                            : SyncInterval > 0 && !(PresentFlags & DXGI_PRESENT_ALLOW_TEARING);
++    if (presenter->setDisplaySync(display_sync))
++      Logger::info(str::format("DXGI: display sync ", display_sync ? "on" : "off", " (sync interval ",
++                               sync_interval, sync_interval_override_ >= 0 ? ", from dxgi.syncInterval)" : ")"));
++
+     double vsync_duration =
+-        std::max(SyncInterval * 1.0 /
++        std::max(sync_interval * 1.0 /
+                      (preferred_max_frame_rate ? preferred_max_frame_rate
+                                                : init_refresh_rate_),
+                  preferred_max_frame_rate ? 1.0 / preferred_max_frame_rate : 0);
+@@ -1367,6 +1379,7 @@ private:
+   DXGI_COLOR_SPACE_TYPE colorspace_ = DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709;
+   double init_refresh_rate_ = DBL_MAX;
+   int preferred_max_frame_rate = 0;
++  int sync_interval_override_ = -1; /* dxgi.syncInterval; -1 keeps the game's */
+   HUDState hud;
+   Rc<Presenter> presenter;
+   ModeSetGuard modeset_guard_;
+diff --git a/src/dxmt/dxmt_presenter.cpp b/src/dxmt/dxmt_presenter.cpp
+index e5aec04..fef1fd4 100644
+--- a/src/dxmt/dxmt_presenter.cpp
++++ b/src/dxmt/dxmt_presenter.cpp
+@@ -47,10 +47,12 @@ Presenter::changeLayerProperties(
+   layer_props_.drawable_height = height;
+   layer_props_.drawable_width = width;
+   colorspace_ = colorspace;
+-  if (should_invalidated)
++  if (should_invalidated) {
+     pso_valid.clear(); // defer changes
+-  else
++  } else {
+     layer_.setProps(layer_props_);
++    layer_props_dirty_ = false;
++  }
+   return should_invalidated;
+ }
+ 
+@@ -101,6 +103,15 @@ Presenter::changeGammaRamp(const DXMTGammaRamp *gamma_ramp) {
+   }
+ }
+ 
++bool
++Presenter::setDisplaySync(bool enabled) {
++  if (layer_props_.display_sync_enabled == enabled)
++    return false;
++  layer_props_.display_sync_enabled = enabled;
++  layer_props_dirty_ = true;
++  return true;
++}
++
+ Presenter::PresentState
+ Presenter::synchronizeLayerProperties() {
+   uint64_t display_setting_version = 0;
+@@ -124,6 +135,11 @@ Presenter::synchronizeLayerProperties() {
+     buildRenderPipelineState(final_colorspace == WMTColorSpaceHDR_PQ, is_hdr && hdr_metadata != nullptr, sample_count_ > 1, gamma_version_ != 0);
+     layer_.setProps(layer_props_);
+     layer_.setColorSpace(final_colorspace);
++    layer_props_dirty_ = false;
++  } else if (unlikely(layer_props_dirty_)) {
++    // only display sync changed: the layer takes it without new pipeline states
++    layer_.setProps(layer_props_);
++    layer_props_dirty_ = false;
+   }
+ 
+   DXMTPresentMetadata metadata;
+diff --git a/src/dxmt/dxmt_presenter.hpp b/src/dxmt/dxmt_presenter.hpp
+index 77eb35c..b0e57a8 100644
+--- a/src/dxmt/dxmt_presenter.hpp
++++ b/src/dxmt/dxmt_presenter.hpp
+@@ -39,6 +39,10 @@ public:
+ 
+   void changeGammaRamp(const DXMTGammaRamp *gamma_ramp);
+ 
++  /* Whether presents wait for the display's vertical blank (CAMetalLayer.displaySyncEnabled).
++     Returns true when this changes it; the layer gets it at the next synchronizeLayerProperties. */
++  bool setDisplaySync(bool enabled);
++
+   class PresentState {
+   public:
+     DXMTPresentMetadata metadata;
+@@ -93,6 +97,7 @@ private:
+   WMT::Reference<WMT::RenderPipelineState> present_blit_;
+   WMT::Reference<WMT::RenderPipelineState> present_scale_;
+   std::atomic_flag pso_valid = 0;
++  bool layer_props_dirty_ = false;
+   uint64_t frame_requested_ = 0;
+   CpuFence frame_presented_ = 0;
+ };
