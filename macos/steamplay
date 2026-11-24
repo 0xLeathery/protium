@@ -8,7 +8,9 @@
     macos/steamplay diagnose          write what shows why Protium or Steam does not work here
                                       into one text file on the Desktop, to attach to an issue
     macos/steamplay discover [--installed] [<app id>] [--json]
-                                      which games are likely to work, and why (see "discover" below)
+                                      a guess at which games will work, and why: an estimate
+                                      from each game's files and from Linux reports, right
+                                      only for the games that were run here
     macos/steamplay data update       fetch the public anti-cheat list and ProtonDB's export
     macos/steamplay result <app id> works|plays-with-problems|menu-only|broken [note]
                                       say how a game did; it counts before any guess, and goes
@@ -2720,6 +2722,10 @@ def cmd_discover(args):
             lead = "; ".join([x for x in r if not x.startswith("not installed")][:2]) or (r[0] if r else "")
             print("  %-8d %s %-40s %s" % (a, "*" if i else " ", n[:40], lead[:150]))
     print("\n* installed. \"discover <app id>\" gives every reason for one game.")
+    tried = sum(1 for g in games if g[5] and g[5][0].startswith(("you said", "it ran for", "its last run", "in its last run")))
+    print("%d of these %d games were run on Protium. For the others this is a guess from the game's files, Valve's\n"
+          "Steam Deck tests and ProtonDB's Linux reports; how often it is right has not been measured."
+          % (tried, len(games)))
     if missing:
         print("Not used, because not downloaded yet (\"data update\" fetches them): " + " and ".join(missing))
     return 0
