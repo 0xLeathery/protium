@@ -35,6 +35,14 @@
 #                   (WINEFSYNC=1), as Proton does on Linux.
 #   WINE_FSYNC_STATS  seconds between lines in the log that say how each process slept and
 #                   what it woke; WINE_FSYNC_PARANOID=1 reports a wake-up that did not arrive
+#   FEX_DISKCACHE   0 to have FEX translate a game's x86 code afresh at every start. By default
+#                   (1) it keeps the translated code in the prefix and reads it back the next
+#                   time, which shortens starts and loads after the first.
+#   FEX_HARDWARE_TSO_OFF  for which calls into native code a thread gives up the processor's
+#                   x86 memory ordering: "all" (the default), "syscall", "unix" or "none".
+#                   Giving it up costs two kernel traps for each such call; keeping it makes
+#                   the native code of that call slower where it mostly writes memory.
+#                   macos/tests/cpu-bench.sh measures both.
 #   MTL_HUD_ENABLED 1 to have macOS draw its Metal performance HUD over the game: frames per
 #                   second and frame times, with lines DXMT adds. "macos/steamplay hud on" sets
 #                   it for every game.
@@ -131,6 +139,10 @@ if [ "${PROTON_NO_FSYNC:-0}" = 1 ]; then
 else
     export WINEFSYNC="${WINEFSYNC:-1}"
 fi
+# FEX's cache of translated code. Without the second setting a 32-bit and a 64-bit process of
+# one game delete each other's files, as each takes the other's for stale.
+export FEX_DISKCACHE="${FEX_DISKCACHE:-1}"
+export FEX_DISKCACHEPRUNESTALEENTRIES="${FEX_DISKCACHEPRUNESTALEENTRIES:-0}"
 unset VK_DRIVER_FILES VK_ICD_FILENAMES VK_ADD_DRIVER_FILES PROTON_DISABLE_LSTEAMCLIENT
 
 if [ ! -f "$prefix/system.reg" ]; then
