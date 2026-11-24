@@ -727,7 +727,7 @@ def cmd_uninstall(dry_run):
         return
     if os.environ.get("STEAMPLAY_FAKE_STEAM"):
         print("(a copy of a Steam folder: the guard, which is this user's, is left alone)")
-    else:
+    elif not os.environ.get("STEAMPLAY_KEEP_GUARD"):    # set by the guard's own job, which ends itself
         cmd_guard_remove()
     for tool in present:
         shutil.rmtree(os.path.join(TOOLS_DIR, tool))
@@ -1358,6 +1358,8 @@ def cmd_tools_refresh():
                     with open(path, "rb") as f:
                         out[os.path.relpath(path, folder)] = f.read()
         return out
+    if guard_job_is_old() and app_contents() and not os.environ.get("STEAMPLAY_FAKE_STEAM"):
+        guard_job_install()
     if all(os.path.isdir(os.path.join(TOOLS_DIR, t)) and files(os.path.join(TOOLS_DIR, t)) == files(os.path.join(TOOLS_SRC, t)) for t in TOOLS):
         return 0
     if not any(os.path.isdir(os.path.join(TOOLS_DIR, t)) for t in TOOLS):
@@ -1874,9 +1876,100 @@ def cmd_guard_watch():
         time.sleep(2)
 
 
+GUARD_WRAPPER = os.path.join(HOME_DIR, "guard-run.sh")
+# What launchd keeps running. While the app is there it is the guard's watch. When Protium.app was
+# deleted without "Uninstall", nothing of Protium can run any more, and Steam would stay a Linux
+# Steam whose tools start an app that is gone: so this, which needs only /bin/sh, takes Protium
+# out of Steam. It waits first (GONE_WAIT seconds; the updater swaps the app, and says so in
+# update-pending.json), and it leaves an install from a checkout (APP empty) alone.
+GUARD_WRAPPER_TEXT = r"""#!/bin/sh
+# Written by "steamplay guard install". See GUARD_WRAPPER_TEXT in steamplay.
+PYTHON=%(python)s
+SCRIPT=%(script)s
+APP=%(app)s
+HOME_DIR=%(home)s
+STEAM_ROOT=%(steam_root)s
+TOOLS_DIR=%(tools_dir)s
+PLIST=%(plist)s
+LABEL=%(label)s
+GONE_WAIT=${STEAMPLAY_GONE_WAIT:-600}
+STEP=${STEAMPLAY_GONE_STEP:-30}
+
+watch() { exec "$PYTHON" "$SCRIPT" guard watch; }
+there() { [ -z "$APP" ] || { [ -d "$APP" ] && [ -x "$PYTHON" ]; }; }
+steam_runs() { [ -z "$STEAMPLAY_FAKE_STEAM" ] && /usr/bin/pgrep -x steam_osx >/dev/null; }
+
+there && watch
+waited=0
+while [ "$waited" -lt "$GONE_WAIT" ]; do
+    /bin/sleep "$STEP"
+    waited=$((waited + STEP))
+    there && watch
+done
+# an update in the last day is still putting the app in place, or putting the old one back
+if [ -n "$(/usr/bin/find "$HOME_DIR/update-pending.json" -mtime -1 2>/dev/null)" ]; then
+    exit 0
+fi
+
+for f in "$STEAM_ROOT/steam_dev.cfg" "$STEAM_ROOT/Steam.AppBundle/Steam/Contents/MacOS/steam_dev.cfg"; do
+    [ -f "$f" ] || continue
+    /usr/bin/grep -v '^@sSteamCmdForcePlatformType ' "$f" > "$f.steamplay-tmp"
+    if /usr/bin/grep -q '[^[:space:]]' "$f.steamplay-tmp"; then
+        /bin/mv "$f.steamplay-tmp" "$f"
+    else
+        /bin/rm -f "$f.steamplay-tmp" "$f"
+    fi
+done
+/bin/rm -rf "$TOOLS_DIR/proton-macos" "$TOOLS_DIR/macos-native"
+if [ -z "$STEAMPLAY_FAKE_STEAM" ]; then
+    /usr/bin/osascript -e 'display notification "Protium was deleted, so it has taken itself out of Steam." with title "Protium"' >/dev/null 2>&1
+fi
+# Steam's settings (which game starts with which tool) need Python and a Steam that is not
+# running. /usr/bin/python3 is only a real one with Apple's developer tools; asking it on a Mac
+# without them would put up a window that offers to install them.
+if /usr/bin/xcode-select -p >/dev/null 2>&1 && [ -x /usr/bin/python3 ]; then
+    waited=0
+    while steam_runs && [ "$waited" -lt 86400 ]; do
+        /bin/sleep "$STEP"
+        waited=$((waited + STEP))
+    done
+    if ! steam_runs; then
+        STEAMPLAY_KEEP_GUARD=1 /usr/bin/python3 -B "$SCRIPT" uninstall >/dev/null 2>&1
+    fi
+fi
+if [ -z "$STEAMPLAY_FAKE_STEAM" ]; then
+    /bin/rm -f "$PLIST"
+    /bin/launchctl bootout "gui/$(/usr/bin/id -u)/$LABEL"      # ends this script: the last thing it does
+fi
+exit 0
+"""
+
+
+def write_guard_wrapper(python, script):
+    contents = app_contents()
+    values = {"python": python, "script": script, "app": os.path.dirname(contents) if contents else "",
+              "home": HOME_DIR, "steam_root": STEAM_ROOT, "tools_dir": TOOLS_DIR, "plist": GUARD_PLIST, "label": GUARD_LABEL}
+    write_file(GUARD_WRAPPER, GUARD_WRAPPER_TEXT % {k: shlex.quote(v) for k, v in values.items()})
+    os.chmod(GUARD_WRAPPER, 0o755)
+
+
+def guard_job_is_old():
+    """Whether launchd's job for the guard is one from before the wrapper: it starts the app's
+    Python itself, and so cannot do anything once the app is gone."""
+    try:
+        with open(GUARD_PLIST, "rb") as f:
+            return plistlib.load(f).get("ProgramArguments", [""])[0] != "/bin/sh"
+    except (OSError, ValueError):
+        return False
+
+
 def cmd_guard_install():
     if install_tools() is None and not tools_installed():
         die("%s is missing or not writable; run setup first" % TOOLS_DIR)
+    guard_job_install()
+
+
+def guard_job_install():
     os.makedirs(HOME_DIR, exist_ok=True)
     here = os.path.dirname(os.path.abspath(__file__))
     script = os.path.join(HOME_DIR, "steamplay")
@@ -1892,9 +1985,10 @@ def cmd_guard_install():
         python = sys.executable
     else:
         python = "/usr/bin/python3" if os.access("/usr/bin/python3", os.X_OK) else sys.executable
+    write_guard_wrapper(python, script)
     plist = {
         "Label": GUARD_LABEL,
-        "ProgramArguments": [python, script, "guard", "watch"],
+        "ProgramArguments": ["/bin/sh", GUARD_WRAPPER],
         "EnvironmentVariables": {"STEAMPLAY_HOME": HOME_DIR, "STEAM_ROOT": STEAM_ROOT, "STEAMPLAY_TOOLS_DIR": TOOLS_DIR},
         "RunAtLoad": True,
         "KeepAlive": True,
@@ -1924,8 +2018,9 @@ def cmd_guard_install():
 
 def cmd_guard_remove():
     subprocess.run(["/bin/launchctl", "bootout", "gui/%d/%s" % (os.getuid(), GUARD_LABEL)], stderr=subprocess.DEVNULL)
-    if os.path.exists(GUARD_PLIST):
-        os.remove(GUARD_PLIST)
+    for path in (GUARD_PLIST, GUARD_WRAPPER):
+        if os.path.exists(path):
+            os.remove(path)
     print("the guard is removed. Nothing now puts the switch or the tools back if they go missing.")
 
 
