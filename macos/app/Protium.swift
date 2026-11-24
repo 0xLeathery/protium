@@ -63,7 +63,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let row = NSStackView()
         row.orientation = .horizontal
         for (label, action) in [("Set up Steam", #selector(setUp)), ("Repair", #selector(setUp)),
-                                ("Status", #selector(status)), ("Uninstall", #selector(uninstall))] {
+                                ("Status", #selector(status)), ("Uninstall", #selector(uninstall)),
+                                ("Diagnostics", #selector(diagnose))] {
             let button = NSButton(title: label, target: self, action: action)
             buttons.append(button)
             row.addArrangedSubview(button)
@@ -423,6 +424,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard !busy else { return }
         setBusy(true)
         runSteamplay(["status"]) { _ in self.setBusy(false) }
+    }
+
+    /// Writes the diagnostics file and shows it in the Finder, for the player to attach to an issue.
+    @objc func diagnose() {
+        guard !busy else { return }
+        setBusy(true)
+        runSteamplay(["diagnose"]) { _ in
+            self.setBusy(false)
+            let mark = "diagnostics saved: "
+            if let line = self.lastOutput.components(separatedBy: "\n").last(where: { $0.hasPrefix(mark) }) {
+                NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: String(line.dropFirst(mark.count)))])
+            }
+        }
     }
 
     @objc func uninstall() {

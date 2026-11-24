@@ -11,6 +11,8 @@
     macos/steamplay setup [--dry-run] set Steam Play up: the tools, Steam's platform switch and a
                                       compatibility tool for every game (Steam quit)
     macos/steamplay status            the switch, the tools and each installed game's choice
+    macos/steamplay diagnose          write what shows why Protium or Steam does not work here
+                                      into one text file on the Desktop, to attach to an issue
     macos/steamplay discover [--installed] [<app id>] [--json]
                                       which games are likely to work, and why (see "discover" below)
     macos/steamplay data update       fetch the public anti-cheat list and ProtonDB's export
@@ -2878,6 +2880,8 @@ def main(argv):
         cmd_sync("--dry-run" in argv[1:], "--remove" in argv[1:])
     elif len(argv) == 2 and argv[0] == "play" and argv[1].isdigit():
         cmd_play(int(argv[1]))
+    elif argv == ["diagnose"]:
+        sys.exit(cmd_diagnose())
     elif argv == ["setup", "--check"]:
         if steam_ready():
             die(steam_ready())
@@ -2944,6 +2948,98 @@ def main(argv):
         cmd_hook([int(a) for a in argv[1:] if a.isdigit()], "--remove" in argv[1:], "--dry-run" in argv[1:])
     else:
         sys.exit(__doc__)
+
+
+def cmd_diagnose():
+    """Writes what somebody needs to see to find out why Protium or Steam does not work on this
+    Mac into one text file on the Desktop (STEAMPLAY_DIAGNOSE_DIR names another folder), for the
+    player to read and attach to an issue. Nothing is sent anywhere. The home folder is written
+    as ~ and Steam's account numbers as <id>; the names of installed games are in it. A part that
+    cannot be read says so and the rest is still written."""
+    import contextlib
+    import io
+    home = os.path.expanduser("~")
+
+    def scrub(text):
+        text = text.replace(home, "~")
+        text = re.sub(r"(userdata/)\d+", r"\1<id>", text)
+        return re.sub(r"\b7656119\d{10}\b", "<id>", text)
+
+    def tail(path, lines):
+        with open(path, encoding="utf-8", errors="replace") as f:
+            return "".join(f.readlines()[-lines:]) or "(empty)\n"
+
+    def facts():
+        mac = mac_facts()
+        build = subprocess.run(["/usr/bin/sw_vers", "-buildVersion"], stdout=subprocess.PIPE, universal_newlines=True).stdout.strip()
+        return "Protium %s\n%s\nmacOS build %s\n" % (protium_version() or "from a checkout", json.dumps(mac), build)
+
+    def steam():
+        root, bundle = switch_state()
+        present = [t for t in TOOLS if os.access(os.path.join(TOOLS_DIR, t, "run"), os.X_OK)]
+        loaded = subprocess.run(["/bin/launchctl", "print", "gui/%d/%s" % (os.getuid(), GUARD_LABEL)],
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
+        return ("ready for setup: %s\nSteam is %s\nswitch: %s (next to Steam's executables), %s (Steam's folder)\n"
+                "tools in %s: %s\nguard: %s%s\n"
+                % (steam_ready() or "yes", "running" if steam_running() else "not running", bundle or "none", root or "none",
+                   TOOLS_DIR, ", ".join(present) or "none", "loaded" if loaded else "not loaded",
+                   ", and it gave up on a Steam session that started %s" % guard_gave_up()[:21] if guard_gave_up() else ""))
+
+    def status():
+        if steam_ready():
+            return "(left out: Steam is not ready for setup)\n"
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            try:
+                cmd_status()
+            except SystemExit as e:
+                print(e)
+        return out.getvalue()
+
+    def last_start():
+        lines = session_lines()
+        kept = [l for l in lines if "Client version" in l or " tool " in l.lower() or "platform" in l.lower()]
+        return "\n".join(kept[:60]) + "\n" if kept else "(Steam's compatibility log has no start)\n"
+
+    def dumps():
+        folder, out = "/tmp/dumps", []
+        for name in sorted(os.listdir(folder)):
+            st = os.stat(os.path.join(folder, name))
+            if time.time() - st.st_mtime < 7 * 86400 and not os.path.isdir(os.path.join(folder, name)):
+                out.append("%s  %d bytes  %s" % (time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(st.st_mtime)), st.st_size, name))
+        return "\n".join(out) + "\n" if out else "(none in the last seven days)\n"
+
+    logs = os.path.dirname(GUARD_LOG)
+    parts = [("Protium and this Mac", facts),
+             ("Steam and Protium's parts in it", steam),
+             ("steamplay status", status),
+             ("The guard's log, last 200 lines", lambda: tail(GUARD_LOG, 200)),
+             ("The guard's own output, last 50 lines", lambda: tail(os.path.join(logs, "guard.out"), 50)),
+             ("Faults Protium did not expect, last 100 lines", lambda: tail(ERROR_LOG, 100)),
+             ("Steam's latest start, from its compatibility log", last_start),
+             ("Steam's bootstrap log, last 50 lines", lambda: tail(os.path.join(STEAM_ROOT, "logs", "bootstrap_log.txt"), 50)),
+             ("Steam's crash dumps of the last seven days (names only)", dumps)]
+    text = ("Protium diagnostics, %s\nThis file holds the names of your installed games and nothing that says who you are: "
+            "your home folder is written as ~ and Steam account numbers as <id>. Read it before you share it.\n"
+            % time.strftime("%Y-%m-%d %H:%M:%S"))
+    for title, part in parts:
+        try:
+            body = part()
+        except FileNotFoundError:
+            body = "(there is none)\n"
+        except Exception as e:
+            body = "(could not be read: %s: %s)\n" % (type(e).__name__, e)
+        text += "\n== %s\n%s" % (title, scrub(body if body.endswith("\n") else body + "\n"))
+    folder = os.environ.get("STEAMPLAY_DIAGNOSE_DIR", os.path.join(home, "Desktop"))
+    path = os.path.join(folder, "Protium-diagnostics-%s.txt" % time.strftime("%Y%m%d-%H%M%S"))
+    try:
+        os.makedirs(folder, exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(text)
+    except OSError as e:
+        die("could not write %s: %s" % (path, e))
+    print("diagnostics saved: %s" % path)
+    return 0
 
 
 def run(argv):
