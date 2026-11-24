@@ -1,0 +1,189 @@
+Windows: Let the host say for which calls a thread leaves hardware TSO.
+
+On macOS a thread is switched to hardware TSO when it enters JIT code and off
+again before native code handles a system call or a unix call, because native
+code is slower under TSO. Each switch is a Mach trap, so every such call costs
+two.
+
+Measured on an M4 Pro (macos/tests/cpu-bench.sh), from x86_64 code, with the
+switch and with software TSO, which has none:
+  QueryPerformanceCounter         220 ns   21 ns   (native arm64: 16 ns)
+  WaitForSingleObject(event, 0)   246 ns   47 ns
+  SetEvent + ResetEvent           445 ns   43 ns
+A game makes such calls, and Vulkan calls, which are unix calls, many
+thousands of times a frame. What staying on costs native code
+(macos/tests/native_tso.c): a bulk fill takes twice as long, a bulk move 10 to
+25% longer, reading and locking the same.
+
+FEX_HARDWARE_TSO_OFF chooses: "all" (as before, also when unset), "syscall",
+"unix" or "none". The unix library reads it and returns it with the probe; the
+ARM64EC module installs only the dispatcher wrappers that are wanted, and the
+WOW64 module switches off only for the calls that are wanted. A thread that
+stays on needs no trap at its next entry into JIT code. FEX's log line says
+which it is.
+
+LOCAL TO THIS PORT, NOT FOR FEX. Applied by macos/build-fex.sh to
+github.com/athei/FEX at 8425ea974e072821c75969723efe49cca605200c. Written
+with an AI assistant (Claude). FEX takes no AI-generated code contributions
+(its CLAUDE.md, AGENTS.md and CONTRIBUTING.md), so this patch must not be
+sent to it as a pull request. What was found may be reported to its
+developers, for them to write their own change.
+---
+diff --git a/Source/Windows/ARM64EC/Module.cpp b/Source/Windows/ARM64EC/Module.cpp
+index a4caa856d..a741dd35f 100644
+--- a/Source/Windows/ARM64EC/Module.cpp
++++ b/Source/Windows/ARM64EC/Module.cpp
+@@ -495,12 +495,12 @@ void InstallHardwareTSOHooks(HMODULE NtDll) {
+ 
+   // Both are writable ntdll data that the ARM64EC syscall and unix call thunks load on every call. Modules that copy
+   // them before this point bypass the hooks, which only keeps their threads on longer.
+-  if (const auto Ptr = reinterpret_cast<void**>(GetProcAddress(NtDll, "__wine_syscall_dispatcher"))) {
++  if (const auto Ptr = reinterpret_cast<void**>(GetProcAddress(NtDll, "__wine_syscall_dispatcher")); Ptr && FEX::Windows::HardwareTSO::LeaveForSyscalls()) {
+     TSOOrigSyscallDispatcher = *Ptr;
+     *Ptr = &TSOSyscallDispatcher;
+   }
+ 
+-  if (const auto Ptr = reinterpret_cast<void**>(GetProcAddress(NtDll, "__wine_unix_call_dispatcher_arm64ec"))) {
++  if (const auto Ptr = reinterpret_cast<void**>(GetProcAddress(NtDll, "__wine_unix_call_dispatcher_arm64ec")); Ptr && FEX::Windows::HardwareTSO::LeaveForUnixCalls()) {
+     TSOOrigUnixCallDispatcher = *Ptr;
+     *Ptr = &TSOUnixCallDispatcher;
+   }
+diff --git a/Source/Windows/Common/HardwareTSO.cpp b/Source/Windows/Common/HardwareTSO.cpp
+index c1f732093..a130dede6 100644
+--- a/Source/Windows/Common/HardwareTSO.cpp
++++ b/Source/Windows/Common/HardwareTSO.cpp
+@@ -23,6 +23,8 @@ void HardwareTSOEnableFailed() {
+ 
+ namespace FEX::Windows::HardwareTSO {
+ namespace {
++  uint32_t Leave {FEXUNIXLIB_HARDWARE_TSO_LEAVE_SYSCALL | FEXUNIXLIB_HARDWARE_TSO_LEAVE_UNIXCALL};
++
+   // Issues the trap like the libsystem_kernel stub does, but from this module, so that the PC of a thread suspended
+   // in it stays inside a PE module (see HardwareTSOTrap). Returns the trap's kern_return_t.
+   __attribute__((naked)) int32_t CallTrap(uint32_t /* Enable */) {
+@@ -56,7 +58,11 @@ bool Init() {
+       HardwareTSOTrap = 0;
+       return false;
+     }
+-    LogMan::Msg::IFmt("FEX: Using hardware TSO");
++    Leave = Args.Leave;
++    LogMan::Msg::IFmt("FEX: Using hardware TSO, threads leave it for {}",
++                      LeaveForSyscalls() ? (LeaveForUnixCalls() ? "syscalls and unix calls" : "syscalls") :
++                      LeaveForUnixCalls() ? "unix calls" :
++                                            "nothing");
+     return true;
+   case FEXUnixLib_HardwareTSOProbeResult::InvalidValue:
+     LogMan::Msg::EFmt("FEX: FEX_HARDWARE_TSO must be 0 or 1, using software TSO");
+@@ -71,6 +77,14 @@ bool PerThread() {
+   return HardwareTSOTrap != 0;
+ }
+ 
++bool LeaveForSyscalls() {
++  return Leave & FEXUNIXLIB_HARDWARE_TSO_LEAVE_SYSCALL;
++}
++
++bool LeaveForUnixCalls() {
++  return Leave & FEXUNIXLIB_HARDWARE_TSO_LEAVE_UNIXCALL;
++}
++
+ void InitThread(FEXCore::Core::CpuStateFrame* Frame) {
+   // A new thread starts off: whether it inherits its creator's state is up to the host, and a thread that is on while
+   // its state says off only costs one redundant trap at its first JIT entry.
+diff --git a/Source/Windows/Common/HardwareTSO.h b/Source/Windows/Common/HardwareTSO.h
+index b399f1cd2..8366fdd6d 100644
+--- a/Source/Windows/Common/HardwareTSO.h
++++ b/Source/Windows/Common/HardwareTSO.h
+@@ -39,6 +39,11 @@ bool Init();
+ // Whether threads are switched individually, which requires the hooks in this file.
+ bool PerThread();
+ 
++// Whether a thread is switched off before native code handles a guest syscall, and a unix call. The host decides
++// (FEX_HARDWARE_TSO_OFF on macOS). A thread that is not switched off stays on until it ends.
++bool LeaveForSyscalls();
++bool LeaveForUnixCalls();
++
+ // Sets the state of a new thread.
+ void InitThread(FEXCore::Core::CpuStateFrame* Frame);
+ 
+diff --git a/Source/Windows/UnixLib/FEXUnixLib.cpp b/Source/Windows/UnixLib/FEXUnixLib.cpp
+index c4440f7dc..d8ebb540b 100644
+--- a/Source/Windows/UnixLib/FEXUnixLib.cpp
++++ b/Source/Windows/UnixLib/FEXUnixLib.cpp
+@@ -107,9 +107,26 @@ static FEXUnixLib_HardwareTSOProbeResult ProbeHardwareTSO() {
+   return FEXUnixLib_HardwareTSOProbeResult::Available;
+ }
+ 
++// FEX_HARDWARE_TSO_OFF says for which calls a thread leaves hardware TSO: "all" (also when unset or unknown),
++// "syscall", "unix" or "none".
++static uint32_t HardwareTSOLeave() {
++  const char* Env = getenv("FEX_HARDWARE_TSO_OFF");
++  if (Env && !strcmp(Env, "none")) {
++    return 0;
++  }
++  if (Env && !strcmp(Env, "syscall")) {
++    return FEXUNIXLIB_HARDWARE_TSO_LEAVE_SYSCALL;
++  }
++  if (Env && !strcmp(Env, "unix")) {
++    return FEXUNIXLIB_HARDWARE_TSO_LEAVE_UNIXCALL;
++  }
++  return FEXUNIXLIB_HARDWARE_TSO_LEAVE_SYSCALL | FEXUNIXLIB_HARDWARE_TSO_LEAVE_UNIXCALL;
++}
++
+ static NTSTATUS FEXUnixLib_ProbeHardwareTSOHandler(void* _Args) {
+   auto Args = reinterpret_cast<FEXUnixLib_ProbeHardwareTSOArgs*>(_Args);
+   Args->Result = ProbeHardwareTSO();
++  Args->Leave = HardwareTSOLeave();
+   Args->Trap = Args->Result == FEXUnixLib_HardwareTSOProbeResult::Available ? GetHardwareTSOTrapNumber() : 0;
+   return STATUS_SUCCESS;
+ }
+diff --git a/Source/Windows/UnixLib/FEXUnixLib.h b/Source/Windows/UnixLib/FEXUnixLib.h
+index 214cbc1fd..80c25bdd9 100644
+--- a/Source/Windows/UnixLib/FEXUnixLib.h
++++ b/Source/Windows/UnixLib/FEXUnixLib.h
+@@ -96,11 +96,19 @@ enum class FEXUnixLib_HardwareTSOProbeResult : uint32_t {
+   Unavailable,
+ };
+ 
++// A thread that stays on for a call saves the two traps around it (about 190ns on an M4), and the native code of that
++// call then runs under TSO, where code that mostly stores is slower.
++enum FEXUnixLib_HardwareTSOLeave : uint32_t {
++  FEXUNIXLIB_HARDWARE_TSO_LEAVE_SYSCALL = 1,
++  FEXUNIXLIB_HARDWARE_TSO_LEAVE_UNIXCALL = 2,
++};
++
+ struct FEXUnixLib_ProbeHardwareTSOArgs {
+   // Out: the Mach trap number of thread_set_x86_64_compat, which PE code issues directly with svc #0x80 to switch
+   // the calling thread.
+   int64_t Trap;
+   FEXUnixLib_HardwareTSOProbeResult Result;
+-  uint32_t pad;
++  // Out: which calls into native code a thread leaves hardware TSO for, FEXUnixLib_HardwareTSOLeave bits.
++  uint32_t Leave;
+ };
+ static_assert(sizeof(FEXUnixLib_ProbeHardwareTSOArgs) == 16, "Must match between the PE and unix sides");
+diff --git a/Source/Windows/WOW64/Module.cpp b/Source/Windows/WOW64/Module.cpp
+index f47beb53d..e1b02ddcd 100644
+--- a/Source/Windows/WOW64/Module.cpp
++++ b/Source/Windows/WOW64/Module.cpp
+@@ -787,7 +787,9 @@ public:
+ 
+       Context::FlushThreadStateContext();
+       Context::UnlockJITContext();
+-      FEX::Windows::HardwareTSO::EnsureOff(Frame);
++      if (FEX::Windows::HardwareTSO::LeaveForUnixCalls()) {
++        FEX::Windows::HardwareTSO::EnsureOff(Frame);
++      }
+       ReturnRAX = static_cast<uint64_t>(WineUnixCall(StackArgs->Handle, StackArgs->ID, ULongToPtr(StackArgs->Args)));
+       Context::LockJITContext();
+       Frame->State.gregs[FEXCore::X86State::REG_RAX] = ReturnRAX;
+@@ -806,7 +808,9 @@ public:
+       // while another thread terminates the process, as in PreCompile.
+       ProcessCrossProcessWork();
+       Context::UnlockJITContext();
+-      FEX::Windows::HardwareTSO::EnsureOff(Frame);
++      if (FEX::Windows::HardwareTSO::LeaveForSyscalls()) {
++        FEX::Windows::HardwareTSO::EnsureOff(Frame);
++      }
+       ReturnRAX = static_cast<uint64_t>(Wow64SystemServiceEx(static_cast<UINT>(EntryRAX), reinterpret_cast<UINT*>(ReturnRSP + 4)));
+       Context::LockJITContext();
+       Frame->State.gregs[FEXCore::X86State::REG_RAX] = ReturnRAX;
