@@ -869,7 +869,9 @@ def install_tools():
 # them on the player's Mac from the package of Valve's Windows client that holds them, as Steam's
 # own Windows installer does, and checks it against the SHA-256 in Valve's manifest.
 STEAMCLIENT_DIR = os.environ.get("WIN_STEAM_DLLS") or os.path.join(HOME_DIR, "steamclient-windows")
-STEAMCLIENT_DLLS = ("steamclient.dll", "steamclient64.dll")
+# the overlay DLLs too: some games (Call of Duty: Modern Warfare Remastered) end themselves when
+# steam_api has not loaded Valve's own GameOverlayRenderer64.dll into the process
+STEAMCLIENT_DLLS = ("steamclient.dll", "steamclient64.dll", "GameOverlayRenderer.dll", "GameOverlayRenderer64.dll")
 CLIENT_CDN = "https://client-update.steamstatic.com/"
 CLIENT_MANIFEST = CLIENT_CDN + "steam_client_win32"
 CLIENT_PACKAGE = "bins_win32"
@@ -910,11 +912,11 @@ def cmd_steamclient(again):
         if digest.hexdigest() != sha2:
             die("%s does not have the SHA-256 Valve's manifest gives" % name)
         with zipfile.ZipFile(zip_path) as z:
-            members = {os.path.basename(m): m for m in z.namelist()}
+            members = {os.path.basename(m).lower(): m for m in z.namelist()}
             for dll in STEAMCLIENT_DLLS:
-                if dll not in members:
+                if dll.lower() not in members:
                     die("%s has no %s" % (name, dll))
-                data = z.read(members[dll])
+                data = z.read(members[dll.lower()])
                 tmp = os.path.join(STEAMCLIENT_DIR, dll + ".steamplay-tmp")
                 with open(tmp, "wb") as f:
                     f.write(data)

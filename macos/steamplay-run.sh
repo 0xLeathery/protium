@@ -189,6 +189,17 @@ for dll in steamclient.dll steamclient64.dll; do
         "steamclient64.dll there from the top folder of a Windows Steam install, or set WIN_STEAM_DLLS"
     cp "$WIN_STEAM_DLLS/$dll" "$steam_in_pfx/$dll"
 done
+# and Valve's overlay DLLs, which steam_api loads from there as well. The overlay itself does not
+# draw (ntdll points these at lsteamclient too), but a game may look for the module: Call of Duty:
+# Modern Warfare Remastered ends itself, without a word, when it is not in the process
+for dll in GameOverlayRenderer.dll GameOverlayRenderer64.dll; do
+    [ -f "$steam_in_pfx/$dll" ] && continue
+    if [ -f "$WIN_STEAM_DLLS/$dll" ]; then
+        cp "$WIN_STEAM_DLLS/$dll" "$steam_in_pfx/$dll"
+    else
+        echo "steamplay-run: no $dll in $WIN_STEAM_DLLS (\"steamplay steamclient --again\" fetches it); some games need it" >&2
+    fi
+done
 
 logfile=${STEAMPLAY_LOG:-$compat/steamplay-run.log}
 # the run before this one keeps its log, since the next start is often how a crash gets looked at
