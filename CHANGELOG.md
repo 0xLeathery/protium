@@ -10,6 +10,8 @@ written. "Known problems" is a heading of our own, next to Keep a Changelog's.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-25
+
 ### Added
 
 - Games can use the full resolution of a Retina or 4K screen. Until now a game on such a screen
@@ -36,6 +38,8 @@ written. "Known problems" is a heading of our own, next to Keep a Changelog's.
 - With full resolution on, launchers and games in a window are half as large on screen as
   before.
 - With screens of different kinds connected, Protium follows the main one.
+- With full resolution on, a game that draws its own mouse pointer may show it smaller than
+  before.
 - This has been tried on one monitor's high-density mode, with test programs. It has not yet
   been tried on a MacBook's own screen, or with a full game.
 
@@ -131,7 +135,8 @@ run natively on arm64 with Metal, without Rosetta and without a virtual machine.
 - `steamplay discover` ranks the games in your library by how likely they are to work, and says
   why.
 
-[Unreleased]: https://github.com/0xLeathery/protium/compare/v0.3.1...macos-port
+[Unreleased]: https://github.com/0xLeathery/protium/compare/v0.4.0...macos-port
+[0.4.0]: https://github.com/0xLeathery/protium/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/0xLeathery/protium/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/0xLeathery/protium/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/0xLeathery/protium/compare/v0.1.0...v0.2.0
