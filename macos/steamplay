@@ -17,7 +17,11 @@
     macos/steamplay result <app id> works|plays-with-problems|menu-only|broken [note]
                                       say how a game did; it counts before any guess, and goes
                                       into compat/games.json and the README's games table
-    macos/steamplay version [--check] this version of Protium, and whether a newer one is out
+    macos/steamplay version [--check] [--now]
+                                      this version of Protium; with --check, whether a newer one
+                                      is out and what it changes (GitHub is asked once a day at
+                                      most, or at once with --now)
+    macos/steamplay updates [on|off]  whether Protium asks at all (on unless turned off)
     macos/steamplay games             write the README's games table again from compat/games.json
     macos/steamplay survey --away [--seconds N] [--games N] [--only <app id>...]
                                       start each untried installed game for a while (takes the screen)
@@ -898,8 +902,12 @@ def curl(url, output=None):
 # checkout). "version --check" asks GitHub for the newest release of Protium. That is one request
 # to a public address, which says nothing about this Mac or its games.
 
-RELEASES_API = "https://api.github.com/repos/0xLeathery/protium/releases/latest"
+RELEASES_API = os.environ.get("PROTIUM_RELEASES_API", "https://api.github.com/repos/0xLeathery/protium/releases?per_page=10")
 RELEASES_PAGE = "https://github.com/0xLeathery/protium/releases"
+RELEASES_DOWNLOAD = "https://github.com/0xLeathery/protium/releases/download/"
+SETTINGS = os.path.join(HOME_DIR, "settings.json")
+UPDATE_CHECK = os.path.join(HOME_DIR, "update-check.json")
+UPDATE_CHECK_SECONDS = 24 * 3600
 
 
 def protium_version():
@@ -917,28 +925,125 @@ def version_key(text):
     return tuple(int(n) for n in re.findall(r"\d+", text)[:3])
 
 
-def cmd_version(check):
-    """Prints "current <version>" and, with check, "latest <version> <page>" and "newer yes|no",
-    or "latest unknown <why>". The app reads these lines."""
+def json_file(path, default):
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return default
+
+
+def update_check_wanted():
+    """The player's choice ("steamplay updates on|off", the app's checkbox); on unless turned off.
+    PROTIUM_NO_UPDATE_CHECK=1 turns it off too. Off means no request is ever made."""
+    if os.environ.get("PROTIUM_NO_UPDATE_CHECK", "") not in ("", "0"):
+        return False
+    return json_file(SETTINGS, {}).get("update_check", True) is not False
+
+
+def fetch_releases():
+    """The published releases, newest first: [{"version", "page", "download", "notes"}], notes
+    being the release's own changes (its page up to the part every release has). None when
+    GitHub cannot be reached. PROTIUM_RELEASES_API may name a file, for the checks."""
+    if os.path.isfile(RELEASES_API):
+        with open(RELEASES_API) as f:
+            text = f.read()
+    else:
+        r = subprocess.run(["/usr/bin/curl", "-fsSL", "--max-time", "15", "-H", "Accept: application/vnd.github+json", RELEASES_API],
+                           stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        if r.returncode != 0:
+            return None
+        text = r.stdout.decode("utf-8", errors="replace")
+    try:
+        listed = json.loads(text)
+    except ValueError:
+        return None
+    out = []
+    for release in listed if isinstance(listed, list) else []:
+        if not isinstance(release, dict) or release.get("draft") or release.get("prerelease"):
+            continue
+        tag = release.get("tag_name", "")
+        if not isinstance(tag, str) or not re.fullmatch(r"v?\d+\.\d+\.\d+", tag):
+            continue
+        version = tag.lstrip("v")
+        page = release.get("html_url", "")
+        if not isinstance(page, str) or not page.startswith(RELEASES_PAGE):
+            page = RELEASES_PAGE
+        # only our own disk image, at the address GitHub serves a release's files from
+        download = ""
+        for asset in release.get("assets") or []:
+            url = asset.get("browser_download_url", "") if isinstance(asset, dict) else ""
+            if url == "%sv%s/Protium-%s.dmg" % (RELEASES_DOWNLOAD, version, version):
+                download = url
+        notes = release.get("body") or ""
+        notes = notes.replace("\r\n", "\n").split("\n## Requirements")[0].strip() if isinstance(notes, str) else ""
+        out.append({"version": version, "page": page, "download": download, "notes": notes})
+    out.sort(key=lambda r: version_key(r["version"]), reverse=True)
+    return out
+
+
+def known_releases(now=False):
+    """The releases as GitHub listed them at most a day ago; asks again when the answer is older,
+    or with now. [] when the player turned the check off, or nothing is known and GitHub cannot
+    be reached."""
+    if not update_check_wanted():
+        return []
+    kept = json_file(UPDATE_CHECK, {})
+    fresh = isinstance(kept.get("asked"), (int, float)) and 0 <= time.time() - kept["asked"] < UPDATE_CHECK_SECONDS
+    if now or not fresh or kept.get("api") != RELEASES_API:
+        releases = fetch_releases()
+        if releases is not None:
+            kept = {"asked": int(time.time()), "api": RELEASES_API, "releases": releases, "told": kept.get("told", "")}
+            os.makedirs(HOME_DIR, exist_ok=True)
+            write_file(UPDATE_CHECK, json.dumps(kept, indent=1))
+    return kept.get("releases", []) if isinstance(kept.get("releases"), list) else []
+
+
+def newer_releases(now=False):
+    current = protium_version()
+    if not current:
+        return []
+    return [r for r in known_releases(now) if version_key(r["version"]) > version_key(current)]
+
+
+def cmd_version(check, now=False):
+    """Prints "current <version>" and, with check: "latest <version> <page>", "newer yes|no",
+    "download <address>" when the newest release has a disk image, and between "changes-begin"
+    and "changes-end" what is new in every version after this one, newest first. With the check
+    turned off, "check off". The app reads these lines."""
     current = protium_version()
     print("current %s" % (current or "unknown"))
     if not check:
         return 0
-    r = subprocess.run(["/usr/bin/curl", "-fsSL", "--max-time", "15", "-H", "Accept: application/vnd.github+json", RELEASES_API],
-                       stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    try:
-        release = json.loads(r.stdout.decode("utf-8", errors="replace")) if r.returncode == 0 else None
-    except ValueError:
-        release = None
-    tag = release.get("tag_name", "") if isinstance(release, dict) else ""
-    if not re.fullmatch(r"v?\d+\.\d+\.\d+", tag):
-        print("latest unknown %s" % ((r.stderr.decode(errors="replace").strip().split("\n") or [""])[-1] or "no release found"))
+    if not update_check_wanted():
+        print("check off")
         return 0
-    page = release.get("html_url", "")
-    if not page.startswith(RELEASES_PAGE):
-        page = RELEASES_PAGE
-    print("latest %s %s" % (tag.lstrip("v"), page))
-    print("newer %s" % ("yes" if current and version_key(tag) > version_key(current) else "no"))
+    releases = known_releases(now)
+    if not releases:
+        print("latest unknown")
+        return 0
+    newer = newer_releases()
+    print("latest %s %s" % (releases[0]["version"], releases[0]["page"]))
+    print("newer %s" % ("yes" if newer else "no"))
+    if newer:
+        if newer[0]["download"]:
+            print("download %s" % newer[0]["download"])
+        print("changes-begin")
+        for r in newer:
+            print("Protium %s\n\n%s\n" % (r["version"], r["notes"] or "(no notes)"))
+        print("changes-end")
+    return 0
+
+
+def cmd_updates(choice):
+    settings = json_file(SETTINGS, {})
+    if choice:
+        settings["update_check"] = choice == "on"
+        os.makedirs(HOME_DIR, exist_ok=True)
+        write_file(SETTINGS, json.dumps(settings, indent=1))
+        if choice == "off" and os.path.exists(UPDATE_CHECK):
+            os.remove(UPDATE_CHECK)
+    print("telling about new versions: %s" % ("on" if update_check_wanted() else "off"))
     return 0
 
 
@@ -2235,8 +2340,10 @@ def main(argv):
         sys.exit(cmd_data_update())
     elif len(argv) >= 3 and argv[0] == "result" and argv[1].isdigit() and argv[2] in VERDICTS:
         sys.exit(cmd_result(int(argv[1]), argv[2], " ".join(argv[3:])))
-    elif argv in (["version"], ["version", "--check"]):
-        sys.exit(cmd_version("--check" in argv))
+    elif argv and argv[0] == "version" and all(a in ("--check", "--now") for a in argv[1:]):
+        sys.exit(cmd_version("--check" in argv, "--now" in argv))
+    elif argv in (["updates"], ["updates", "on"], ["updates", "off"]):
+        sys.exit(cmd_updates(argv[1] if len(argv) > 1 else None))
     elif argv == ["games"]:
         sys.exit(cmd_games())
     elif len(argv) == 4 and argv[0] == "record" and argv[1].isdigit() and argv[2].isdigit():
