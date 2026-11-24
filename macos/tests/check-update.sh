@@ -12,8 +12,12 @@
 #   changed    our signature, with a file changed after signing
 #   otherid    signed with the Developer ID, under another bundle identifier
 #   genuine    the released disk image itself ($RELEASE_DMG), which is not newer than the copy
-# "update --verify" must refuse each, with a reason, and the installed copy must be the same
-# afterwards, file for file. Prints PASS or FAIL per case; exit status 1 when one failed.
+# "update --verify" must refuse each, with a reason. "update --fetch" and "--install" must refuse
+# when there is nothing newer, when the release's disk image is not at our address, when a game
+# runs from the app, when the app's folder cannot be written, and what "--verify" refuses. The
+# notice at a game's start comes once per version, and nothing is asked when it is turned off.
+# The installed copy must be the same afterwards, file for file. Prints PASS or FAIL per case;
+# exit status 1 when one failed.
 #
 # Environment overrides: BUILD_ROOT, RELEASE_APP, RELEASE_DMG (default: the 0.2.0 release in
 # $BUILD_ROOT/release), SIGN_IDENTITY (default: the first Developer ID Application identity).
@@ -59,7 +63,8 @@ APP=$E/Applications/Protium.app
 # itself is never changed: macOS kills what is started from a notarized app whose files changed,
 # and moves the app to the Trash.
 steamplay() {
-    STEAMPLAY_HOME=$E/home PROTIUM_RELEASES_API=$E/releases.json PROTIUM_APP=$APP \
+    STEAMPLAY_HOME=$E/home PROTIUM_RELEASES_API=$E/releases.json PROTIUM_APP=$APP PROTIUM_UPDATE_CACHE=$E/cache \
+        PROTIUM_UPDATE_NO_OPEN=1 \
         "$APP/Contents/SharedSupport/python/bin/python3" -I -B "$MACOS_DIR/steamplay" "$@"
 }
 before=$(tree_sum "$APP")
@@ -100,6 +105,64 @@ refuse otherid "$E/otherid.dmg" 0.2.99 "not signed by Protium's developer"
 refuse not-newer "$RELEASE_DMG" "$released" "is not newer than this one"
 refuse not-announced "$RELEASE_DMG" 0.9.0 "not the 0.9.0 that was announced"
 refuse not-an-image "$MACOS_DIR/steamplay" 0.2.99 "cannot be opened"
+
+echo "== what GitHub says, and update --fetch and --install"
+# releases FILE VERSION ADDRESS: a list of releases as GitHub gives it, with the released one below
+releases() {
+    python3 -I - "$1" "$2" "$3" "$released" <<'PY'
+import json, sys
+out, version, address, released = sys.argv[1:5]
+def release(v, url, body):
+    return {"tag_name": "v" + v, "html_url": "https://github.com/0xLeathery/protium/releases/tag/v" + v, "draft": False,
+            "prerelease": False, "body": body + "\n\n## Requirements\n\n- a Mac", "assets": [{"browser_download_url": url}]}
+ours = "https://github.com/0xLeathery/protium/releases/download/v%s/Protium-%s.dmg"
+listed = [release(released, ours % (released, released), "### Fixed\n\n- the released one")]
+if version:
+    listed.insert(0, release(version, address or ours % (version, version), "### Added\n\n- The first new thing.\n- The second."))
+json.dump(listed, open(out, "w"))
+PY
+}
+# says CASE WORDS command...: the command's output must have WORDS
+says() {
+    local name=$1 words=$2 out
+    shift 2
+    out=$("$@" 2>&1)
+    echo "$out" >"$E/$name.out"
+    echo "$out" | grep -q -e "$words" && pass "$name" "$(echo "$out" | grep -e "$words" | head -1 | cut -c1-150)" || fail "$name" "no \"$words\" in: $(echo "$out" | tail -2 | tr '\n' ' ' | cut -c1-200)"
+}
+releases "$E/releases.json" "" ""
+says none-newer "refused: there is no newer version" steamplay update --fetch
+releases "$E/releases.json" 0.2.99 "https://example.com/Protium-0.2.99.dmg"
+says other-address "refused: release 0.2.99 has no disk image of ours" steamplay update --fetch
+releases "$E/releases.json" 0.2.99 ""
+says changes "^- The first new thing" steamplay version --check --now
+[ "$(steamplay version --check | grep -c '^Protium ')" = 1 ] && pass changes-only-newer "only the newer version's changes are listed" || fail changes-only-newer "$(steamplay version --check | grep '^Protium ' | tr '\n' ' ')"
+says fetch-adhoc "refused: it is not signed by Protium's developer" env PROTIUM_UPDATE_IMAGE="$E/adhoc.dmg" bash -c "$(declare -f steamplay); E='$E' APP='$APP' MACOS_DIR='$MACOS_DIR'; steamplay update --fetch"
+[ -z "$(ls "$E/cache" 2>/dev/null | grep dmg)" ] && pass fetch-cleans "a refused download does not stay" || fail fetch-cleans "left: $(ls "$E/cache")"
+# a game running from the app: its wineserver, kept alive on a scratch prefix
+mkdir -p "$E/pfx"
+WINEPREFIX=$E/pfx "$APP/Contents/SharedSupport/runtime/bin/wineserver" -f -p10 >/dev/null 2>&1 &
+perl -e 'select(undef, undef, undef, 1.5)'
+says game-running "refused: a game is running from this Protium" steamplay update --fetch
+says game-running-install "refused: a game is running from this Protium" steamplay update --install "$E/adhoc.dmg" 0.2.99
+WINEPREFIX=$E/pfx "$APP/Contents/SharedSupport/runtime/bin/wineserver" -k >/dev/null 2>&1
+wait 2>/dev/null
+chmod a-w "$E/Applications"
+says not-writable "cannot be written by this user" steamplay update --install "$E/adhoc.dmg" 0.2.99
+chmod u+w "$E/Applications"
+says install-adhoc "refused: it is not signed by Protium's developer" steamplay update --install "$E/adhoc.dmg" 0.2.99
+[ -z "$(ls -A "$E/Applications" | grep -v '^Protium.app$')" ] && pass install-cleans "nothing is left next to the app" || fail install-cleans "left: $(ls -A "$E/Applications" | tr '\n' ' ')"
+[ ! -e "$E/home/update-pending.json" ] && pass no-pending "no update is pending after refusals" || fail no-pending "update-pending.json was written"
+
+echo "== the notice when a game starts"
+says notice "^notify 0.2.99 The first new thing" env PROTIUM_NOTIFY_TEST=1 bash -c "$(declare -f steamplay); E='$E' APP='$APP' MACOS_DIR='$MACOS_DIR'; steamplay version --notify"
+[ -z "$(PROTIUM_NOTIFY_TEST=1 steamplay version --notify)" ] && pass notice-once "the second game start says nothing" || fail notice-once "it was told twice"
+steamplay updates off >/dev/null
+rm -f "$E/home/update-check.json"
+says check-off "^check off" steamplay version --check --now
+[ ! -e "$E/home/update-check.json" ] && [ -z "$(PROTIUM_NOTIFY_TEST=1 steamplay version --notify)" ] && pass off-asks-nothing "turned off: nothing is asked, kept or told" || fail off-asks-nothing "something was asked or told"
+steamplay updates on >/dev/null
+
 mount | grep -q protium-update- && fail mounts "a disk image is still mounted" || pass mounts "no disk image left mounted"
 
 after=$(tree_sum "$APP")
