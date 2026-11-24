@@ -10,6 +10,8 @@ written. "Known problems" is a heading of our own, next to Keep a Changelog's.
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-11-24
+
 ### Added
 
 - A Diagnostics button. It saves one text file to your Desktop that shows how Protium and Steam
@@ -100,7 +102,8 @@ run natively on arm64 with Metal, without Rosetta and without a virtual machine.
 - `steamplay discover` ranks the games in your library by how likely they are to work, and says
   why.
 
-[Unreleased]: https://github.com/0xLeathery/protium/compare/v0.3.0...macos-port
+[Unreleased]: https://github.com/0xLeathery/protium/compare/v0.3.1...macos-port
+[0.3.1]: https://github.com/0xLeathery/protium/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/0xLeathery/protium/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/0xLeathery/protium/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/0xLeathery/protium/releases/tag/v0.1.0
