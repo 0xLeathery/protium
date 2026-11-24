@@ -1,0 +1,28 @@
+{
+ "about": "What a report of how a game ran may hold, version 1. 'steamplay report' builds a report to this list and Protium's report service refuses anything that is not on it. Every field: its kind, and for text the longest it may be and the pattern it must match, for numbers the range, or the values it may take. Nothing here identifies a person or a Mac.",
+ "version": 1,
+ "fields": {
+  "schema": {"kind": "int", "min": 1, "max": 1},
+  "id": {"kind": "text", "max": 32, "pattern": "^[0-9a-f]{32}$"},
+  "protium": {"kind": "text", "max": 16, "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$|^dev$"},
+  "game.app": {"kind": "int", "min": 1, "max": 4294967295},
+  "game.name": {"kind": "text", "max": 120},
+  "game.engine": {"kind": "text", "max": 40, "optional": true},
+  "game.graphics": {"kind": "list", "of": ["d3d9", "d3d10", "d3d11", "d3d12", "vulkan", "opengl", "dotnet"]},
+  "game.bits": {"kind": "int", "values": [32, 64], "optional": true},
+  "run.seconds": {"kind": "int", "min": 0, "max": 864000},
+  "run.end": {"kind": "text", "values": ["abort", "crash", "hang", "ended"]},
+  "run.verdict": {"kind": "text", "values": ["works", "plays-with-problems", "menu-only", "broken", "stopped-by-itself"]},
+  "mac.model": {"kind": "text", "max": 24, "pattern": "^[A-Za-z0-9,]+$"},
+  "mac.chip": {"kind": "text", "max": 40, "pattern": "^[A-Za-z0-9 ()-]+$"},
+  "mac.memory_gb": {"kind": "int", "min": 1, "max": 4096},
+  "mac.macos": {"kind": "text", "max": 16, "pattern": "^[0-9]+(\\.[0-9]+){0,2}$"},
+  "mac.display": {"kind": "text", "max": 12, "pattern": "^[0-9]{3,5}x[0-9]{3,5}$", "optional": true},
+  "perf.frames": {"kind": "int", "min": 0, "max": 1000000000, "optional": true},
+  "perf.avg_ms": {"kind": "number", "min": 0, "max": 100000, "optional": true},
+  "perf.p99_ms": {"kind": "number", "min": 0, "max": 100000, "optional": true},
+  "perf.long_frames": {"kind": "int", "min": 0, "max": 1000000000, "optional": true},
+  "perf.shaders_compiled": {"kind": "int", "min": 0, "max": 100000000, "optional": true},
+  "perf.shader_wait_ms": {"kind": "number", "min": 0, "max": 1000000000, "optional": true}
+ }
+}

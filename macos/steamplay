@@ -2254,6 +2254,121 @@ def cmd_result(appid, verdict, note):
     return 0
 
 
+# ---- a report of how a game ran
+#
+# What a player can send us about one game: which game, how its last run ended, on which Mac,
+# and how fast it drew when that was measured. compat/report-schema.json lists every field a
+# report may hold; a report is built to that list and checked against it before it is shown,
+# so what the player reads is what is sent. Nothing in it identifies the player or the Mac.
+
+REPORT_SCHEMA = os.path.join(os.path.dirname(os.path.abspath(__file__)), "compat", "report-schema.json")
+
+
+def mac_facts():
+    def sysctl(name):
+        r = subprocess.run(["/usr/sbin/sysctl", "-n", name], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, universal_newlines=True)
+        return r.stdout.strip()
+    version = subprocess.run(["/usr/bin/sw_vers", "-productVersion"], stdout=subprocess.PIPE, universal_newlines=True).stdout.strip()
+    memory = sysctl("hw.memsize")
+    return {"model": sysctl("hw.model"), "chip": sysctl("machdep.cpu.brand_string"),
+            "memory_gb": int(memory) >> 30 if memory.isdigit() else 0, "macos": version}
+
+
+def report_problems(report):
+    """Why a report is not one the schema allows, as a list of sentences; empty when it is."""
+    fields = json_file(REPORT_SCHEMA, {}).get("fields", {})
+    flat = {}
+    for key, value in report.items():
+        if isinstance(value, dict):
+            for inner, v in value.items():
+                flat["%s.%s" % (key, inner)] = v
+        else:
+            flat[key] = value
+    problems = ["%s is not a field of a report" % k for k in flat if k not in fields]
+    for name, rule in fields.items():
+        if name not in flat:
+            if not rule.get("optional"):
+                problems.append("%s is missing" % name)
+            continue
+        v, kind = flat[name], rule["kind"]
+        if kind == "int" and (not isinstance(v, int) or isinstance(v, bool)):
+            problems.append("%s is not a whole number" % name)
+        elif kind == "number" and (not isinstance(v, (int, float)) or isinstance(v, bool)):
+            problems.append("%s is not a number" % name)
+        elif kind == "text" and not isinstance(v, str):
+            problems.append("%s is not text" % name)
+        elif kind == "list" and (not isinstance(v, list) or any(x not in rule["of"] for x in v) or len(v) > len(rule["of"])):
+            problems.append("%s is not a list of %s" % (name, ", ".join(rule["of"])))
+        else:
+            if "values" in rule and v not in rule["values"]:
+                problems.append("%s is none of %s" % (name, ", ".join(str(x) for x in rule["values"])))
+            if kind in ("int", "number") and not rule.get("min", v) <= v <= rule.get("max", v):
+                problems.append("%s is out of range" % name)
+            if kind == "text" and (len(v) > rule.get("max", len(v)) or ("pattern" in rule and not re.search(rule["pattern"], v))):
+                problems.append("%s is too long or not of the form it must have" % name)
+    return problems
+
+
+def build_report(appid, verdict=None):
+    """The report of a game's newest run, or (None, why not)."""
+    import binascii
+    cache, runs = app_cache(), [r for r in results().get(appid, []) if r.get("by") == "run"]
+    if not runs:
+        return None, "no run of app %d is recorded" % appid
+    run = runs[-1]
+    installed = installed_games(cache)
+    scan = scans(cache, {appid: installed[appid]}).get(appid, {}) if appid in installed else {}
+    early = run.get("end") == "ended" and run.get("seconds", 0) < 90
+    report = {"schema": 1, "id": binascii.hexlify(os.urandom(16)).decode(), "protium": protium_version() or "dev",
+              "game": {"app": appid, "name": (cache.get(appid, {}).get("name") or "app %d" % appid)[:120],
+                       "graphics": [g for g in run.get("loaded", []) if g != "opengl" or len(run.get("loaded", [])) == 1]},
+              "run": {"seconds": int(run.get("seconds", 0)), "end": run.get("end", "ended"),
+                      "verdict": verdict or ("stopped-by-itself" if early or run.get("end") in ("abort", "crash") else "works")},
+              "mac": mac_facts()}
+    if scan.get("engine"):
+        report["game"]["engine"] = str(scan["engine"])[:40]
+    if scan.get("bits") in (32, 64):
+        report["game"]["bits"] = scan["bits"]
+    if re.fullmatch(r"\d{3,5}x\d{3,5}", run.get("display", "")):
+        report["mac"]["display"] = run["display"]
+    if isinstance(run.get("perf"), dict):
+        report["perf"] = run["perf"]
+    problems = report_problems(report)
+    if problems:
+        return None, "the report is not one that may be sent: " + "; ".join(problems)
+    return report, None
+
+
+def report_words(report):
+    """The report as a player reads it: every field, in plain words."""
+    game, run, mac, perf = report["game"], report["run"], report["mac"], report.get("perf", {})
+    ends = {"abort": "it stopped with an error in Protium", "crash": "it crashed", "hang": "a part of it waited a minute for another",
+            "ended": "it closed"}
+    lines = ["Game: %s (Steam app %d)" % (game["name"], game["app"]),
+             "How it ran: %s; %s after %d seconds" % (run["verdict"].replace("-", " "), ends[run["end"]], run["seconds"]),
+             "Graphics: %s%s%s" % (", ".join(game["graphics"]) or "none loaded", ", %d-bit" % game["bits"] if game.get("bits") else "",
+                                   ", %s" % game["engine"] if game.get("engine") else ""),
+             "Protium: %s" % report["protium"],
+             "Mac: %s, %s, %d GB, macOS %s%s" % (mac["model"], mac["chip"], mac["memory_gb"], mac["macos"],
+                                              ", display %s" % mac["display"] if mac.get("display") else "")]
+    if perf:
+        lines.append("Speed: %s frames, %.1f ms on average, %.1f ms for the slowest in a hundred, %s longer than 50 ms; %s shaders compiled, %.0f ms waited for them"
+                     % (perf.get("frames", "?"), perf.get("avg_ms", 0), perf.get("p99_ms", 0), perf.get("long_frames", "?"),
+                        perf.get("shaders_compiled", "?"), perf.get("shader_wait_ms", 0)))
+    else:
+        lines.append("Speed: not measured")
+    lines.append("Report number: %s (name it to have this report deleted)" % report["id"])
+    return "\n".join(lines)
+
+
+def cmd_report_show(appid, as_json):
+    report, why = build_report(appid)
+    if not report:
+        die(why)
+    print(json.dumps(report, indent=1, sort_keys=True) if as_json else report_words(report))
+    return 0
+
+
 # ---- the games list
 #
 # macos/compat/games.json is the list of games someone has played on Protium and judged, and
@@ -2620,6 +2735,8 @@ def main(argv):
         sys.exit(cmd_update_install(argv[2], argv[3], int(argv[4]) if len(argv) == 5 else 0))
     elif argv in (["updates"], ["updates", "on"], ["updates", "off"]):
         sys.exit(cmd_updates(argv[1] if len(argv) > 1 else None))
+    elif len(argv) in (3, 4) and argv[:2] == ["report", "--show"] and argv[2].isdigit() and argv[3:] in ([], ["--json"]):
+        sys.exit(cmd_report_show(int(argv[2]), "--json" in argv))
     elif argv == ["games"]:
         sys.exit(cmd_games())
     elif len(argv) == 4 and argv[0] == "record" and argv[1].isdigit() and argv[2].isdigit():
