@@ -43,6 +43,10 @@
 
 set -euo pipefail
 
+# The oldest macOS the build runs on: Protium supports macOS 27.0 and later. It is part of
+# what decides a rebuild, so a change rebuilds everything this script makes.
+export MACOSX_DEPLOYMENT_TARGET=${MACOSX_DEPLOYMENT_TARGET:-27.0}
+
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 PROTON_DIR=$(cd "$SCRIPT_DIR/.." && pwd)
 BUILD_ROOT=${BUILD_ROOT:-$HOME/projects/proton-macos-build}
@@ -136,6 +140,7 @@ log "DXMT $describe ($DXMT_COMMIT)"
 wine_commit=$(git -C "$PROTON_DIR/wine" rev-parse HEAD)
 [ -z "$(git -C "$PROTON_DIR/wine" status --porcelain --untracked-files=no)" ] || wine_commit="$wine_commit-dirty"
 key="dxmt=$DXMT_COMMIT wine=$wine_commit build=$BUILD_DIR llvm=$(cat "$LLVM15_DIST/KEY") meson=$MESON_VERSION clang=$("$MINGW_BIN/clang" --version | head -1)"
+key="$key macos=$MACOSX_DEPLOYMENT_TARGET"
 export PATH="$VENV/bin:$MINGW_BIN:$PATH"
 if [ "$(cat "$BLD/.build-dxmt-key" 2>/dev/null)" != "$key" ]; then
     log "configuring $BLD"

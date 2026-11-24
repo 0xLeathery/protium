@@ -32,6 +32,10 @@
 
 set -euo pipefail
 
+# The oldest macOS the build runs on: Protium supports macOS 27.0 and later. It is part of
+# what decides a rebuild, so a change rebuilds everything this script makes.
+export MACOSX_DEPLOYMENT_TARGET=${MACOSX_DEPLOYMENT_TARGET:-27.0}
+
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 PROTON_DIR=$(cd "$SCRIPT_DIR/.." && pwd)
 WINE_ORIGIN=$PROTON_DIR/wine
@@ -197,6 +201,7 @@ CONFIGURE_ARGS=(
     # goes with GST_DIST's FFmpeg, above
     --disable-amd_ags_x64
     BISON="$BISON_BIN/bison"
+    "MACOSX_DEPLOYMENT_TARGET=$MACOSX_DEPLOYMENT_TARGET"
     "${pe_cc_vars[@]}"
 )
 
@@ -209,6 +214,17 @@ if [ ! -f "$BUILD_DIR/Makefile" ] || [ ! -f "$args_file" ] || [ "$(cat "$args_fi
     "$SRC_DIR/configure" "${CONFIGURE_ARGS[@]}"
     printf '%s\n' "$new_args" >"$args_file"
     echo "$PE_MODE" >"$mode_file"
+fi
+
+# Wine's makefiles rebuild nothing for new compiler flags: a tree built for another macOS is
+# cleaned once
+target_file=$BUILD_DIR/.build-wine-macos-target
+if [ "$(cat "$target_file" 2>/dev/null)" != "$MACOSX_DEPLOYMENT_TARGET" ]; then
+    if [ -f "$target_file" ] || [ -f "$BUILD_DIR/loader/wine" ]; then
+        log "macOS deployment target is now $MACOSX_DEPLOYMENT_TARGET: cleaning $BUILD_DIR"
+        make -C "$BUILD_DIR" clean >/dev/null
+    fi
+    echo "$MACOSX_DEPLOYMENT_TARGET" >"$target_file"
 fi
 
 ########################################################################

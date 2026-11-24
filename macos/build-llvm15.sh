@@ -21,6 +21,10 @@
 
 set -euo pipefail
 
+# The oldest macOS the build runs on: Protium supports macOS 27.0 and later. It is part of
+# what decides a rebuild, so a change rebuilds everything this script makes.
+export MACOSX_DEPLOYMENT_TARGET=${MACOSX_DEPLOYMENT_TARGET:-27.0}
+
 BUILD_ROOT=${BUILD_ROOT:-$HOME/projects/proton-macos-build}
 LLVM15_DIST=${LLVM15_DIST:-$BUILD_ROOT/llvm15-dist}
 LLVM15_TAG=${LLVM15_TAG:-llvmorg-15.0.7}
@@ -38,7 +42,7 @@ die() { echo "build-llvm15.sh: error: $*" >&2; exit 1; }
 command -v cmake >/dev/null || die "cmake not installed: brew install cmake"
 command -v ninja >/dev/null || die "ninja not installed: brew install ninja"
 
-key="tag=$LLVM15_TAG commit=$LLVM15_COMMIT"
+key="tag=$LLVM15_TAG commit=$LLVM15_COMMIT macos=$MACOSX_DEPLOYMENT_TARGET"
 if [ -f "$LLVM15_DIST/lib/libLLVMCore.a" ] && [ "$(cat "$LLVM15_DIST/KEY" 2>/dev/null)" = "$key" ]; then
     log "LLVM $LLVM15_TAG: built already in $LLVM15_DIST"
     exit 0

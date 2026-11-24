@@ -23,6 +23,10 @@
 
 set -euo pipefail
 
+# The oldest macOS the build runs on: Protium supports macOS 27.0 and later. It is part of
+# what decides a rebuild, so a change rebuilds everything this script makes.
+export MACOSX_DEPLOYMENT_TARGET=${MACOSX_DEPLOYMENT_TARGET:-27.0}
+
 BUILD_ROOT=${BUILD_ROOT:-$HOME/projects/proton-macos-build}
 VULKAN_DIST=${VULKAN_DIST:-$BUILD_ROOT/vulkan-dist}
 VULKAN_TAG=${VULKAN_TAG:-vulkan-sdk-1.4.363.0}
@@ -46,7 +50,7 @@ free_gb=$(df -g "$BUILD_ROOT" | awk 'NR==2 {print $4}')
 log "free disk space: ${free_gb} GB"
 [ "$free_gb" -ge "$MIN_FREE_GB" ] || die "only ${free_gb} GB free on $BUILD_ROOT (minimum ${MIN_FREE_GB} GB)"
 
-key="tag=$VULKAN_TAG headers=$VULKAN_HEADERS_COMMIT loader=$VULKAN_LOADER_COMMIT"
+key="tag=$VULKAN_TAG headers=$VULKAN_HEADERS_COMMIT loader=$VULKAN_LOADER_COMMIT macos=$MACOSX_DEPLOYMENT_TARGET"
 if [ -f "$VULKAN_DIST/lib/libvulkan.1.dylib" ] && [ "$(cat "$VULKAN_DIST/KEY" 2>/dev/null)" = "$key" ]; then
     log "Vulkan loader $VULKAN_TAG: built already in $VULKAN_DIST"
     exit 0

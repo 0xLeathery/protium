@@ -41,6 +41,10 @@
 
 set -euo pipefail
 
+# The oldest macOS the build runs on: Protium supports macOS 27.0 and later. It is part of
+# what decides a rebuild, so a change rebuilds everything this script makes.
+export MACOSX_DEPLOYMENT_TARGET=${MACOSX_DEPLOYMENT_TARGET:-27.0}
+
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 BUILD_ROOT=${BUILD_ROOT:-$HOME/projects/proton-macos-build}
 TOOLCHAIN_DIR=${TOOLCHAIN_DIR:-$HOME/projects/proton-macos-toolchain/llvm-mingw-20261020-ucrt-macos-universal}
@@ -117,7 +121,7 @@ else
     describe="${describe:0:24}+local"
 fi
 # what a build directory was configured for: the version says whether there are patches
-config_key="$FEX_COMMIT $describe"
+config_key="$FEX_COMMIT $describe macos=$MACOSX_DEPLOYMENT_TARGET"
 
 ########################################################################
 # 2. libarm64ecfex.dll (the arguments of FEX_CMAKE_ARGS and FEX_arm64ec_CMAKE_ARGS in Makefile.in)
@@ -149,10 +153,14 @@ unix_build=$BUILD_ROOT/fex-unixlib
 unix_libdir=$FEX_DIST/lib/wine/aarch64-unix
 if [ ! -f "$unix_build/build.ninja" ] || [ "$(cat "$unix_build/.build-fex-commit" 2>/dev/null)" != "$config_key" ]; then
     log "configuring $unix_build"
+    # a fresh tree: CMake keeps the deployment target of the tree's first configure, and ninja
+    # rebuilds nothing for it
+    rm -rf "$unix_build"
     # Apple's compiler by its path: llvm-mingw's clang++ comes first in PATH by now
     cmake -G Ninja -S "$FEX_SRC/Source/Windows/UnixLib" -B "$unix_build" \
         -DCMAKE_CXX_COMPILER=/usr/bin/clang++ \
         -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES=arm64 \
+        -DCMAKE_OSX_DEPLOYMENT_TARGET="$MACOSX_DEPLOYMENT_TARGET" \
         -DCMAKE_INSTALL_PREFIX="$FEX_DIST" -DCMAKE_INSTALL_LIBDIR="$unix_libdir"
     echo "$config_key" >"$unix_build/.build-fex-commit"
 fi

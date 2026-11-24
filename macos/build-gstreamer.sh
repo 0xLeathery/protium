@@ -31,6 +31,10 @@
 
 set -euo pipefail
 
+# The oldest macOS the build runs on: Protium supports macOS 27.0 and later. It is part of
+# what decides a rebuild, so a change rebuilds everything this script makes.
+export MACOSX_DEPLOYMENT_TARGET=${MACOSX_DEPLOYMENT_TARGET:-27.0}
+
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 PROTON_DIR=$(cd "$SCRIPT_DIR/.." && pwd)
 BUILD_ROOT=${BUILD_ROOT:-$HOME/projects/proton-macos-build}
@@ -79,6 +83,7 @@ fetch orc https://github.com/GStreamer/orc.git "$(git -C "$PROTON_DIR" ls-tree H
 fetch ffmpeg https://github.com/FFmpeg/FFmpeg.git "$(git -C "$PROTON_DIR" ls-tree HEAD ffmpeg | awk '{print $3}')"
 
 key="gstreamer=$(git -C "$GST_SRC/gstreamer" rev-parse HEAD) orc=$(git -C "$GST_SRC/orc" rev-parse HEAD) ffmpeg=$(git -C "$GST_SRC/ffmpeg" rev-parse HEAD) script=$(shasum "$0" | cut -c1-12)"
+key="$key macos=$MACOSX_DEPLOYMENT_TARGET"
 if [ "$(cat "$GST_DIST/KEY" 2>/dev/null)" = "$key" ]; then
     log "up to date: $GST_DIST"
     exit 0

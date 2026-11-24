@@ -25,6 +25,10 @@
 
 set -euo pipefail
 
+# The oldest macOS the build runs on: Protium supports macOS 27.0 and later. It is part of
+# what decides a rebuild, so a change rebuilds everything this script makes.
+export MACOSX_DEPLOYMENT_TARGET=${MACOSX_DEPLOYMENT_TARGET:-27.0}
+
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 PROTON_DIR=$(cd "$SCRIPT_DIR/.." && pwd)
 BUILD_ROOT=${BUILD_ROOT:-$HOME/projects/proton-macos-build}
@@ -32,6 +36,12 @@ BUILD_DIR=${BUILD_DIR:-$BUILD_ROOT/wine-arm64ec}
 BRIDGE_DIST=${BRIDGE_DIST:-$BUILD_ROOT/steam-bridge-dist}
 TOOLCHAIN_DIR=${TOOLCHAIN_DIR:-$HOME/projects/proton-macos-toolchain/llvm-mingw-20261020-ucrt-macos-universal}
 OBJ_ROOT=$BUILD_ROOT/steam-bridge-build
+# objects built for another macOS are not reused
+if [ "$(cat "$OBJ_ROOT/.macos-target" 2>/dev/null)" != "$MACOSX_DEPLOYMENT_TARGET" ]; then
+    rm -rf "$OBJ_ROOT"
+    mkdir -p "$OBJ_ROOT"
+    echo "$MACOSX_DEPLOYMENT_TARGET" >"$OBJ_ROOT/.macos-target"
+fi
 
 log() { echo ":: $*" >&2; }
 die() { echo "build-steam-bridge.sh: error: $*" >&2; exit 1; }
@@ -49,6 +59,11 @@ grep -q '^PE_ARCHS = .*i386' "$BUILD_DIR/Makefile" || die "$BUILD_DIR has no i38
 build_module() {
     local name=$1 src=$2 obj=$OBJ_ROOT/$1
     mkdir -p "$obj"
+    # makedep takes SUBDIRS as words: a checkout whose path has a space in it is reached
+    # through a link that has none, with the folder's own name, which makedep names the outputs by
+    case "$src" in
+    *" "*) mkdir -p "$OBJ_ROOT/src"; ln -sfn "$src" "$OBJ_ROOT/src/$(basename "$src")"; src=$OBJ_ROOT/src/$(basename "$src") ;;
+    esac
     log "configuring $name in $obj"
     # The same rewrite as make/rules-makedep.mk, for this Wine build tree. Every PE file of
     # the module goes into PE_ARCHS other than aarch64; the Unix side links against ntdll.so.

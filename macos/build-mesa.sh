@@ -92,12 +92,16 @@ FLEX=/usr/bin/flex
 
 # Only Apple's compilers, which the native files name, and none of the caller's flags or
 # pkg-config paths: each stage sets the search it needs.
+# The oldest macOS the driver runs on (Protium supports macOS 27.0 and later), kept through
+# the unset below; it is part of the key, so a change rebuilds the driver
+deployment_target=${MACOSX_DEPLOYMENT_TARGET:-27.0}
 unset CC CXX OBJC OBJCXX CFLAGS CXXFLAGS OBJCFLAGS CPPFLAGS LDFLAGS PKG_CONFIG_PATH PKG_CONFIG_LIBDIR MACOSX_DEPLOYMENT_TARGET
+export MACOSX_DEPLOYMENT_TARGET=$deployment_target
 
 key="mesa=$MESA_COMMIT options=[$(echo $COMMON_OPTIONS $TOOLS_OPTIONS $DRIVER_OPTIONS)]"
 key="$key llvm=$("$LLVM_CONFIG" --version) spirv=[$(PKG_CONFIG_PATH=$brew_prefix/lib/pkgconfig pkg-config --modversion LLVMSPIRVLib SPIRV-Tools | paste -sd ' ' -)]"
 key="$key bison=[$("$BISON" --version | head -1)] flex=[$("$FLEX" --version | head -1)] meson=$MESON_VERSION python=$python_version [$PYTHON_REQUIREMENTS]"
-key="$key cc=[$(/usr/bin/clang --version | head -1)] sdk=$(xcrun --show-sdk-version)"
+key="$key cc=[$(/usr/bin/clang --version | head -1)] sdk=$(xcrun --show-sdk-version) macos=$MACOSX_DEPLOYMENT_TARGET"
 if [ -f "$MESA_DIST/lib/$DRIVER" ] && [ -f "$MESA_DIST/share/vulkan/icd.d/$ICD_JSON" ] && [ "$(cat "$MESA_DIST/KEY" 2>/dev/null)" = "$key" ]; then
     log "Mesa $(cat "$MESA_DIST/DESCRIBE" 2>/dev/null): KosmicKrisp built already in $MESA_DIST"
     exit 0
