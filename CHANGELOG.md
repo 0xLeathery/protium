@@ -10,6 +10,35 @@ written. "Known problems" is a heading of our own, next to Keep a Changelog's.
 
 ## [Unreleased]
 
+### Added
+
+- Games can use the full resolution of a Retina or 4K screen. Until now a game on such a screen
+  was offered a quarter of its pixels (1920 × 1080 at most on a 4K monitor) and the picture was
+  enlarged. Protium now does this by itself when your main screen is a high-density one, and
+  changes nothing on other screens. "Use the screen's full resolution in games" in Protium's
+  window, or `steamplay hires off`, turns it off.
+- "Show frame rate in games" in Protium's window draws macOS's performance display over every
+  game (`steamplay hud on` did this before, from the command line only).
+
+### Changed
+
+- On a Retina or 4K screen a game that picks the screen's own resolution now draws four times
+  as many pixels as before and can run slower. Choose a lower resolution in the game's settings,
+  or turn full resolution off in Protium.
+
+### Fixed
+
+- A full-screen game at a resolution of another shape than the screen could have its black bars
+  in the wrong place, and the bars stayed after the game left full screen.
+
+### Known problems
+
+- With full resolution on, launchers and games in a window are half as large on screen as
+  before.
+- With screens of different kinds connected, Protium follows the main one.
+- This has not yet been tried on a real Retina or 4K screen, only by making a normal screen
+  behave like one.
+
 ## [0.3.1] - 2026-11-24
 
 ### Added
