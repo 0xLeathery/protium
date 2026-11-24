@@ -75,6 +75,40 @@ Protium builds on athei's macOS work: Mesa, DXMT, vkd3d-proton and FEX come from
 commits each build script names, and Direct3D 9 is athei's mtld3d. Protium's own fixes to those
 projects are in [macos/patches](../macos/patches), and each one says at its head what it fixes.
 
+## How Protium compares
+
+Several projects run Windows games on Apple Silicon, and most of them run more games than Protium
+does today. If you want to play tonight, use one of them. What differs is the stack underneath.
+As of November 2026, from each project's own pages:
+
+| Project | What runs the game | The game's x86 code | Steam | Cost |
+|---|---|---|---|---|
+| **Protium** | Valve's Proton 11, with Wine as a native arm64 program | FEX, inside Wine | Mac Steam's own Steam Play | Free, GPL-3.0 |
+| [Hadron](https://github.com/Broyojo/hadron) | Wine as a native arm64 program | FEX, inside Wine | Mac Steam's own Steam Play | Free, open source |
+| [CrossOver](https://www.codeweavers.com/crossover) | CodeWeavers' Wine, with Apple's D3DMetal or DXMT | Rosetta 2; a FEX build is in preview | Windows Steam, installed in a bottle | Paid |
+| [NotProton](https://github.com/NotProtonNot/NotProton) | Your copy of CrossOver | As CrossOver | Mac Steam's own Steam Play | Free, GPL-3.0; needs CrossOver |
+| [Bridgeplay](https://bridgeplay.dev) | CodeWeavers' Wine, with Apple's D3DMetal | Rosetta 2 | Mac Steam's own Steam Play | Free, GPL-3.0 |
+| [steamac](https://github.com/fxgl/steamac) | Proton on Valve's ARM64 SteamOS, in a virtual machine | FEX, in the virtual machine | Linux Steam, in the virtual machine | Free, Apache-2.0 |
+
+What Protium sets out to do differently:
+
+- **Valve's Proton tree.** Protium is a port of Proton 11 with its Wine, Steam bridge and
+  launcher, not a separate Wine build, and it follows Proton as it moves.
+- **Open graphics layers.** Direct3D goes to Metal through mtld3d, DXMT and vkd3d-proton, not
+  through Apple's D3DMetal, so every layer can be read and fixed.
+- **Nothing to buy and nothing under Rosetta.** Only the game's own code is translated. Wine, the
+  Direct3D layers and the Steam bridge are arm64 code.
+- **No code added to Steam.** NotProton made it widely known that Mac Steam contains Steam Play,
+  switched off. NotProton's way of switching it on, which Bridgeplay also uses, adds a library to
+  the Steam app and signs the app again. Protium writes one line to a configuration file that
+  Steam reads itself.
+
+Hadron is the closest relative, with nearly the same parts, and
+[mach9](https://github.com/athei/mach9) is athei's own native Wine with Direct3D 9 on Metal.
+
+The price of Protium's choices is maturity: it needs macOS 27, has been played on few Macs, and
+many games do not start yet. [Status](#status) is the honest list.
+
 ## Install
 
 You need an Apple Silicon Mac with macOS 27.0 or later and Steam for Mac.
