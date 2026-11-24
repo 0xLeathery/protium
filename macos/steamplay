@@ -155,12 +155,16 @@ def windows_games():
     return games
 
 
+# Steam writes a backslash, a quote, a newline and a tab in a value as \\, \", \n and \t
+VDF_ESCAPES = {"n": "\n", "t": "\t"}
+
+
 def vdf_quote(value):
-    return value.replace("\\", "\\\\").replace('"', '\\"')
+    return value.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n").replace("\t", "\\t")
 
 
 def vdf_unquote(value):
-    return re.sub(r"\\(.)", r"\1", value)
+    return re.sub(r"\\(.)", lambda m: VDF_ESCAPES.get(m.group(1), m.group(1)), value)
 
 
 def app_setting(text, appid, key, change):
