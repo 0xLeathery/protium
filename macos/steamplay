@@ -2079,7 +2079,9 @@ def cmd_hud(state):
         open(HUD_FLAG, "w").close()
     elif state == "off" and os.path.exists(HUD_FLAG):
         os.remove(HUD_FLAG)
-    print("the performance HUD is %s for games started from now on" % ("on" if os.path.exists(HUD_FLAG) else "off"))
+    print("Performance HUD in games: %s" % ("on" if os.path.exists(HUD_FLAG) else "off"))
+    if state:
+        print("This applies to games started from now on.")
 
 
 HIRES = os.path.join(HOME_DIR, "hires")

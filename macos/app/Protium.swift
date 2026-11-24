@@ -28,6 +28,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var updateHasImage = false
     var tellCheckbox: NSButton!
     var hiresCheckbox: NSButton!
+    var hudCheckbox: NSButton!
     var notifyButton: NSButton!
     /// what steamplay printed since the last command started, for the lines the app reads
     var lastOutput = ""
@@ -87,6 +88,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         hiresCheckbox.state = .on
         hiresCheckbox.toolTip = "On a Retina or 4K screen, games can use every pixel. Turn this off if games run too slowly; you can also pick a lower resolution in a game's own settings."
         options.addArrangedSubview(hiresCheckbox)
+        hudCheckbox = NSButton(checkboxWithTitle: "Show frame rate in games", target: self, action: #selector(hudChanged))
+        hudCheckbox.toolTip = "Draws macOS's performance display over every game: frames per second and frame times."
+        options.addArrangedSubview(hudCheckbox)
         tellCheckbox = NSButton(checkboxWithTitle: "Tell me about new versions", target: self, action: #selector(tellChanged))
         tellCheckbox.state = .on
         options.addArrangedSubview(tellCheckbox)
@@ -94,6 +98,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         options.addArrangedSubview(notifyButton)
         showNotificationState()
         askSteamplay(["hires"]) { text in self.hiresCheckbox.state = text.contains("in games: off") ? .off : .on }
+        askSteamplay(["hud"]) { text in self.hudCheckbox.state = text.contains("in games: on") ? .on : .off }
 
         let stack = NSStackView(views: [title, updateRow, scroll, row, options])
         stack.orientation = .vertical
@@ -218,6 +223,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Checked is "automatic": full resolution when the main screen is a HiDPI one.
     @objc func hiresChanged() {
         askSteamplay(["hires", hiresCheckbox.state == .on ? "auto" : "off"]) { text in
+            self.say("\n" + text)
+        }
+    }
+
+    @objc func hudChanged() {
+        askSteamplay(["hud", hudCheckbox.state == .on ? "on" : "off"]) { text in
             self.say("\n" + text)
         }
     }
