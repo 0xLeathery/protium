@@ -43,6 +43,8 @@
 #                   Giving it up costs two kernel traps for each such call; keeping it makes
 #                   the native code of that call slower where it mostly writes memory.
 #                   macos/tests/cpu-bench.sh measures both.
+#   WINE_MAC_RETINA auto, 1 or 0: whether the game is told a HiDPI screen's pixels (see "hires"
+#                   in macos/steamplay, which sets it when it is not set)
 #   MTL_HUD_ENABLED 1 to have macOS draw its Metal performance HUD over the game: frames per
 #                   second and frame times, with lines DXMT adds. "macos/steamplay hud on" sets
 #                   it for every game.
@@ -120,6 +122,12 @@ export WINEDLLOVERRIDES="${WINEDLLOVERRIDES:-mscoree,mshtml=}"
 # macOS's Metal performance HUD, for every game while "macos/steamplay hud on" has left its file
 if [ -z "${MTL_HUD_ENABLED:-}" ] && [ -e "${STEAMPLAY_HOME:-$HOME/Library/Application Support/SteamPlay}/hud" ]; then
     export MTL_HUD_ENABLED=1
+fi
+# Whether the game is told a HiDPI screen's pixels or its points ("macos/steamplay hires"); Wine's
+# Mac driver reads this as it starts, and every process of the game has to get the same answer
+if [ -z "${WINE_MAC_RETINA:-}" ]; then
+    WINE_MAC_RETINA=$("$PROTIUM_PYTHON" "$SCRIPT_DIR/steamplay" hires --value "$appid" 2>/dev/null) || WINE_MAC_RETINA=auto
+    export WINE_MAC_RETINA
 fi
 # GLib in lib/external would load GIO modules from Homebrew's folder, which on a player's Mac
 # holds modules for whatever GLib Homebrew has; it gets a folder of the bundle's own instead
