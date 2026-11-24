@@ -188,9 +188,10 @@ if [ -f "$TEST_DMG" ]; then
         until "$@" 2>/dev/null; do n=$((n + 1)); [ $n -gt $limit ] && return 1; perl -e 'select(undef, undef, undef, 0.25)'; done
     }
     version_of() { cat "$1/Contents/Resources/steamplay/VERSION" 2>/dev/null; }
+    in_place() { [ "$(version_of "$APP")" = "$1" ]; }
     says update-fetch "^ok fetched .*Protium-$TEST_VERSION.dmg $TEST_VERSION" env PROTIUM_UPDATE_IMAGE="$TEST_DMG" bash -c "$(declare -f steamplay); E='$E' APP='$APP' MACOS_DIR='$MACOS_DIR'; steamplay update --fetch"
     says update-install "^ok installing $TEST_VERSION" steamplay update --install "$E/cache/Protium-$TEST_VERSION.dmg" "$TEST_VERSION"
-    if wait_for 20 test "$(version_of "$APP")" = "$TEST_VERSION"; then
+    if wait_for 20 in_place "$TEST_VERSION"; then
         pass update-swapped "the app in place is $TEST_VERSION, the old one waits next to it"
     else
         fail update-swapped "the app in place is $(version_of "$APP")"
@@ -206,7 +207,7 @@ if [ -f "$TEST_DMG" ]; then
     rm -rf "$APP" "$E/home/update-pending.json"
     cp -Rc "$RELEASE_APP" "$APP" 2>/dev/null || ditto "$RELEASE_APP" "$APP"
     steamplay update --install "$TEST_DMG" "$TEST_VERSION" >"$E/rollback.out" 2>&1
-    wait_for 20 test "$(version_of "$APP")" = "$TEST_VERSION" || fail rollback-swapped "the new app was never put in place: $(cat "$E/rollback.out")"
+    wait_for 20 in_place "$TEST_VERSION" && pass rollback-swapped "the new app is put in place" || fail rollback-swapped "the new app was never put in place: $(cat "$E/rollback.out")"
     if wait_for 45 grep -q '"failed"' "$E/home/update-pending.json" && [ "$(version_of "$APP")" = "$released" ]; then
         pass rollback "the new app did not start, and $released is back in place"
     else

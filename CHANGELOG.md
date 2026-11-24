@@ -12,8 +12,14 @@ written. "Known problems" is a heading of our own, next to Keep a Changelog's.
 
 ### Added
 
-- Protium asks GitHub for new versions once a day at most and says what each one changes.
-  `steamplay updates off` turns the asking off.
+- Protium updates itself: when a newer version is out, its window shows what that version
+  changes and an Update button. The download is only installed if it is signed by Protium's
+  developer and notarized by Apple, and the old version comes back if the new one does not
+  start. After an update the window says what is new.
+- One notification when you start a game and a newer version is out, once per version. macOS
+  asks for permission to notify at the end of "Set up Steam".
+- Protium asks GitHub for new versions once a day at most. The checkbox "Tell me about new
+  versions" in its window, or `steamplay updates off`, turns the asking off.
 
 ### Fixed
 
