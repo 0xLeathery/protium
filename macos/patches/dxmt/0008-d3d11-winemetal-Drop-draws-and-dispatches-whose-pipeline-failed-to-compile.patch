@@ -1,0 +1,218 @@
+d3d11, winemetal: Drop draws and dispatches whose pipeline failed to compile.
+
+When a graphics, geometry, tessellation or compute pipeline failed to compile, the context gave
+the encoder no pipeline at all and encoded the draws and dispatches anyway. They then ran with
+the pipeline the encoder had before, with the wrong shaders and bindings, or with none, which
+faults on the GPU.
+
+The context now sets "no pipeline" in that case, and winemetal drops the draws and dispatches
+that follow until a pipeline is set again. Passes DXMT encodes in the middle of a game's draws
+(the pre-raster and tile barriers) set the game's pipeline again afterwards, and now set "no
+pipeline" again too when that is what the game's last pipeline was (last_pso_failed). A failed
+pipeline costs the draws that use it, not the frame.
+
+LOCAL TO THIS PORT, NOT FOR DXMT. Applied by macos/build-dxmt.sh to
+github.com/athei/dxmt at 01e59e9bde030f105937f249afaac92ada01b4d7, after 0001 to 0007.
+Written with an AI assistant (Claude). DXMT does not accept contributions made or
+co-authored by AI (its CONTRIBUTING.md), so this patch must not be sent to it as a pull
+request. What was found may be reported to its developers, for them to write their own fix;
+this patch leaves here when the pinned commit has one.
+---
+diff --git a/src/d3d11/d3d11_context_impl.cpp b/src/d3d11/d3d11_context_impl.cpp
+index 551d040..14bbaa1 100644
+--- a/src/d3d11/d3d11_context_impl.cpp
++++ b/src/d3d11/d3d11_context_impl.cpp
+@@ -5201,12 +5201,12 @@ public:
+       pso->GetPipeline(&GraphicsPipeline); // may block
+       enc.tess_num_output_control_point_element = GraphicsPipeline.NumControlPointOutputElement;
+       enc.tess_threads_per_patch = GraphicsPipeline.ThreadsPerPatch;
+-      if (!GraphicsPipeline.PipelineState)
+-        return;
++      // no pipeline when it failed to compile: winemetal then drops the draws that follow
+       auto &cmd = enc.encodeRenderCommand<wmtcmd_render_setpso>();
+       cmd.type = WMTRenderCommandSetPSO;
+       cmd.pso = GraphicsPipeline.PipelineState;
+       render_encoder->last_pso = GraphicsPipeline.PipelineState;
++      render_encoder->last_pso_failed = !GraphicsPipeline.PipelineState;
+     });
+ 
+     cmdbuf_state = CommandBufferState::TessellationRenderPipelineReady;
+@@ -5248,12 +5248,12 @@ public:
+       render_encoder->use_geometry = 1;
+       MTL_COMPILED_GRAPHICS_PIPELINE GraphicsPipeline{};
+       pso->GetPipeline(&GraphicsPipeline); // may block
+-      if (!GraphicsPipeline.PipelineState)
+-        return;
++      // no pipeline when it failed to compile: winemetal then drops the draws that follow
+       auto &cmd = enc.encodeRenderCommand<wmtcmd_render_setpso>();
+       cmd.type = WMTRenderCommandSetPSO;
+       cmd.pso = GraphicsPipeline.PipelineState;
+       render_encoder->last_pso = GraphicsPipeline.PipelineState;
++      render_encoder->last_pso_failed = !GraphicsPipeline.PipelineState;
+     });
+ 
+     cmdbuf_state = CommandBufferState::GeometryRenderPipelineReady;
+@@ -5313,12 +5313,12 @@ public:
+     EmitST([pso = std::move(pipeline)](ArgumentEncodingContext& enc) {
+       MTL_COMPILED_GRAPHICS_PIPELINE GraphicsPipeline{};
+       pso->GetPipeline(&GraphicsPipeline); // may block
+-      if (!GraphicsPipeline.PipelineState)
+-        return;
++      // no pipeline when it failed to compile: winemetal then drops the draws that follow
+       auto &cmd = enc.encodeRenderCommand<wmtcmd_render_setpso>();
+       cmd.type = WMTRenderCommandSetPSO;
+       cmd.pso = GraphicsPipeline.PipelineState;
+       enc.currentRenderEncoder()->last_pso = GraphicsPipeline.PipelineState;
++      enc.currentRenderEncoder()->last_pso_failed = !GraphicsPipeline.PipelineState;
+     });
+ 
+     cmdbuf_state = CommandBufferState::RenderPipelineReady;
+@@ -5484,8 +5484,7 @@ public:
+                ArgumentEncodingContext &enc) {
+       MTL_COMPILED_COMPUTE_PIPELINE ComputePipeline;
+       pso->GetPipeline(&ComputePipeline); // may block
+-      if (!ComputePipeline.PipelineState)
+-        return;
++      // no pipeline when it failed to compile: winemetal then drops the dispatches that follow
+       auto &cmd = enc.encodeComputeCommand<wmtcmd_compute_setpso>();
+       cmd.type = WMTComputeCommandSetPSO;
+       cmd.pso = ComputePipeline.PipelineState;
+diff --git a/src/dxmt/dxmt_command.cpp b/src/dxmt/dxmt_command.cpp
+index 9512064..1d6344b 100644
+--- a/src/dxmt/dxmt_command.cpp
++++ b/src/dxmt/dxmt_command.cpp
+@@ -418,10 +418,11 @@ TileBarrierContext::dispatch() {
+     cmd_dispatch.width = kBarrierTileSize;
+     cmd_dispatch.height = kBarrierTileSize;
+ 
+-    if (auto pso_recover = ctx_.currentRenderEncoder()->last_pso) {
++    auto render_encoder = ctx_.currentRenderEncoder();
++    if (render_encoder->last_pso || render_encoder->last_pso_failed) {
+       auto &cmd_recover = ctx_.encodeRenderCommand<wmtcmd_render_setpso>();
+       cmd_recover.type = WMTRenderCommandSetPSO;
+-      cmd_recover.pso = pso_recover;
++      cmd_recover.pso = render_encoder->last_pso; // none when it failed: draws stay dropped
+     }
+   }
+ }
+diff --git a/src/dxmt/dxmt_context.cpp b/src/dxmt/dxmt_context.cpp
+index 6e546c2..ef30929 100644
+--- a/src/dxmt/dxmt_context.cpp
++++ b/src/dxmt/dxmt_context.cpp
+@@ -161,10 +161,10 @@ ArgumentEncodingContext::encodeStreamOutputFunction(WMT::RenderPipelineState pso
+   run.base_instance = 0;
+   run.instance_count = 1;
+   encodePreRasterBarrier();
+-  if (encoder->last_pso) {
++  if (encoder->last_pso || encoder->last_pso_failed) {
+     auto &restore_pso = encodeRenderCommand<wmtcmd_render_setpso>();
+     restore_pso.type = WMTRenderCommandSetPSO;
+-    restore_pso.pso = encoder->last_pso;
++    restore_pso.pso = encoder->last_pso; // none when it failed: the draws that follow stay dropped
+   }
+ }
+ 
+diff --git a/src/dxmt/dxmt_context.hpp b/src/dxmt/dxmt_context.hpp
+index c68750d..28a2be7 100644
+--- a/src/dxmt/dxmt_context.hpp
++++ b/src/dxmt/dxmt_context.hpp
+@@ -318,6 +318,9 @@ struct RenderEncoderData : EncoderData {
+   uint32_t pre_raster_barriers = 0;
+   TileBarrierPSOKey tile_barrier_pso_key = {};
+   WMT::RenderPipelineState last_pso = {};
++  /* the game's last pipeline failed to compile: passes that set their own pipeline set "none"
++     again afterwards, so that the game's draws stay dropped */
++  bool last_pso_failed = false;
+ };
+ 
+ struct ComputeEncoderData : EncoderData {
+diff --git a/src/winemetal/unix/winemetal_unix.c b/src/winemetal/unix/winemetal_unix.c
+index eeaf6dd..8f2dd5c 100644
+--- a/src/winemetal/unix/winemetal_unix.c
++++ b/src/winemetal/unix/winemetal_unix.c
+@@ -795,13 +795,50 @@ _MTLBlitCommandEncoder_encodeCommands(void *obj) {
+   return STATUS_SUCCESS;
+ }
+ 
++/* A set-pipeline command without a pipeline says that the pipeline of the draws or dispatches
++   that follow failed to compile. Those are dropped until a pipeline is set again: encoded, they
++   would run with the pipeline set before, or with none, and fault on the GPU. */
++static bool
++compute_command_dispatches(enum WMTComputeCommandType type) {
++  return type == WMTComputeCommandDispatch || type == WMTComputeCommandDispatchThreads ||
++         type == WMTComputeCommandDispatchIndirect;
++}
++
++static bool
++render_command_draws(enum WMTRenderCommandType type) {
++  switch (type) {
++  case WMTRenderCommandDraw:
++  case WMTRenderCommandDrawIndexed:
++  case WMTRenderCommandDrawIndirect:
++  case WMTRenderCommandDrawIndexedIndirect:
++  case WMTRenderCommandDrawMeshThreadgroups:
++  case WMTRenderCommandDrawMeshThreadgroupsIndirect:
++  case WMTRenderCommandDXMTGeometryDraw:
++  case WMTRenderCommandDXMTGeometryDrawIndexed:
++  case WMTRenderCommandDXMTGeometryDrawIndirect:
++  case WMTRenderCommandDXMTGeometryDrawIndexedIndirect:
++  case WMTRenderCommandDXMTTessellationMeshDraw:
++  case WMTRenderCommandDXMTTessellationMeshDrawIndexed:
++  case WMTRenderCommandDXMTTessellationMeshDrawIndirect:
++  case WMTRenderCommandDXMTTessellationMeshDrawIndexedIndirect:
++    return true;
++  default:
++    return false;
++  }
++}
++
+ static NTSTATUS
+ _MTLComputeCommandEncoder_encodeCommands(void *obj) {
+   struct unixcall_generic_obj_cmd_noret *params = obj;
+   const struct wmtcmd_base *next = params->cmd_head.ptr;
+   id<MTLComputeCommandEncoder> encoder = (id<MTLComputeCommandEncoder>)params->encoder;
+   MTLSize threadgroup_size = {0, 0, 0};
++  bool pso_set = true;
+   while (next) {
++    if (!pso_set && compute_command_dispatches((enum WMTComputeCommandType)next->type)) {
++      next = next->next.ptr;
++      continue;
++    }
+     switch ((enum WMTComputeCommandType)next->type) {
+     default:
+       assert(!next->type && "unhandled compute command type");
+@@ -827,7 +864,9 @@ _MTLComputeCommandEncoder_encodeCommands(void *obj) {
+     }
+     case WMTComputeCommandSetPSO: {
+       struct wmtcmd_compute_setpso *body = (struct wmtcmd_compute_setpso *)next;
+-      [encoder setComputePipelineState:(id<MTLComputePipelineState>)body->pso];
++      pso_set = body->pso != NULL_OBJECT_HANDLE;
++      if (pso_set)
++        [encoder setComputePipelineState:(id<MTLComputePipelineState>)body->pso];
+       threadgroup_size.width = body->threadgroup_size.width;
+       threadgroup_size.height = body->threadgroup_size.height;
+       threadgroup_size.depth = body->threadgroup_size.depth;
+@@ -891,7 +930,12 @@ _MTLRenderCommandEncoder_encodeCommands(void *obj) {
+   struct unixcall_generic_obj_cmd_noret *params = obj;
+   const struct wmtcmd_base *next = params->cmd_head.ptr;
+   id<MTLRenderCommandEncoder> encoder = (id<MTLRenderCommandEncoder>)params->encoder;
++  bool pso_set = true;
+   while (next) {
++    if (!pso_set && render_command_draws((enum WMTRenderCommandType)next->type)) {
++      next = next->next.ptr;
++      continue;
++    }
+     switch ((enum WMTRenderCommandType)next->type) {
+     default:
+       assert(!next->type && "unhandled render command type");
+@@ -976,7 +1020,9 @@ _MTLRenderCommandEncoder_encodeCommands(void *obj) {
+     }
+     case WMTRenderCommandSetPSO: {
+       struct wmtcmd_render_setpso *body = (struct wmtcmd_render_setpso *)next;
+-      [encoder setRenderPipelineState:(id<MTLRenderPipelineState>)body->pso];
++      pso_set = body->pso != NULL_OBJECT_HANDLE;
++      if (pso_set)
++        [encoder setRenderPipelineState:(id<MTLRenderPipelineState>)body->pso];
+       break;
+     }
+     case WMTRenderCommandSetDSSO: {
