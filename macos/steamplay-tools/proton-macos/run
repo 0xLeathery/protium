@@ -2,6 +2,10 @@
 # Steam Play compatibility tool "proton-macos" (installed by macos/steamplay into Steam's
 # compatibilitytools.d): Steam runs "<this> <verb> <game command...>" for a game mapped to it, and
 # this hands the Windows game to the macOS Proton build. See macos/steamplay.
+# where the checkout and the build root are: protium.conf, written next to this script by
+# macos/steamplay when it installed the tool (the environment wins over it)
+conf="$(dirname "$0")/protium.conf"
+[ -f "$conf" ] && . "$conf"
 PROTON_DIR=${PROTON_DIR:-$HOME/projects/Proton/macos}
 LOG=${STEAMPLAY_TOOL_LOG:-$HOME/projects/proton-macos-build/evidence/steamplay/probe.log}
 # what Steam asked for, for diagnosis (not the account's name, which Steam also passes)

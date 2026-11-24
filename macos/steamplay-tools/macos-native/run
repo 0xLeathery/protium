@@ -2,6 +2,11 @@
 # Steam Play compatibility tool "macos-native" (installed by macos/steamplay into Steam's
 # compatibilitytools.d): a game mapped to it gets its Mac build, which Steam would not choose while
 # it takes this Mac for a Linux machine, and runs unchanged. See macos/steamplay.
+# where the checkout and the build root are: protium.conf, written next to this script by
+# macos/steamplay when it installed the tool (the environment wins over it)
+conf="$(dirname "$0")/protium.conf"
+[ -f "$conf" ] && . "$conf"
+PROTON_DIR=${PROTON_DIR:-$HOME/projects/Proton/macos}
 LOG=${STEAMPLAY_TOOL_LOG:-$HOME/projects/proton-macos-build/evidence/steamplay/probe.log}
 # what Steam asked for, for diagnosis (not the account's name, which Steam also passes)
 { echo "=== $(date '+%F %T') macos-native argv: $*"; echo "cwd: $(pwd)"
@@ -13,7 +18,7 @@ case $verb in
         # machine, and an app bundle whose frameworks lack theirs does not start: put back the
         # ones that are missing (macos/steamplay links)
         STEAMPLAY=${STEAMPLAY:-$HOME/Library/Application Support/SteamPlay/steamplay}
-        [ -f "$STEAMPLAY" ] || STEAMPLAY=$HOME/projects/Proton/macos/steamplay
+        [ -f "$STEAMPLAY" ] || STEAMPLAY="$PROTON_DIR/steamplay"
         [ -n "${SteamAppId:-}" ] && [ -f "$STEAMPLAY" ] && /usr/bin/python3 "$STEAMPLAY" links "$SteamAppId" >> "$LOG" 2>&1
         # a Mac game's launch entry is its app bundle: start the program inside it, so that it
         # keeps the environment Steam gives a game (its app id among it). Steam starts this tool

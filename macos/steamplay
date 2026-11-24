@@ -87,6 +87,7 @@ import json
 import os
 import plistlib
 import re
+import shlex
 import shutil
 import signal
 import struct
@@ -468,6 +469,10 @@ TOOLS = sorted(t for t in os.listdir(TOOLS_SRC)
 # everything Steam manages, so client updates do not touch it.
 TOOLS_DIR = os.environ.get("STEAMPLAY_TOOLS_DIR", "/usr/local/share/steam/compatibilitytools.d")
 CHOICES = os.path.join(HOME_DIR, "choices.json")
+# The installed tools are copies, and the guard installs them again from its own copy in HOME_DIR,
+# so neither knows where the checkout is by its own location. An install from the checkout records
+# the checkout's macos folder and the build root here; installs from the guard's copy read them back.
+INSTALL_JSON = os.path.join(HOME_DIR, "install.json")
 GUARD_LABEL = "com.redshot.steamplay.guard"
 GUARD_PLIST = os.path.expanduser("~/Library/LaunchAgents/%s.plist" % GUARD_LABEL)
 GUARD_LOG = os.environ.get("STEAMPLAY_GUARD_LOG", os.path.expanduser("~/Library/Logs/SteamPlay/guard.log"))
@@ -723,16 +728,46 @@ def cmd_status():
     return 1 if problems else 0
 
 
+def install_paths():
+    """(the checkout's macos folder, the build root) for the installed tools. Run from a checkout,
+    this copy records both in INSTALL_JSON; run from the guard's copy, it reads them from there.
+    (None, None) when neither is known."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    if os.access(os.path.join(here, "steamplay-launch"), os.X_OK):
+        paths = {"macos_dir": here, "build_root": BUILD_ROOT}
+        try:
+            os.makedirs(HOME_DIR, exist_ok=True)
+            write_file(INSTALL_JSON, json.dumps(paths, indent=1) + "\n")
+        except OSError:
+            pass
+        return here, BUILD_ROOT
+    try:
+        with open(INSTALL_JSON) as f:
+            paths = json.load(f)
+        return paths.get("macos_dir"), paths.get("build_root")
+    except (OSError, ValueError, AttributeError):
+        return None, None
+
+
 def install_tools():
-    """Copies the tools into the folder Steam scans. Returns what it installed, or None when the
+    """Copies the tools into the folder Steam scans, each with a protium.conf that tells its run
+    script where the checkout and the build root are. Returns what it installed, or None when the
     folder is missing or not writable."""
     if not os.path.isdir(TOOLS_DIR) or not os.access(TOOLS_DIR, os.W_OK):
         return None
+    macos_dir, build_root = install_paths()
     for tool in TOOLS:
         target = os.path.join(TOOLS_DIR, tool)
         if os.path.isdir(target):
             shutil.rmtree(target)
         shutil.copytree(os.path.join(TOOLS_SRC, tool), target)
+        if macos_dir:
+            conf = ["# Written by macos/steamplay when it installed this tool. The environment wins over it."]
+            conf.append('[ -n "${PROTON_DIR:-}" ] || PROTON_DIR=%s' % shlex.quote(macos_dir))
+            if build_root:
+                log = os.path.join(build_root, "evidence", "steamplay", "probe.log")
+                conf.append('[ -n "${STEAMPLAY_TOOL_LOG:-}" ] || STEAMPLAY_TOOL_LOG=%s' % shlex.quote(log))
+            write_file(os.path.join(target, "protium.conf"), "\n".join(conf) + "\n")
     return TOOLS
 
 
