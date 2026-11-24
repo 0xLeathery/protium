@@ -7,6 +7,10 @@
 #
 #   $BUILD_ROOT/release/Protium.app
 #   $BUILD_ROOT/release/Protium-<version>.dmg
+#   $BUILD_ROOT/release/Protium-<version>.notes.md   the release's page (macos/release-notes.sh):
+#                                                    its section of CHANGELOG.md and how to
+#                                                    install and verify it;
+#                                                    macos/publish-release.sh publishes both
 #
 # The install tree is copied, never changed: the copy has the PE files' debug information
 # stripped, build-tree rpaths removed and the loader signed again with the Developer ID profile,
@@ -74,6 +78,10 @@ loader_app=$INSTALL_DIR/lib/wine/aarch64-unix/wine.app
 [ -f "$PYTHON_TARBALL" ] || die "no $PYTHON_TARBALL: download $PYTHON_BUILD from github.com/astral-sh/python-build-standalone release 20261123"
 [ "$(shasum -a 256 "$PYTHON_TARBALL" | cut -d' ' -f1)" = "$PYTHON_SHA256" ] || die "$PYTHON_TARBALL does not have the pinned SHA-256"
 [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "VERSION $VERSION is not x.y.z"
+# the release's section of CHANGELOG.md: what the app and the release's page say is new
+CHANGELOG=$PROTON_DIR/CHANGELOG.md
+changes() { awk -v v="$VERSION" '/^## /{on = ($2 == v); next} on' "$CHANGELOG"; }
+[ -n "$(changes | tr -d '[:space:]')" ] || die "CHANGELOG.md has no section \"## $VERSION\": write what is new first"
 
 if [ -z "${SIGN_IDENTITY:-}" ]; then
     SIGN_IDENTITY=$(security find-identity -v -p codesigning | sed -n 's/^ *[0-9]*) \([0-9A-F]\{40\}\) "Developer ID Application:.*/\1/p' | head -1)
@@ -156,6 +164,7 @@ done
 rsync -a --exclude .DS_Store "$SCRIPT_DIR/steamplay-tools" "$SCRIPT_DIR/compat" "$C/Resources/steamplay/"
 # what "steamplay version" answers with, and the app compares the newest release to
 echo "$VERSION" >"$C/Resources/steamplay/VERSION"
+cp "$CHANGELOG" "$C/Resources/steamplay/CHANGELOG.md"
 
 log "the Wine install"
 rsync -a --exclude .DS_Store "$INSTALL_DIR/" "$C/SharedSupport/runtime/"
@@ -321,4 +330,6 @@ if [ "$NOTARIZE" = 1 ]; then
     xcrun stapler staple "$dmg"
     spctl -a -vv -t open --context context:primary-signature "$dmg" 2>&1 | sed 's/^/:: /' >&2 || true
 fi
+# the release's page, for macos/publish-release.sh
+"$SCRIPT_DIR/release-notes.sh" "$VERSION" "$dmg" >"$RELEASE_DIR/Protium-$VERSION.notes.md"
 log "done: $dmg ($(du -h "$dmg" | cut -f1); app $(du -sh "$app" | cut -f1))"

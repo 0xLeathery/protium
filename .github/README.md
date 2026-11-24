@@ -17,6 +17,8 @@ installer for other Macs yet.
 Protium is not affiliated with or endorsed by Valve or Apple. Steam and Proton are trademarks of
 Valve Corporation, and Mac and Metal are trademarks of Apple Inc.
 
+What changed in each release is in [CHANGELOG.md](../CHANGELOG.md).
+
 ## Status
 
 <!-- games: written by "macos/steamplay games" from macos/compat/games.json -->
