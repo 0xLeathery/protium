@@ -1,0 +1,60 @@
+dxmt: Skip a frame the layer gives no drawable for, keeping its fences.
+
+Presenter::encodeCommands used CAMetalLayer's nextDrawable unchecked. macOS returns no drawable
+for a layer of no size and when the wait for one times out; the render pass was then made with no
+texture and the command buffer presented nothing, which Metal takes as an error.
+
+encodeCommands now returns at once when there is no drawable. The Present encoder then still
+waits for and updates the frame's fences, in a blit encoder, because later encoders wait for the
+fences it updates, and presents nothing. The first such frame is logged ("Present: the layer
+gave no drawable; frames without one are skipped").
+
+LOCAL TO THIS PORT, NOT FOR DXMT. Applied by macos/build-dxmt.sh to
+github.com/athei/dxmt at 01e59e9bde030f105937f249afaac92ada01b4d7, after 0001 to 0005.
+Written with an AI assistant (Claude). DXMT does not accept contributions made or
+co-authored by AI (its CONTRIBUTING.md), so this patch must not be sent to it as a pull
+request. What was found may be reported to its developers, for them to write their own fix;
+this patch leaves here when the pinned commit has one.
+---
+diff --git a/src/dxmt/dxmt_context.cpp b/src/dxmt/dxmt_context.cpp
+index f2634d8..79d171e 100644
+--- a/src/dxmt/dxmt_context.cpp
++++ b/src/dxmt/dxmt_context.cpp
+@@ -1389,10 +1389,20 @@ ArgumentEncodingContext::flushCommands(WMT::CommandBuffer cmdbuf, uint64_t seqId
+       );
+       auto t1 = clock::now();
+       currentFrameStatistics().drawable_blocking_interval += (t1 - t0);
+-      if (data->after > 0)
++      if (drawable.handle == NULL_OBJECT_HANDLE) {
++        // no drawable this frame: later encoders still wait for the fences this one updates
++        static bool reported = false;
++        if (!std::exchange(reported, true))
++          WARN("Present: the layer gave no drawable; frames without one are skipped");
++        auto encoder = cmdbuf.blitCommandEncoder();
++        data->fence_wait.forEach([&](auto id) { encoder.waitForFence(fence_pool_[id]); });
++        data->fence_update.forEach([&](auto id) { encoder.updateFence(fence_pool_[id]); });
++        encoder.endEncoding();
++      } else if (data->after > 0) {
+         cmdbuf.presentDrawableAfterMinimumDuration(drawable, data->after);
+-      else
++      } else {
+         cmdbuf.presentDrawable(drawable);
++      }
+       data->~PresentData();
+       break;
+     }
+diff --git a/src/dxmt/dxmt_presenter.cpp b/src/dxmt/dxmt_presenter.cpp
+index fef1fd4..ba583b9 100644
+--- a/src/dxmt/dxmt_presenter.cpp
++++ b/src/dxmt/dxmt_presenter.cpp
+@@ -173,6 +173,10 @@ Presenter::encodeCommands(
+     std::function<void(WMT::RenderCommandEncoder)> &&update_fences
+ ) {
+   auto drawable = layer_.nextDrawable();
++  // macOS has no drawable for a layer of no size, or when nextDrawable timed out: encode
++  // nothing, and the caller keeps the frame's fences without presenting
++  if (unlikely(drawable.handle == NULL_OBJECT_HANDLE))
++    return drawable;
+ 
+   WMTRenderPassInfo info;
+   WMT::InitializeRenderPassInfo(info);
