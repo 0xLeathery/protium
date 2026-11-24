@@ -1843,6 +1843,10 @@ def outcome(runs):
         return None, "in its last run (%d s) a thread waited a minute for a lock, which some games do while running" % last.get("seconds", 0)
     if longest >= GOOD_RUN_SECONDS:
         return True, "it ran for %d minutes" % (longest // 60)
+    # a session that is over within a minute and a half of its start, prefix update included,
+    # has not shown a game: a crash Wine did not see (Steam's own handler takes native ones)
+    if last.get("end") == "ended" and last.get("seconds", 0) < 90:
+        return False, "its last run ended by itself after %d s" % last.get("seconds", 0)
     return None, "it ran for %d s at most, which says little" % longest
 
 
