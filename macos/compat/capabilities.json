@@ -1,0 +1,21 @@
+{
+ "about": "What Protium can run today. 'steamplay discover' reads this to judge a game; change a status here when a wave of work lands. status: good, partial, missing or blocked. score: what the feature adds to a game's score when the game needs it.",
+ "features": {
+  "d3d9": {"status": "good", "score": 1, "note": "Direct3D 9 on Metal (mtld3d); Left 4 Dead runs"},
+  "d3d10": {"status": "good", "score": 1, "note": "Direct3D 10 on Metal (DXMT)"},
+  "d3d11": {"status": "good", "score": 1, "note": "Direct3D 11 on Metal (DXMT); IRON NEST, Just Die Already, GTFO, Call of Duty: WWII"},
+  "d3d12": {"status": "partial", "score": 0, "note": "Direct3D 12 through vkd3d-proton on KosmicKrisp; IRON NEST runs, heavy titles are untested or slow to load"},
+  "vulkan": {"status": "partial", "score": 0, "note": "Vulkan on KosmicKrisp; Red Dead Redemption 2 reaches gameplay"},
+  "opengl": {"status": "missing", "score": -3, "note": "OpenGL stops at 2.1 (macOS's own); newer needs Zink, which is not built yet"},
+  "dotnet": {"status": "missing", "score": -3, "note": ".NET Framework programs need wine-mono, which is not in the bundle yet"},
+  "unreal5": {"status": "partial", "score": -1, "note": "Unreal Engine 5 wants shader model 6.6 and compiles very large shaders; untested here"},
+  "x86_32": {"status": "good", "score": 0, "note": "32-bit games run through FEX's WoW64 side"},
+  "launcher": {"status": "partial", "score": -1, "note": "Third-party launchers: Rockstar's works; others are untested and often need a fix each"},
+  "embedded_browser": {"status": "partial", "score": -1, "note": "An embedded Chromium (libcef) draws from a second process, which needs a per-program fix"},
+  "anticheat_files": {"status": "partial", "score": -2, "note": "no macOS runtime of it exists, so its protected (online) modes will not start"},
+  "anticheat_kernel": {"status": "blocked", "note": "Kernel-level anti-cheat cannot run under Wine"},
+  "vr": {"status": "blocked", "note": "VR is not supported"},
+  "heavy": {"status": "partial", "score": -1, "note": "Valve found it slow on the Deck; here x86 code is translated by FEX, so CPU-heavy games lose more"}
+ },
+ "kernel_anticheats": ["Vanguard", "RICOCHET", "EA AntiCheat", "EA anticheat", "FACEIT", "ESEA", "nProtect GameGuard", "XIGNCODE3", "Anti-Cheat Expert", "ACE", "mhyprot", "HoYoKProtect", "Zakynthos", "Javelin", "NetEase Game Security", "Denuvo Anti-Cheat", "Tencent Anti-Cheat Expert", "Riot Vanguard"]
+}

@@ -11,6 +11,13 @@
     macos/steamplay setup [--dry-run] set Steam Play up: the tools, Steam's platform switch and a
                                       compatibility tool for every game (Steam quit)
     macos/steamplay status            the switch, the tools and each installed game's choice
+    macos/steamplay discover [--installed] [<app id>] [--json]
+                                      which games are likely to work, and why (see "discover" below)
+    macos/steamplay data update       fetch the public anti-cheat list and ProtonDB's export
+    macos/steamplay result <app id> works|plays-with-problems|menu-only|broken [note]
+                                      say how a game did; it counts before any guess
+    macos/steamplay survey --away [--seconds N] [--games N] [--only <app id>...]
+                                      start each untried installed game for a while (takes the screen)
     macos/steamplay uninstall [--dry-run]
                                       undo setup: guard, tools, switch, mappings (Steam quit)
     macos/steamplay prefer <app id> native|proton|auto
@@ -488,7 +495,8 @@ PROTON, NATIVE = "proton-macos", "macos-native"
 
 
 def app_cache():
-    """Steam's cache of app metadata, appcache/appinfo.vdf: {app id: {name, type, oslist, osextended}}."""
+    """Steam's cache of app metadata, appcache/appinfo.vdf: {app id: {name, type, oslist, osextended,
+    deck, deck_tests, thirdparty, launch}}."""
     path = os.path.join(STEAM_ROOT, "appcache", "appinfo.vdf")
     with open(path, "rb") as f:
         d = f.read()
@@ -533,9 +541,21 @@ def app_cache():
         try:    # after id and size: state, time, token, a hash, change number, a hash
             root = block(pos + 8 + 60)[0]
             common = root.get("appinfo", root).get("common", {})
+            info = root.get("appinfo", root)
+            deck = common.get("steam_deck_compatibility", {})
+            launch = [str(l.get("executable", "")) for l in info.get("config", {}).get("launch", {}).values()
+                      if isinstance(l, dict) and "windows" in str(l.get("config", {}).get("oslist", "windows"))]
             apps[appid] = {"name": str(common.get("name", "?")), "type": str(common.get("type", "")).lower(),
                            "oslist": [x for x in str(common.get("oslist", "")).split(",") if x],
-                           "osextended": [x for x in str(common.get("osextended", "")).split(",") if x]}
+                           "osextended": [x for x in str(common.get("osextended", "")).split(",") if x],
+                           # for "discover": Valve's Steam Deck verdict (3 Verified, 2 Playable,
+                           # 1 Unsupported) and the tests behind it that did not pass
+                           "deck": deck.get("category", 0),
+                           "deck_tests": [(t.get("display"), str(t.get("token", "")).replace("#SteamDeckVerified_TestResult_", ""))
+                                          for t in deck.get("tests", {}).values() if isinstance(t, dict) and t.get("display") in (1, 2, 3)],
+                           "thirdparty": bool(info.get("extended", {}).get("thirdpartycdkey")),
+                           "installdir": str(info.get("config", {}).get("installdir", "")),
+                           "launch": [e for e in launch if e.lower().endswith(".exe")]}
         except (ValueError, IndexError, struct.error):
             pass
         pos += 8 + size
@@ -1445,6 +1465,597 @@ def cmd_hud(state):
     print("the performance HUD is %s for games started from now on" % ("on" if os.path.exists(HUD_FLAG) else "off"))
 
 
+# ---------------------------------------------------------------- which games are likely to work
+#
+# "discover" judges every game without starting it, from four kinds of evidence, and says which
+# it used:
+#   what Protium can do today              macos/compat/capabilities.json
+#   what is known of the game              Steam's own cache (Valve's Steam Deck tests and their
+#                                          reasons), two public datasets fetched whole by "data
+#                                          update" (so no request ever names a game), and, for an
+#                                          installed game, its files: the graphics API, engine,
+#                                          .NET, anti-cheat and embedded browser
+#   what happened when it ran              results.jsonl, a line per run and per verdict given
+#   what happened to games built alike     results of the games with the same engine and API
+
+DATA_DIR = os.path.join(HOME_DIR, "data")
+RESULTS = os.path.join(HOME_DIR, "results.jsonl")
+CAPABILITIES = os.path.join(os.path.dirname(os.path.abspath(__file__)), "compat", "capabilities.json")
+ANTICHEAT_URL = "https://raw.githubusercontent.com/AreWeAntiCheatYet/AreWeAntiCheatYet/master/games.json"
+PROTONDB_LIST = "https://api.github.com/repos/bdefore/protondb-data/contents/reports"
+PROTONDB_RAW = "https://raw.githubusercontent.com/bdefore/protondb-data/master/reports/"
+VERDICTS = ("works", "plays-with-problems", "menu-only", "broken")
+GOOD_RUN_SECONDS = 600      # a run this long that ended by itself counts as "ran"
+MONTHS = "jan feb mar apr may jun jul aug sep oct nov dec".split()
+
+
+def read_json(path, default):
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return default
+
+
+def cmd_data_update():
+    """Fetches the public datasets whole: the anti-cheat list and ProtonDB's newest monthly export
+    (Open Database License; kept on this Mac, not redistributed), reduced to a line per game."""
+    import tarfile
+    os.makedirs(DATA_DIR, exist_ok=True)
+    curl(ANTICHEAT_URL, os.path.join(DATA_DIR, "anticheat.json.part"))
+    games = read_json(os.path.join(DATA_DIR, "anticheat.json.part"), None)
+    if not isinstance(games, list):
+        die("the anti-cheat list is not the JSON list it used to be")
+    os.replace(os.path.join(DATA_DIR, "anticheat.json.part"), os.path.join(DATA_DIR, "anticheat.json"))
+    print("anti-cheat list: %d games" % len(games))
+
+    def when(name):     # reports_nov1_2026.tar.gz -> (2026, 11, 1)
+        m = re.fullmatch(r"reports_([a-z]{3})(\d+)_(\d{4})\.tar\.gz", name)
+        return (int(m.group(3)), MONTHS.index(m.group(1)) + 1, int(m.group(2))) if m and m.group(1) in MONTHS else None
+    listing = json.loads(curl(PROTONDB_LIST).decode("utf-8", errors="replace"))
+    names = sorted((n for n in (e.get("name", "") for e in listing if isinstance(e, dict)) if when(n)), key=when)
+    if not names:
+        die("no ProtonDB export found in its repository")
+    newest, summary_path = names[-1], os.path.join(DATA_DIR, "protondb.json")
+    if read_json(summary_path, {}).get("source") == newest:
+        print("ProtonDB: %s is already here" % newest)
+        return 0
+    tar_path = os.path.join(DATA_DIR, "protondb.tar.gz.part")
+    print("downloading ProtonDB's export %s" % newest)
+    curl(PROTONDB_RAW + newest, tar_path)
+    # the export is one JSON list of half a gigabyte: its reports are read one at a time
+    since = time.time() - 3 * 365 * 86400
+    apps, decoder = {}, json.JSONDecoder()
+    with tarfile.open(tar_path) as tar:
+        member = next(m for m in tar.getmembers() if m.name.endswith(".json"))
+        f = tar.extractfile(member)
+        buf, started = "", False
+        while True:
+            chunk = f.read(1 << 22)
+            buf += chunk.decode("utf-8", errors="replace")
+            while True:
+                buf = buf.lstrip(" \r\n\t,")
+                if not started:
+                    if not buf.startswith("["):
+                        break
+                    buf, started = buf[1:], True
+                    continue
+                if not buf or buf[0] == "]":
+                    break
+                try:
+                    report, end = decoder.raw_decode(buf)
+                except ValueError:
+                    break       # the rest of this report is in the next chunk
+                buf = buf[end:]
+                appid = str(report.get("app", {}).get("steam", {}).get("appId", ""))
+                answers = report.get("responses", {})
+                if not appid.isdigit() or report.get("timestamp", 0) < since or answers.get("verdict") not in ("yes", "no"):
+                    continue
+                a = apps.setdefault(appid, [0, 0, 0, 0])    # reports, yes, tinkered, second launcher
+                a[0] += 1
+                a[1] += answers.get("verdict") == "yes"
+                a[2] += answers.get("tinkerOverride") == "yes"
+                a[3] += answers.get("secondaryLauncher") == "yes"
+            if not chunk:
+                break
+    write_file(summary_path, json.dumps({"source": newest, "apps": apps}))
+    os.remove(tar_path)
+    print("ProtonDB: %d games with reports of the last three years" % len(apps))
+    return 0
+
+
+# ---- an installed game's files
+
+def pe_info(path):
+    """What a Windows program's header says: {"bits", "imports" (DLL names, lower case),
+    "managed" (a .NET program)}, or None if it is not one."""
+    import mmap
+    try:
+        with open(path, "rb") as f:
+            d = mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ)
+    except (OSError, ValueError):
+        return None
+    try:
+        if d[:2] != b"MZ":
+            return None
+        pe, = struct.unpack_from("<I", d, 0x3c)
+        if d[pe:pe + 4] != b"PE\0\0":
+            return None
+        nsections, = struct.unpack_from("<H", d, pe + 6)
+        optsize, = struct.unpack_from("<H", d, pe + 20)
+        opt = pe + 24
+        magic, = struct.unpack_from("<H", d, opt)
+        if magic not in (0x10b, 0x20b):
+            return None
+        dirs = opt + (96 if magic == 0x10b else 112)
+        ndirs, = struct.unpack_from("<I", d, dirs - 4)
+        sections = [struct.unpack_from("<IIII", d, opt + optsize + 40 * i + 8) for i in range(nsections)]
+
+        def offset(rva):
+            for vsize, vaddr, rawsize, rawptr in sections:
+                if vaddr <= rva < vaddr + max(vsize, rawsize):
+                    return rawptr + rva - vaddr
+            return None
+
+        def directory(i):
+            return struct.unpack_from("<II", d, dirs + 8 * i) if i < ndirs else (0, 0)
+
+        def names(index, size, name_at):
+            out, (rva, _) = set(), directory(index)
+            pos = offset(rva) if rva else None
+            while pos is not None and pos + size <= len(d) and len(out) < 512:
+                entry = d[pos:pos + size]
+                if not any(entry):
+                    break
+                name = offset(struct.unpack_from("<I", entry, name_at)[0])
+                if name is not None:
+                    out.add(d[name:d.find(b"\0", name, name + 256)].decode("ascii", "replace").lower())
+                pos += size
+            return out
+        return {"bits": 32 if magic == 0x10b else 64,
+                "imports": names(1, 20, 12) | names(13, 32, 4),     # imports and delayed imports
+                "managed": directory(14)[0] != 0}
+    except (struct.error, IndexError, ValueError):
+        return None
+    finally:
+        d.close()
+
+
+def pe_version(path):
+    """The ProductVersion a Windows program's version resource gives, or ""."""
+    import mmap
+    try:
+        with open(path, "rb") as f:
+            d = mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ)
+    except (OSError, ValueError):
+        return ""
+    try:
+        key = "ProductVersion".encode("utf-16-le")
+        at = d.find(key)
+        if at < 0:
+            return ""
+        pos = at + len(key)
+        while pos + 2 <= len(d) and d[pos:pos + 2] == b"\0\0":
+            pos += 2
+        end = pos
+        while end + 2 <= len(d) and d[end:end + 2] != b"\0\0" and end - pos < 128:
+            end += 2
+        return d[pos:end].decode("utf-16-le", "replace").strip()
+    finally:
+        d.close()
+
+
+GRAPHICS_DLLS = {"d3d9.dll": "d3d9", "d3d10.dll": "d3d10", "d3d10_1.dll": "d3d10", "d3d11.dll": "d3d11",
+                 "d3d12.dll": "d3d12", "vulkan-1.dll": "vulkan", "opengl32.dll": "opengl"}
+
+
+def scan_game(folder, launch_exes):
+    """What an installed game's files say: {"apis", "engine", "bits", "dotnet", "anticheat",
+    "browser", "exe"}. It reads headers of the programs Steam starts and of the largest ones."""
+    exes, dlls, names, dirs = [], [], set(), set()
+    count, base_depth = 0, folder.rstrip("/").count("/")
+    for root, subdirs, files in os.walk(folder):
+        if root.count("/") - base_depth >= 6 or count > 40000:
+            subdirs[:] = []
+        for sub in subdirs:
+            dirs.add(sub.lower())
+        for name in files:
+            count += 1
+            low = name.lower()
+            names.add(low)
+            if low.endswith(".exe") or low.endswith(".dll"):
+                path = os.path.join(root, name)
+                try:
+                    (exes if low.endswith(".exe") else dlls).append((os.path.getsize(path), path))
+                except OSError:
+                    pass
+    chosen = [os.path.join(folder, e.replace("\\", "/")) for e in launch_exes]
+    chosen = [p for p in chosen if os.path.isfile(p)]
+    skip = ("unitycrashhandler", "crashreport", "unins", "vc_redist", "vcredist", "dxsetup", "dotnet", "installer", "setup")
+    for _, path in sorted(exes, reverse=True):
+        if len(chosen) >= 4:
+            break
+        if path not in chosen and not any(s in os.path.basename(path).lower() for s in skip):
+            chosen.append(path)
+    # the DLLs next to those programs draw for many engines (UnityPlayer.dll, an engine's renderer)
+    beside = {os.path.dirname(p) for p in chosen}
+    chosen_dlls = [p for size, p in sorted(dlls, reverse=True) if os.path.dirname(p) in beside][:40]
+    apis, bits, dotnet = set(), None, False
+    for i, path in enumerate(chosen + chosen_dlls):
+        info = pe_info(path)
+        if not info:
+            continue
+        if i < len(chosen):
+            bits = bits or info["bits"]
+            dotnet = dotnet or info["managed"] or "mscoree.dll" in info["imports"]
+        apis |= {GRAPHICS_DLLS[d] for d in info["imports"] if d in GRAPHICS_DLLS}
+    dotnet = dotnet or any(n.endswith(".runtimeconfig.json") for n in names)
+    engine = ""
+    if "unityplayer.dll" in names:
+        player = next(p for _, p in dlls if os.path.basename(p).lower() == "unityplayer.dll")
+        engine = ("unity " + pe_version(player).split(".")[0]).strip()
+        apis = apis - {"opengl", "vulkan"} or {"d3d11"}     # Unity for Windows draws with Direct3D 11 unless told otherwise
+        dotnet = False      # Unity brings its own Mono or IL2CPP
+    elif any(os.path.basename(p).lower().endswith("-shipping.exe") for _, p in exes) or ("engine" in dirs and "binaries" in dirs):
+        shipping = next((p for _, p in sorted(exes, reverse=True) if p.lower().endswith("-shipping.exe")), None)
+        major = pe_version(shipping).split(".")[0] if shipping else ""
+        engine = "unreal " + (major if major in ("4", "5") else "?")
+    elif any(n.endswith(".pck") for n in names) and any(n.endswith(".pck") and n[:-4] + ".exe" in names for n in names):
+        engine = "godot"
+    elif "data.win" in names:
+        engine = "gamemaker"
+    elif "renpy" in dirs:
+        engine = "renpy"
+    elif "engine.dll" in names and ("vgui2.dll" in names or "tier0.dll" in names):
+        engine = "source"
+    elif "nw.dll" in names or "app.asar" in names:
+        engine = "web"
+    elif any(n.endswith(".jar") for n in names) and ("jre" in dirs or "java" in dirs or "runtime" in dirs):
+        engine = "java"
+    anticheat = sorted(label for label, hit in (
+        ("Easy Anti-Cheat", "easyanticheat" in dirs or any(n.startswith("easyanticheat") for n in names)),
+        ("BattlEye", "battleye" in dirs or any(n.startswith("beclient") or n.startswith("beservice") for n in names)),
+        ("EA anticheat", any(n.startswith("eaanticheat") for n in names)),
+        ("GameGuard", "gameguard" in dirs or "gameguard.des" in names),
+        ("XIGNCODE3", any(n.startswith("xigncode") or n == "x3.xem" for n in names))) if hit)
+    return {"apis": sorted(apis), "engine": engine, "bits": bits, "dotnet": dotnet, "anticheat": anticheat,
+            "browser": "libcef.dll" in names, "exe": os.path.basename(chosen[0]) if chosen else ""}
+
+
+def installed_games(cache):
+    """{app id: (folder, build id)} of every installed app whose folder is there, and, with build
+    id "files only", of every game whose folder is in a library though Steam has no record of it
+    (Steam drops the record of a Windows build it stops offering and leaves the files)."""
+    out, by_dir = {}, {}
+    for appid, app in cache.items():
+        if app.get("installdir") and app["type"] in ("game", "demo"):
+            by_dir.setdefault(app["installdir"].lower(), appid)
+    for lib in libraries():
+        apps = os.path.join(lib, "steamapps")
+        if os.path.isdir(os.path.join(apps, "common")):
+            for entry in os.listdir(os.path.join(apps, "common")):
+                if entry.lower() in by_dir:
+                    out[by_dir[entry.lower()]] = (os.path.join(apps, "common", entry), "files only")
+        for entry in os.listdir(apps):
+            m = re.fullmatch(r"appmanifest_(\d+)\.acf", entry)
+            if not m:
+                continue
+            with open(os.path.join(apps, entry), encoding="utf-8", errors="replace") as f:
+                state = dict((k.lower(), v) for k, v in vdf_block(vdf_parse(f.read()), ["AppState"]) if isinstance(v, str))
+            folder = os.path.join(apps, "common", state.get("installdir", ""))
+            if state.get("installdir") and os.path.isdir(folder):
+                out[int(m.group(1))] = (folder, state.get("buildid", ""))
+    return out
+
+
+def scans(cache, installed):
+    """The file scan of each installed game, read again only when the game's build changed."""
+    path = os.path.join(DATA_DIR, "scan.json")
+    kept, changed = read_json(path, {}), False
+    for appid, (folder, build) in installed.items():
+        if appid not in cache or cache[appid].get("windows_only_tool"):
+            continue
+        entry = kept.get(str(appid))
+        if entry and entry.get("build") == build and entry.get("folder") == folder:
+            continue
+        found = scan_game(folder, cache[appid].get("launch", []))
+        found.update(build=build, folder=folder)
+        kept[str(appid)], changed = found, True
+    if changed:
+        os.makedirs(DATA_DIR, exist_ok=True)
+        write_file(path, json.dumps(kept, indent=1))
+    return {int(k): v for k, v in kept.items() if int(k) in installed}
+
+
+# ---- results
+
+def results():
+    """{app id: [result, ...]} from results.jsonl, oldest first."""
+    out = {}
+    try:
+        with open(RESULTS) as f:
+            for line in f:
+                try:
+                    r = json.loads(line)
+                    out.setdefault(int(r["app"]), []).append(r)
+                except (ValueError, KeyError, TypeError):
+                    pass
+    except OSError:
+        pass
+    return out
+
+
+def add_result(entry):
+    os.makedirs(HOME_DIR, exist_ok=True)
+    with open(RESULTS, "a") as f:
+        f.write(json.dumps(entry, sort_keys=True) + "\n")
+
+
+def cmd_record(appid, start, logfile):
+    """Called by steamplay-run.sh when a game's Wine session has ended: how long it ran and how it
+    ended, from the log, as steamplay-try reads it."""
+    try:
+        with open(logfile, "rb") as f:
+            log = f.read().decode("utf-8", errors="replace")
+    except OSError:
+        log = ""
+    if "wine: abort() in native code" in log:
+        end = "abort"
+    elif any(s in log for s in ("wine: Unhandled", "Exception frame is not in stack limits", "virtual_setup_exception stack overflow")):
+        end = "crash"
+    elif re.search(r"RtlpWaitForCriticalSection.*wait timed out", log):
+        end = "hang"
+    else:
+        end = "ended"
+    loaded = sorted({GRAPHICS_DLLS[m.lower()] for m in re.findall(r'\\\\([A-Za-z0-9_\-]+\.dll)" at ', log) if m.lower() in GRAPHICS_DLLS}
+                    | ({"dotnet"} if re.search(r'\\\\mscoree\.dll" at ', log, re.I) else set()))
+    add_result({"app": appid, "time": time.strftime("%Y-%m-%dT%H:%M:%S"), "by": "run",
+                "seconds": max(0, int(time.time()) - start), "end": end, "loaded": loaded,
+                "protium": os.environ.get("PROTIUM_VERSION", "")})
+    return 0
+
+
+def cmd_result(appid, verdict, note):
+    cache = app_cache()
+    if appid not in cache:
+        die("Steam's cache has no app %d" % appid)
+    add_result({"app": appid, "time": time.strftime("%Y-%m-%dT%H:%M:%S"), "by": "user", "verdict": verdict, "note": note})
+    print("%d %s: %s" % (appid, cache[appid]["name"], verdict))
+    return 0
+
+
+def outcome(runs):
+    """What a game's results say: (good, text), good being True, False or None for "nothing
+    conclusive". A verdict someone gave counts before any run, the newest first."""
+    for r in reversed(runs):
+        if r.get("by") == "user":
+            return r["verdict"] in ("works", "plays-with-problems"), "you said: %s%s" % (r["verdict"], (" (%s)" % r["note"]) if r.get("note") else "")
+    auto = [r for r in runs if r.get("by") == "run"]
+    if not auto:
+        return None, ""
+    last = auto[-1]
+    longest = max(r.get("seconds", 0) for r in auto)
+    if last.get("end") in ("abort", "crash", "hang") and longest < GOOD_RUN_SECONDS:
+        return False, "its last run ended in a %s after %d s" % (last["end"], last.get("seconds", 0))
+    if longest >= GOOD_RUN_SECONDS:
+        return True, "it ran for %d minutes" % (longest // 60)
+    return None, "it ran for %d s at most, which says little" % longest
+
+
+# ---- the judgement
+
+ORDER = ("Works", "Likely", "Maybe", "Unlikely", "Broken", "Blocked", "Native")
+DECK = {3: "Verified", 2: "Playable", 1: "Unsupported"}
+
+
+def fingerprint(scan):
+    """What games built alike share: the engine and the graphics API Protium would use."""
+    if not scan:
+        return ""
+    api = next((a for a in ("d3d11", "d3d12", "d3d9", "d3d10", "vulkan", "opengl") if a in scan.get("apis", [])), "?")
+    return "%s/%s" % ((scan.get("engine") or "own engine").split(" ")[0] + (" 5" if scan.get("engine") == "unreal 5" else ""), api)
+
+
+def judge(appid, app, scan, caps, anticheat, protondb, runs, peers):
+    """(verdict, score, reasons) for one game. Blockers first, then what happened when it ran,
+    then a score from everything else; each step adds the reason it had."""
+    features, reasons = caps["features"], []
+
+    def feature(name, because):
+        f = features[name]
+        reasons.append("%s: %s" % (because, f["note"]))
+        return f.get("score", 0)
+
+    tool, why = rule(app)
+    if tool == NATIVE:
+        return "Native", 0, [why]
+    good, text = outcome(runs)
+    tokens = {t for _, t in app["deck_tests"]}
+    kernel = [a for a in anticheat.get(appid, []) if a.lower() in {k.lower() for k in caps["kernel_anticheats"]}]
+    if kernel or any(t.startswith("UnsupportedAntiCheat") for t in tokens):
+        reasons.append("kernel-level anti-cheat (%s): %s" % (", ".join(kernel) or "Valve's Deck test", features["anticheat_kernel"]["note"]))
+        return ("Works" if good else "Blocked"), 0, ([text] if good else []) + reasons
+    if "SteamOSDoesNotSupport_VR" in tokens:
+        return "Blocked", 0, ["a VR game: " + features["vr"]["note"]]
+    if good is not None and runs and any(r.get("by") == "user" for r in runs):
+        return ("Works" if good else "Broken"), 0, [text]
+
+    score = 0
+    if scan:
+        apis = scan.get("apis", [])
+        usable = [a for a in apis if features[a]["status"] in ("good", "partial")]
+        if "d3d11" in apis or "d3d9" in apis or "d3d10" in apis:
+            best = next(a for a in ("d3d11", "d3d9", "d3d10") if a in apis)
+            score += feature(best, "draws with " + best.replace("d3d", "Direct3D "))
+        elif usable:
+            score += feature(usable[0], "draws with " + usable[0].replace("d3d", "Direct3D ").replace("vulkan", "Vulkan"))
+        elif "opengl" in apis:
+            score += feature("opengl", "draws with OpenGL only")
+        else:
+            reasons.append("no graphics API found in its programs (protected or unusual)")
+        if scan.get("engine") == "unreal 5" and "d3d11" not in apis:
+            score += feature("unreal5", "Unreal Engine 5 without a Direct3D 11 path")
+        elif scan.get("engine"):
+            reasons.append("engine: " + scan["engine"])
+        if scan.get("dotnet"):
+            score += feature("dotnet", "a .NET program")
+        if scan.get("anticheat"):
+            score += feature("anticheat_files", "ships " + ", ".join(scan["anticheat"]))
+        if scan.get("browser"):
+            score += feature("embedded_browser", "has an embedded browser")
+        if scan.get("bits") == 32:
+            reasons.append("32-bit: " + features["x86_32"]["note"])
+    else:
+        reasons.append("not installed: its files, which name the graphics API and engine, were not read")
+    listed = [a for a in anticheat.get(appid, []) if a not in kernel]
+    risky = [a for a in listed if "easy anti-cheat" in a.lower() or "battleye" in a.lower()]
+    if risky and not (scan and scan.get("anticheat")):
+        score += feature("anticheat_files", "uses " + ", ".join(risky))
+    other = [a for a in listed if a not in risky and "valve anti-cheat" not in a.lower() and "overlay" not in a.lower()]
+    if other:
+        reasons.append("anti-cheat of its own (%s): untested here" % ", ".join(other))
+    launcher = "LauncherInteractionIssues" in tokens or app.get("thirdparty")
+    pdb = protondb.get(str(appid))
+    if pdb and pdb[0] >= 5 and pdb[3] / pdb[0] >= 0.5:
+        launcher = True
+    if launcher:
+        score += feature("launcher", "starts through a third-party launcher or account")
+    category = app["deck"]
+    if category in DECK:
+        unsupported_os = "SteamOSDoesNotSupport" in tokens
+        score += {3: 2, 2: 1, 1: 0 if unsupported_os else -1}[category]
+        reasons.append("Steam Deck: %s%s" % (DECK[category], " (works on Linux Proton)" if category > 1 else ""))
+    if tokens & {"DefaultConfigurationIsNotPerformant", "UnsupportedGraphicsPerformance"}:
+        score += feature("heavy", "Valve found it slow on the Deck")
+    if "SteamOSDoesNotSupport" in tokens:
+        score -= 1
+        reasons.append("Valve: SteamOS does not support it")
+    if pdb and pdb[0] >= 5:
+        share = pdb[1] / pdb[0]
+        score += 1 if share >= 0.8 else (-2 if share < 0.4 else (-1 if share < 0.6 else 0))
+        reasons.append("ProtonDB: %d%% of %d recent reports say it works on Linux" % (round(share * 100), pdb[0]))
+    alike_good, alike_bad, kind = peers
+    if alike_good or alike_bad:
+        score += min(alike_good, 2) - min(alike_bad, 2)
+        reasons.append("games built alike (%s): %d ran here, %d did not" % (kind, alike_good, alike_bad))
+    if good is True:
+        return "Works", score, [text] + reasons
+    if good is False:
+        return "Unlikely", score, [text] + reasons
+    if text:
+        reasons.insert(0, text)
+    return ("Likely" if score >= 3 else "Maybe" if score >= 1 else "Unlikely"), score, reasons
+
+
+def discover(only_installed):
+    """[(verdict, score, app id, name, installed, reasons)] for the games of this Steam."""
+    caps = read_json(CAPABILITIES, None)
+    if not caps:
+        die("no capability table at %s" % CAPABILITIES)
+    cache, runs = app_cache(), results()
+    installed = installed_games(cache)
+    # a folder counts only while the game is in it: an uninstall leaves saves and crash dumps
+    # behind, and a queued download has a record before it has files
+    for a, (folder, _) in list(installed.items()):
+        launch = cache.get(a, {}).get("launch", [])
+        if launch and not any(os.path.isfile(os.path.join(folder, e.replace("\\", "/"))) for e in launch):
+            del installed[a]
+    try:
+        with open(os.path.join(steam_user_config(), "localconfig.vdf"), encoding="utf-8", errors="surrogateescape") as f:
+            apps = vdf_block(vdf_parse(f.read()), ["UserLocalConfigStore", "Software", "Valve", "Steam", "apps"])
+        known = {int(k) for k, v in apps if k.isdigit()}
+    except OSError:
+        known = set()
+    anticheat = {}
+    for g in read_json(os.path.join(DATA_DIR, "anticheat.json"), []):
+        steam_id = str(g.get("storeIds", {}).get("steam", ""))
+        if steam_id.isdigit():
+            anticheat[int(steam_id)] = [a for a in g.get("anticheats", []) if a != "VAC"]
+    protondb = read_json(os.path.join(DATA_DIR, "protondb.json"), {}).get("apps", {})
+    games = {a: app for a, app in cache.items() if app["type"] in ("game", "demo")
+             and (a in installed or (not only_installed and a in known))}
+    scanned = scans(cache, {a: v for a, v in installed.items() if a in games and rule(games[a])[0] != NATIVE})
+    # what happened to the games built alike, by fingerprint, leaving the game itself out
+    by_print = {}
+    for a, scan in scanned.items():
+        good, _ = outcome(runs.get(a, []))
+        if good is not None:
+            by_print.setdefault(fingerprint(scan), []).append((a, good))
+    out = []
+    for a, app in games.items():
+        scan = scanned.get(a)
+        kind = fingerprint(scan)
+        others = [g for b, g in by_print.get(kind, []) if b != a]
+        verdict, score, reasons = judge(a, app, scan, caps, anticheat, protondb, runs.get(a, []),
+                                        (sum(others), len(others) - sum(others), kind))
+        if a in installed and installed[a][1] == "files only":
+            reasons.append("its files are in a Steam library, but Steam has no install record of it")
+        out.append((verdict, score, a, app["name"], a in installed, reasons))
+    out.sort(key=lambda g: (ORDER.index(g[0]), -g[1], g[3].lower()))
+    missing = [n for n, p in (("the anti-cheat list", "anticheat.json"), ("ProtonDB", "protondb.json"))
+               if not os.path.exists(os.path.join(DATA_DIR, p))]
+    return out, missing
+
+
+def cmd_discover(args):
+    why = next((int(a) for a in args if a.isdigit()), None)
+    games, missing = discover("--installed" in args)
+    if "--json" in args:
+        print(json.dumps([{"app": a, "name": n, "verdict": v, "score": s, "installed": i, "reasons": r}
+                          for v, s, a, n, i, r in games], indent=1))
+        return 0
+    if why is not None:
+        for v, s, a, n, i, r in games:
+            if a == why:
+                print("%s (%d): %s, score %d%s" % (n, a, v, s, "" if i else ", not installed"))
+                for line in r:
+                    print("  - " + line)
+                return 0
+        die("no game %d among %s" % (why, "the installed games" if "--installed" in args else "this account's games"))
+    for verdict in ORDER:
+        group = [g for g in games if g[0] == verdict]
+        if not group:
+            continue
+        print("\n%s (%d)" % (verdict, len(group)))
+        for v, s, a, n, i, r in group:
+            lead = "; ".join([x for x in r if not x.startswith("not installed")][:2]) or (r[0] if r else "")
+            print("  %-8d %s %-40s %s" % (a, "*" if i else " ", n[:40], lead[:150]))
+    print("\n* installed. \"discover <app id>\" gives every reason for one game.")
+    if missing:
+        print("Not used, because not downloaded yet (\"data update\" fetches them): " + " and ".join(missing))
+    return 0
+
+
+def cmd_survey(args):
+    """Starts each installed game that has no result yet, for a while, and lets the run record
+    itself: one game of each kind first, so that few starts say something about many games."""
+    if "--away" not in args:
+        die("survey starts games on this Mac's screen: run it only while nobody is using the Mac, with --away")
+    if not steam_running():
+        die("start Steam first: a game asks it who owns it")
+    seconds = next((args[i + 1] for i, a in enumerate(args) if a == "--seconds" and i + 1 < len(args)), "240")
+    only = {int(a) for a in args[args.index("--only") + 1:] if a.isdigit()} if "--only" in args else None
+    games, _ = discover(True)
+    runs, kinds, queue = results(), set(), []
+    scanned = read_json(os.path.join(DATA_DIR, "scan.json"), {})
+    for v, s, a, n, i, r in games:
+        if v in ("Native", "Blocked") or (only is not None and a not in only) or (only is None and runs.get(a)):
+            continue
+        kind = fingerprint(scanned.get(str(a)))
+        queue.append((kind in kinds, -s, a, n))
+        kinds.add(kind)
+    queue.sort()
+    limit = next((int(args[i + 1]) for i, a in enumerate(args) if a == "--games" and i + 1 < len(args)), len(queue))
+    tried = os.path.join(os.path.dirname(os.path.abspath(__file__)), "steamplay-try")
+    for _, _, a, n in queue[:limit]:
+        print("== %d %s" % (a, n), flush=True)
+        r = subprocess.run([tried, str(a), "--seconds", seconds], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, universal_newlines=True)
+        print("\n".join(r.stdout.splitlines()[:3]), flush=True)
+        time.sleep(5)
+    print("%d game(s) started; \"discover --installed\" shows what changed" % min(limit, len(queue)))
+    return 0
+
+
 def main(argv):
     if len(argv) >= 1 and argv[0] == "list":
         cmd_list()
@@ -1468,6 +2079,16 @@ def main(argv):
         cmd_guard_remove()
     elif argv == ["tools"]:
         cmd_tools()
+    elif len(argv) >= 1 and argv[0] == "discover" and all(a.isdigit() or a in ("--installed", "--json") for a in argv[1:]):
+        sys.exit(cmd_discover(argv[1:]))
+    elif argv == ["data", "update"]:
+        sys.exit(cmd_data_update())
+    elif len(argv) >= 3 and argv[0] == "result" and argv[1].isdigit() and argv[2] in VERDICTS:
+        sys.exit(cmd_result(int(argv[1]), argv[2], " ".join(argv[3:])))
+    elif len(argv) == 4 and argv[0] == "record" and argv[1].isdigit() and argv[2].isdigit():
+        sys.exit(cmd_record(int(argv[1]), int(argv[2]), argv[3]))
+    elif len(argv) >= 1 and argv[0] == "survey":
+        sys.exit(cmd_survey(argv[1:]))
     elif argv in (["uninstall"], ["uninstall", "--dry-run"]):
         cmd_uninstall("--dry-run" in argv)
     elif argv in (["steamclient"], ["steamclient", "--again"]):

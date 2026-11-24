@@ -111,6 +111,9 @@ export WINEDLLOVERRIDES="${WINEDLLOVERRIDES:-mscoree,mshtml=}"
 if [ -z "${MTL_HUD_ENABLED:-}" ] && [ -e "${STEAMPLAY_HOME:-$HOME/Library/Application Support/SteamPlay}/hud" ]; then
     export MTL_HUD_ENABLED=1
 fi
+# GLib in lib/external would load GIO modules from Homebrew's folder, which on a player's Mac
+# holds modules for whatever GLib Homebrew has; it gets a folder of the bundle's own instead
+export GIO_MODULE_DIR=${GIO_MODULE_DIR:-$WINE_INSTALL/lib/external/gio/modules}
 # One game's own settings, from env.<app id> next to that file (see the head of this file)
 game_env="${STEAMPLAY_HOME:-$HOME/Library/Application Support/SteamPlay}/env.$appid"
 if [ -f "$game_env" ]; then
@@ -212,6 +215,14 @@ rm -f "$hang".*.txt
         wait
         exit 0
     done
+) </dev/null >/dev/null 2>&1 &
+# When the session has ended, how long it ran and how it ended goes into SteamPlay's results,
+# which "macos/steamplay discover" judges games by. Like the watcher above, this waits for this
+# process, which becomes Wine's.
+started=$(date +%s)
+(
+    while kill -0 $$ 2>/dev/null; do sleep 2; done
+    "$PROTIUM_PYTHON" "$SCRIPT_DIR/steamplay" record "$appid" "$started" "$logfile"
 ) </dev/null >/dev/null 2>&1 &
 cd "$(dirname "$exe")"
 # steam.exe starts the game by its full Windows path (Wine's Z: drive is the host's /). It is
