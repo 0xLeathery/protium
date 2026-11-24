@@ -10,6 +10,8 @@ written. "Known problems" is a heading of our own, next to Keep a Changelog's.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-24
+
 ### Added
 
 - Protium updates itself: when a newer version is out, its window shows what that version
@@ -28,6 +30,13 @@ written. "Known problems" is a heading of our own, next to Keep a Changelog's.
 - Protium's own Python no longer writes files into the app. In 0.1.0 and 0.2.0 it did so the
   first time some of its modules were used, which left the app's signature no longer matching
   its contents.
+
+### Known problems
+
+- 0.1.0 and 0.2.0 cannot update themselves: download this version from its page and drag it
+  over the older one. From this version on, Protium updates from its own window.
+- The first load of a level can take several minutes while shaders are compiled, and a game can
+  hitch the first time it draws something new. Later loads are faster.
 
 ## [0.2.0] - 2026-11-24
 
@@ -70,6 +79,7 @@ run natively on arm64 with Metal, without Rosetta and without a virtual machine.
 - `steamplay discover` ranks the games in your library by how likely they are to work, and says
   why.
 
-[Unreleased]: https://github.com/0xLeathery/protium/compare/v0.2.0...macos-port
+[Unreleased]: https://github.com/0xLeathery/protium/compare/v0.3.0...macos-port
+[0.3.0]: https://github.com/0xLeathery/protium/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/0xLeathery/protium/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/0xLeathery/protium/releases/tag/v0.1.0
