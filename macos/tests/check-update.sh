@@ -34,8 +34,10 @@ SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 MACOS_DIR=$(cd "$SCRIPT_DIR/.." && pwd)
 BUILD_ROOT=${BUILD_ROOT:-$HOME/projects/proton-macos-build}
 RELEASE_APP=${RELEASE_APP:-$BUILD_ROOT/release/Protium.app}
-RELEASE_DMG=${RELEASE_DMG:-$BUILD_ROOT/release/Protium-0.2.0.dmg}
+RELEASE_DMG=${RELEASE_DMG:-$BUILD_ROOT/release/Protium-$(defaults read "${RELEASE_APP:-$BUILD_ROOT/release/Protium.app}/Contents/Info" CFBundleShortVersionString 2>/dev/null).dmg}
 TEST_VERSION=${TEST_VERSION:-0.2.99}
+# a version newer than any, for the images and announcements that must be refused
+FAKE=99.0.0
 TEST_DMG=${TEST_DMG:-$BUILD_ROOT/evidence/update-build/Protium-$TEST_VERSION.dmg}
 SIGN_IDENTITY=${SIGN_IDENTITY:-$(security find-identity -v -p codesigning | awk -F'"' '/Developer ID Application/{print $2; exit}')}
 E=$BUILD_ROOT/evidence/update
@@ -79,7 +81,7 @@ steamplay() {
 before=$(tree_sum "$APP")
 
 small_copy "$E/adhoc.app"
-plist_set "$E/adhoc.app" CFBundleShortVersionString 0.2.99
+plist_set "$E/adhoc.app" CFBundleShortVersionString $FAKE
 codesign --force --deep --sign - "$E/adhoc.app" 2>/dev/null
 image_of "$E/adhoc.app" "$E/adhoc.dmg"
 
@@ -89,7 +91,7 @@ image_of "$E/changed.app" "$E/changed.dmg"
 
 small_copy "$E/otherid.app"
 plist_set "$E/otherid.app" CFBundleIdentifier com.example.notprotium
-plist_set "$E/otherid.app" CFBundleShortVersionString 0.2.99
+plist_set "$E/otherid.app" CFBundleShortVersionString $FAKE
 codesign --force --deep --options runtime --sign "$SIGN_IDENTITY" "$E/otherid.app" 2>/dev/null
 image_of "$E/otherid.app" "$E/otherid.dmg"
 
@@ -108,12 +110,12 @@ refuse() {
         pass "$1" "$(echo "$out" | tail -1 | cut -c1-150)"
     fi
 }
-refuse adhoc "$E/adhoc.dmg" 0.2.99 "not signed by Protium's developer"
+refuse adhoc "$E/adhoc.dmg" $FAKE "not signed by Protium's developer"
 refuse changed "$E/changed.dmg" "$released" "not signed by Protium's developer, or was changed"
-refuse otherid "$E/otherid.dmg" 0.2.99 "not signed by Protium's developer"
+refuse otherid "$E/otherid.dmg" $FAKE "not signed by Protium's developer"
 refuse not-newer "$RELEASE_DMG" "$released" "is not newer than this one"
 refuse not-announced "$RELEASE_DMG" 0.9.0 "not the 0.9.0 that was announced"
-refuse not-an-image "$MACOS_DIR/steamplay" 0.2.99 "cannot be opened"
+refuse not-an-image "$MACOS_DIR/steamplay" $FAKE "cannot be opened"
 
 echo "== what GitHub says, and update --fetch and --install"
 # releases FILE VERSION ADDRESS: a list of releases as GitHub gives it, with the released one below
@@ -141,9 +143,9 @@ says() {
 }
 releases "$E/releases.json" "" ""
 says none-newer "refused: there is no newer version" steamplay update --fetch
-releases "$E/releases.json" 0.2.99 "https://example.com/Protium-0.2.99.dmg"
-says other-address "refused: release 0.2.99 has no disk image of ours" steamplay update --fetch
-releases "$E/releases.json" 0.2.99 ""
+releases "$E/releases.json" $FAKE "https://example.com/Protium-$FAKE.dmg"
+says other-address "refused: release $FAKE has no disk image of ours" steamplay update --fetch
+releases "$E/releases.json" $FAKE ""
 says changes "^- The first new thing" steamplay version --check --now
 [ "$(steamplay version --check | grep -c '^Protium ')" = 1 ] && pass changes-only-newer "only the newer version's changes are listed" || fail changes-only-newer "$(steamplay version --check | grep '^Protium ' | tr '\n' ' ')"
 says fetch-adhoc "refused: it is not signed by Protium's developer" env PROTIUM_UPDATE_IMAGE="$E/adhoc.dmg" bash -c "$(declare -f steamplay); E='$E' APP='$APP' MACOS_DIR='$MACOS_DIR'; steamplay update --fetch"
@@ -153,18 +155,18 @@ mkdir -p "$E/pfx"
 WINEPREFIX=$E/pfx "$APP/Contents/SharedSupport/runtime/bin/wineserver" -f -p10 >/dev/null 2>&1 &
 perl -e 'select(undef, undef, undef, 1.5)'
 says game-running "refused: a game is running from this Protium" steamplay update --fetch
-says game-running-install "refused: a game is running from this Protium" steamplay update --install "$E/adhoc.dmg" 0.2.99
+says game-running-install "refused: a game is running from this Protium" steamplay update --install "$E/adhoc.dmg" $FAKE
 WINEPREFIX=$E/pfx "$APP/Contents/SharedSupport/runtime/bin/wineserver" -k >/dev/null 2>&1
 wait 2>/dev/null
 chmod a-w "$E/Applications"
-says not-writable "cannot be written by this user" steamplay update --install "$E/adhoc.dmg" 0.2.99
+says not-writable "cannot be written by this user" steamplay update --install "$E/adhoc.dmg" $FAKE
 chmod u+w "$E/Applications"
-says install-adhoc "refused: it is not signed by Protium's developer" steamplay update --install "$E/adhoc.dmg" 0.2.99
+says install-adhoc "refused: it is not signed by Protium's developer" steamplay update --install "$E/adhoc.dmg" $FAKE
 [ -z "$(ls -A "$E/Applications" | grep -v '^Protium.app$')" ] && pass install-cleans "nothing is left next to the app" || fail install-cleans "left: $(ls -A "$E/Applications" | tr '\n' ' ')"
 [ ! -e "$E/home/update-pending.json" ] && pass no-pending "no update is pending after refusals" || fail no-pending "update-pending.json was written"
 
 echo "== the notice when a game starts"
-says notice "^notify 0.2.99 The first new thing" env PROTIUM_NOTIFY_TEST=1 bash -c "$(declare -f steamplay); E='$E' APP='$APP' MACOS_DIR='$MACOS_DIR'; steamplay version --notify"
+says notice "^notify $FAKE The first new thing" env PROTIUM_NOTIFY_TEST=1 bash -c "$(declare -f steamplay); E='$E' APP='$APP' MACOS_DIR='$MACOS_DIR'; steamplay version --notify"
 [ -z "$(PROTIUM_NOTIFY_TEST=1 steamplay version --notify)" ] && pass notice-once "the second game start says nothing" || fail notice-once "it was told twice"
 steamplay updates off >/dev/null
 rm -f "$E/home/update-check.json"
@@ -179,7 +181,8 @@ codesign --verify --deep --strict "$APP" 2>/dev/null && pass seal "the installed
 # A real update, when there is a notarized build of a newer version to update to ($TEST_DMG,
 # of version $TEST_VERSION; never published). No window opens: the check plays the new app's
 # part and writes "started" itself, or does not.
-if [ -f "$TEST_DMG" ]; then
+newer_than_released() { [ "$1" != "$released" ] && [ "$(printf '%s\n%s\n' "$released" "$1" | sort -t. -k1,1n -k2,2n -k3,3n | tail -1)" = "$1" ]; }
+if [ -f "$TEST_DMG" ] && newer_than_released "$TEST_VERSION"; then
     echo "== a real update to $TEST_VERSION, and one whose new app never starts"
     releases "$E/releases.json" "$TEST_VERSION" ""
     wait_for() {    # wait_for SECONDS test...
@@ -216,7 +219,7 @@ if [ -f "$TEST_DMG" ]; then
     codesign --verify --deep --strict "$APP" 2>/dev/null && pass rollback-seal "the app put back verifies" || fail rollback-seal "the app put back does not verify"
     [ -z "$(ls -A "$E/Applications" | grep -v '^Protium.app$')" ] && pass rollback-clean "nothing else is left in the folder" || fail rollback-clean "left: $(ls -A "$E/Applications" | tr '\n' ' ')"
 else
-    echo "SKIP  a real update: no test build at $TEST_DMG (see the head of this file)"
+    echo "SKIP  a real update: no notarized test build newer than $released at $TEST_DMG (see the head of this file)"
 fi
 
 mount | grep -q protium-update- && fail mounts "a disk image is still mounted" || pass mounts "no disk image left mounted"
