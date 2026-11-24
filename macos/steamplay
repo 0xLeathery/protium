@@ -1835,8 +1835,12 @@ def outcome(runs):
         return None, ""
     last = auto[-1]
     longest = max(r.get("seconds", 0) for r in auto)
-    if last.get("end") in ("abort", "crash", "hang") and longest < GOOD_RUN_SECONDS:
+    if last.get("end") in ("abort", "crash") and longest < GOOD_RUN_SECONDS:
         return False, "its last run ended in a %s after %d s" % (last["end"], last.get("seconds", 0))
+    # a thread that waited a minute for a lock is not a hung game: Call of Duty: World at War
+    # logs it while it plays its cutscenes and takes input
+    if last.get("end") == "hang" and longest < GOOD_RUN_SECONDS:
+        return None, "in its last run (%d s) a thread waited a minute for a lock, which some games do while running" % last.get("seconds", 0)
     if longest >= GOOD_RUN_SECONDS:
         return True, "it ran for %d minutes" % (longest // 60)
     return None, "it ran for %d s at most, which says little" % longest
