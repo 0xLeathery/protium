@@ -48,9 +48,12 @@ Steam Play itself works on Mac Steam:
 - Steam Cloud.
 
 Missing so far:
+<!-- missing: written by "macos/steamplay docs" from macos/compat/parity.json -->
 - the Steam overlay;
 - OpenGL above 2.1;
-- .NET programs (wine-mono) and embedded web views (wine-gecko).
+- .NET programs (wine-mono);
+- embedded web views in launchers (wine-gecko).
+<!-- missing end -->
 
 Games with kernel-level anti-cheat are not expected to work.
 

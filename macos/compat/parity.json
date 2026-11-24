@@ -1,0 +1,332 @@
+{
+ "about": "Where Protium stands on each thing Steam Play does on Linux. macos/PARITY.md's tables and the README's \"Missing so far\" list are written from this file by \"macos/steamplay docs\"; a unit test fails when they differ. A commit that changes what works changes its row here. status: works, partial, missing, untested or blocked. here: the evidence (a check, a game) or what is lacking. takes: what bringing it in takes, empty when nothing. capability: the feature of capabilities.json that must say the same. readme_missing: how the README names it while its status is missing or partial.",
+ "reviewed": "2026-11-25",
+ "sections": [
+  {
+   "title": "Steam client integration",
+   "rows": [
+    {
+     "feature": "Install the Windows build",
+     "linux": "Steam Play enables it per game",
+     "status": "works",
+     "here": "Steam Play itself. Mac Steam has Linux's Steam Play and runs it while its platform is \"linux\" (`@sSteamCmdForcePlatformType linux` in the `steam_dev.cfg` next to its executables); it then installs each game's depots by the game's compatibility tool and keeps them across restarts (rollout 2026-11-17: GTFO re-fetched its Windows depot by itself, nothing else changed). `steamplay setup` writes the switch",
+     "takes": "`steamplay guard` keeps the switch and the tools in place; without them Steam removes Windows installs at its next start"
+    },
+    {
+     "feature": "Play from the game's own library entry",
+     "linux": "Steam starts the compatibility tool",
+     "status": "works",
+     "here": "Steam runs `<tool>/run waitforexitandrun <game>` with Proton's environment, as on Linux (IRON NEST, Just Die Already, Kerbal Space Program, 2026-11-17).",
+     "takes": ""
+    },
+    {
+     "feature": "Compatibility tool list, per-game tool choice; native builds win",
+     "linux": "Steam Play settings",
+     "status": "works",
+     "here": "two tools in `/usr/local/share/steam/compatibilitytools.d` (the folder Mac Steam scans): `proton-macos` (Windows build through Proton) and `macos-native` (the Mac build, unchanged). `steamplay setup` maps every game in Steam's app cache: a 64-bit or Apple Silicon Mac build wins, everything else gets Proton; `steamplay prefer` overrides one game. Kerbal got its Mac depot, not its Linux one",
+     "takes": "The guard maps newly bought games while Steam is not running; whether Steam's own Properties shows the choice is unchecked"
+    },
+    {
+     "feature": "Steamworks API (login, ownership, Steam DRM, stats, achievements)",
+     "linux": "lsteamclient to the Linux client",
+     "status": "works",
+     "here": "lsteamclient to Mac Steam's client library (check-wave5 item 10; IRON NEST, Left 4 Dead stats, GTFO login)",
+     "takes": ""
+    },
+    {
+     "feature": "Playtime and \"running\" status",
+     "linux": "Steam tracks the tool's processes",
+     "status": "works",
+     "here": "Steam's log shows the game's process added and removed",
+     "takes": ""
+    },
+    {
+     "feature": "Online play, Steam networking",
+     "linux": "through the client",
+     "status": "partial",
+     "here": "GTFO's network layer and its PlayFab login came up; lobbies and matches untested",
+     "takes": "Play a match"
+    },
+    {
+     "feature": "Steam Cloud, by API",
+     "linux": "through the client",
+     "status": "works",
+     "here": "one case so far: Left 4 Dead saved its config to the cloud",
+     "takes": "Test more games"
+    },
+    {
+     "feature": "Steam Cloud, files Steam syncs itself (Auto-Cloud)",
+     "linux": "Steam maps Windows save paths into the prefix",
+     "status": "works",
+     "here": "under Steam Play, Steam watches the save files in `compatdata/<id>/pfx/drive_c/users/steamuser/...` (IRON NEST, cloud log 2026-11-17)",
+     "takes": "Test a second game"
+    },
+    {
+     "feature": "Overlay (Shift+Tab), screenshots, Remote Play, broadcast",
+     "linux": "Steam injects its overlay library into the Wine process",
+     "status": "missing",
+     "here": "Valve's overlay DLLs are put in the prefix, because some games end themselves without them (Modern Warfare Remastered), but nothing is drawn. Steam passes its overlay libraries to the tool (`STEAM_DYLD_INSERT_LIBRARIES`: `steamloader.dylib`, `gameoverlayrenderer.dylib`, both with arm64 code), but the tool does not load them and our signed loader ignores injected libraries",
+     "takes": "Load them from the tool, add the entitlement that allows it, then see whether Valve's overlay can draw over our Metal output",
+     "readme_missing": "the Steam overlay"
+    },
+    {
+     "feature": "Steam Input (controller layouts, remapping)",
+     "linux": "virtual controllers Proton reads",
+     "status": "untested",
+     "here": "controllers work directly instead (below)",
+     "takes": "After the overlay"
+    },
+    {
+     "feature": "Install scripts (first-run redistributables)",
+     "linux": "Steam runs them in the prefix",
+     "status": "works",
+     "here": "registry values and installers that run once. Mac Steam does not run the scripts, so `steamplay installscript` does what they ask for before a game's first start (Red Dead Redemption 2's Vulkan runtime, The Last of Us Part II's PlayStation runtime)",
+     "takes": "Try more games' scripts"
+    },
+    {
+     "feature": "Shader pre-caching",
+     "linux": "Steam downloads compiled shaders",
+     "status": "blocked",
+     "here": "Steam-side, Vulkan pipelines; DXMT and Metal keep their own caches",
+     "takes": ""
+    },
+    {
+     "feature": "Updates, DLC, Workshop downloads",
+     "linux": "Steam",
+     "status": "partial",
+     "here": "Steam does them while the switch is on; Workshop untested",
+     "takes": "Follows the persistent switch"
+    },
+    {
+     "feature": "Uninstall removes the prefix",
+     "linux": "Steam",
+     "status": "missing",
+     "here": "the `compatdata` folder stays",
+     "takes": "Small tool step"
+    }
+   ],
+   "columns": [
+    "Feature",
+    "How Linux does it",
+    "Here",
+    "What bringing it in takes"
+   ]
+  },
+  {
+   "title": "Running the game",
+   "rows": [
+    {
+     "feature": "x86-64 and 32-bit x86 code",
+     "linux": "native CPU",
+     "status": "works",
+     "here": "through FEX (Just Die Already, GTFO; Left 4 Dead and Call of Duty: World at War, 32-bit). One known hang: the Godot editor (check-wave4 item 11, parked)",
+     "takes": "Our fixes to FEX are in `macos/patches/fex`",
+     "capability": "x86_32"
+    },
+    {
+     "feature": "Direct3D 10/11",
+     "linux": "DXVK",
+     "status": "works",
+     "here": "DXMT (IRON NEST, Just Die Already, GTFO)",
+     "takes": "",
+     "capability": "d3d11"
+    },
+    {
+     "feature": "Direct3D 9",
+     "linux": "DXVK",
+     "status": "works",
+     "here": "mtld3d (check-wave5 item 6, Left 4 Dead)",
+     "takes": "",
+     "capability": "d3d9"
+    },
+    {
+     "feature": "Direct3D 12",
+     "linux": "vkd3d-proton",
+     "status": "partial",
+     "here": "vkd3d-proton on KosmicKrisp; IRON NEST runs, heavy titles are untested or slow to load, ray tracing untested",
+     "takes": "Test a heavy title (The Last of Us Part II is installed)",
+     "capability": "d3d12"
+    },
+    {
+     "feature": "Direct3D 8 and older, DirectDraw",
+     "linux": "DXVK (d3d8), WineD3D",
+     "status": "untested",
+     "here": "",
+     "takes": "Test an old game"
+    },
+    {
+     "feature": "Vulkan games",
+     "linux": "winevulkan",
+     "status": "partial",
+     "here": "Red Dead Redemption 2 reaches gameplay on its Vulkan renderer, with its frame rate limited by CPU time; no other Vulkan game tried",
+     "takes": "Test a second game",
+     "capability": "vulkan"
+    },
+    {
+     "feature": "OpenGL",
+     "linux": "native driver",
+     "status": "partial",
+     "here": "up to 2.1 (check-wave5 item 7)",
+     "takes": "Zink (OpenGL on Vulkan, from Mesa) over KosmicKrisp",
+     "readme_missing": "OpenGL above 2.1"
+    },
+    {
+     "feature": "Fullscreen scaling (Proton's fullscreen hack, FSR)",
+     "linux": "in Wine's drivers",
+     "status": "missing",
+     "here": "needs OpenGL 3.3; plain fullscreen and resize work (items 5, 9)",
+     "takes": "After OpenGL"
+    },
+    {
+     "feature": "HDR, ray tracing, DLSS-style upscalers",
+     "linux": "DXVK/vkd3d + drivers",
+     "status": "untested",
+     "here": "not expected to work",
+     "takes": ""
+    },
+    {
+     "feature": "Video: H.264, HEVC, VP8/9, WMV, MPEG-4; AAC, MP3, Opus, WMA",
+     "linux": "GStreamer + FFmpeg",
+     "status": "works",
+     "here": "H.264/AAC and VP9/Opus, with and without a Direct3D 11 device (item 3); the other decoders are built but untested",
+     "takes": "Test files per codec"
+    },
+    {
+     "feature": "Video: AV1",
+     "linux": "dav1d",
+     "status": "missing",
+     "here": "its wrapper did not build",
+     "takes": "Build dav1d into the GStreamer set"
+    },
+    {
+     "feature": "Audio output",
+     "linux": "PulseAudio/ALSA",
+     "status": "works",
+     "here": "CoreAudio, and a stream follows a change of the default output; crackle in Call of Duty: WWII is open",
+     "takes": "Find the crackle"
+    },
+    {
+     "feature": "Microphone, voice chat",
+     "linux": "same",
+     "status": "untested",
+     "here": "",
+     "takes": "Needs macOS's microphone prompt to reach the loader"
+    },
+    {
+     "feature": "Keyboard, mouse, cursor capture",
+     "linux": "X11/Wayland driver",
+     "status": "works",
+     "here": "item 4; mouse look is even in games that move the pointer back to the middle every frame (check-mouse.sh); one unreproduced stuck cursor in IRON NEST",
+     "takes": ""
+    },
+    {
+     "feature": "Game controllers",
+     "linux": "SDL/hidraw",
+     "status": "works",
+     "here": "an Xbox controller, XInput and DirectInput (item 8, IOHID); rumble, PlayStation and Switch controllers untested",
+     "takes": "Test; add rumble if absent"
+    },
+    {
+     "feature": "TLS, HTTP, crypto",
+     "linux": "GnuTLS, libgcrypt",
+     "status": "works",
+     "here": "items 1, 2; Kerberos/NTLM sign-in missing",
+     "takes": "Rarely needed by games"
+    },
+    {
+     "feature": ".NET Framework programs (wine-mono)",
+     "linux": "bundled",
+     "status": "missing",
+     "here": "not in the bundle, and disabled at launch",
+     "takes": "Add Proton's wine-mono to the bundle",
+     "capability": "dotnet",
+     "readme_missing": ".NET programs (wine-mono)"
+    },
+    {
+     "feature": "Embedded web views in launchers (wine-gecko)",
+     "linux": "bundled",
+     "status": "missing",
+     "here": "not in the bundle, and disabled at launch",
+     "takes": "Add it; test one publisher launcher",
+     "readme_missing": "embedded web views in launchers (wine-gecko)"
+    },
+    {
+     "feature": "Proton's fonts (Arial, Times, Courier stand-ins, CJK)",
+     "linux": "bundled",
+     "status": "partial",
+     "here": "Wine's fonts are linked into the prefix as Proton links them, and the Mac's Arial, Courier New, Times New Roman, Tahoma, Microsoft Sans Serif and Wingdings stand in for Proton's; the East Asian and Indic ones have no stand-in",
+     "takes": "Build Proton's `fonts/` into the bundle"
+    },
+    {
+     "feature": "Per-game fixes and options (`proton` script: quirk lists, `PROTON_*` options, prefix template and upgrades, logs)",
+     "linux": "the `proton` launcher",
+     "status": "missing",
+     "here": "`steamplay-run.sh` is a minimal stand-in; each new prefix is made from scratch",
+     "takes": "Port Valve's `proton` script to macOS and launch through it: the largest single step towards parity"
+    },
+    {
+     "feature": "Fast synchronisation (ntsync/fsync)",
+     "linux": "kernel support",
+     "status": "works",
+     "here": "fsync on macOS, on unless `PROTON_NO_FSYNC=1`: events, semaphores and mutexes are kept in shared memory (check-wave5 item 15; Call of Duty: WWII loads a mission with it)",
+     "takes": ""
+    },
+    {
+     "feature": "Kernel anti-cheat (Easy Anti-Cheat, BattlEye)",
+     "linux": "vendors' Proton runtimes, where a developer opts in",
+     "status": "blocked",
+     "here": "no macOS runtimes for Windows games",
+     "takes": "Vendor decision",
+     "capability": "anticheat_kernel"
+    },
+    {
+     "feature": "VR",
+     "linux": "OpenVR bridge",
+     "status": "missing",
+     "here": "not planned",
+     "takes": ""
+    }
+   ],
+   "columns": [
+    "Feature",
+    "How Linux does it",
+    "Here",
+    "What bringing it in takes"
+   ]
+  },
+  {
+   "title": "Install and updates",
+   "rows": [
+    {
+     "feature": "One install",
+     "status": "works",
+     "here": "Protium.app in a disk image, with Set up Steam, Repair, Status, Uninstall and Diagnostics (check-setup.sh)",
+     "takes": ""
+    },
+    {
+     "feature": "Loader signed for other Macs",
+     "status": "works",
+     "here": "signed with a Developer ID and its profile, and notarized by Apple; it has run on one Mac so far",
+     "takes": "Reports from other Macs"
+    },
+    {
+     "feature": "Valve's Windows client DLLs",
+     "status": "works",
+     "here": "`steamplay steamclient` fetches them from Valve's servers and checks their SHA-256",
+     "takes": ""
+    },
+    {
+     "feature": "Updates of the runtime",
+     "status": "works",
+     "here": "the app asks GitHub once a day at most and updates itself, and the old version comes back if the new one does not start (check-update.sh)",
+     "takes": ""
+    }
+   ],
+   "columns": [
+    "Need",
+    "Here",
+    "What it takes"
+   ]
+  }
+ ]
+}

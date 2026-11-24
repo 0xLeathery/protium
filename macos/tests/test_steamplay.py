@@ -309,5 +309,49 @@ class GuardLimit(unittest.TestCase):
         self.assertTrue(sp.guard_may_stop(["[2026-11-25 11:00:00] Startup"]))
 
 
+def parity(**row):
+    full = {"feature": "A feature", "linux": "as Linux does it", "status": "works", "here": "a game", "takes": ""}
+    full.update(row)
+    return {"reviewed": "2026-11-25", "sections": [{"title": "A section", "rows": [full],
+            "columns": ["Feature", "How Linux does it", "Here", "What bringing it in takes"]}]}
+
+
+class Docs(unittest.TestCase):
+    """The README and PARITY.md are written from compat/games.json and compat/parity.json. This
+    is the test that fails when a document was edited by hand, or a data file was changed and
+    "macos/steamplay docs" was not run."""
+
+    def test_the_documents_are_what_the_data_files_say(self):
+        texts, problems = sp.docs()
+        self.assertEqual(problems, [])
+        self.assertEqual(sorted(os.path.basename(p) for p in texts), ["PARITY.md", "README.md"])
+        for path, (text, new) in texts.items():
+            self.assertEqual(text, new, "%s differs from its data: run macos/steamplay docs" % path)
+
+    def test_a_row_is_written_with_its_status_and_a_dash_for_nothing(self):
+        lines = sp.parity_tables(parity()).split("\n")
+        self.assertEqual(lines[0], "Last reviewed 2026-11-25.")
+        self.assertEqual(lines[-1], "| A feature | as Linux does it | **works**: a game | — |")
+        self.assertEqual(sp.parity_tables(parity(status="untested", here="")).split("\n")[-1],
+                         "| A feature | as Linux does it | **untested** | — |")
+
+    def test_what_is_wrong_in_the_data_is_said(self):
+        self.assertEqual(sp.parity_problems(parity(), CAPS), [])
+        for row in ({"status": "done"}, {"status": "works", "here": ""},
+                    {"status": "works", "readme_missing": "the feature"},
+                    {"status": "works", "capability": "opengl"}, {"capability": "no-such-feature"}):
+            self.assertEqual(len(sp.parity_problems(parity(**row), CAPS)), 1, row)
+        self.assertEqual(sp.parity_problems(parity(status="missing", capability="opengl", readme_missing="it"), CAPS), [])
+
+    def test_the_missing_list_ends_with_a_full_stop(self):
+        data = parity(status="missing", readme_missing="one thing")
+        data["sections"][0]["rows"].append(dict(data["sections"][0]["rows"][0], readme_missing="another"))
+        self.assertEqual(sp.missing_list(data), "- one thing;\n- another.")
+
+    def test_a_document_without_its_marker_lines_is_left_alone(self):
+        self.assertIsNone(sp.between("no markers here", sp.PARITY_START, sp.PARITY_END, "x"))
+        self.assertEqual(sp.between("a\n<s>\nold\n<e>\nb", "<s>", "<e>", "new"), "a\n<s>\nnew\n<e>\nb")
+
+
 if __name__ == "__main__":
     unittest.main()

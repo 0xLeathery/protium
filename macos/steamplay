@@ -25,6 +25,9 @@
                                       release and test it, test a disk image, put its app in
                                       this one's place (after process pid has gone)
     macos/steamplay games             write the README's games table again from compat/games.json
+    macos/steamplay docs [--check]    write the README's lists and PARITY.md's tables again from
+                                      compat/games.json and compat/parity.json; with --check,
+                                      only say whether they differ
     macos/steamplay survey --away [--seconds N] [--games N] [--only <app id>...]
                                       start each untried installed game for a while (takes the screen)
     macos/steamplay uninstall [--dry-run]
@@ -2445,6 +2448,14 @@ def cmd_report_show(appid, as_json):
 GAMES = os.path.join(os.path.dirname(os.path.abspath(__file__)), "compat", "games.json")
 README = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".github", "README.md")
 GAMES_START, GAMES_END = "<!-- games: written by \"macos/steamplay games\" from macos/compat/games.json -->", "<!-- games end -->"
+# what Steam Play does on Linux and where Protium stands on each point: the source of PARITY.md's
+# tables and of the README's "Missing so far" list ("docs" writes both)
+PARITY = os.path.join(os.path.dirname(os.path.abspath(__file__)), "compat", "parity.json")
+PARITY_DOC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "PARITY.md")
+PARITY_START, PARITY_END = "<!-- parity: written by \"macos/steamplay docs\" from macos/compat/parity.json -->", "<!-- parity end -->"
+MISSING_START, MISSING_END = "<!-- missing: written by \"macos/steamplay docs\" from macos/compat/parity.json -->", "<!-- missing end -->"
+PARITY_STATUS = ("works", "partial", "missing", "untested", "blocked")
+CAPABILITY_STATUS = {"good": "works", "partial": "partial", "missing": "missing", "blocked": "blocked"}
 VERDICT_TEXT = {"works": "Works", "plays-with-problems": "Plays, with problems",
                 "menu-only": "Starts, not played further", "broken": "Does not run"}
 API_TEXT = (("d3d12", "Direct3D 12"), ("d3d11", "Direct3D 11"), ("d3d10", "Direct3D 10"), ("d3d9", "Direct3D 9"),
@@ -2466,29 +2477,131 @@ def game_graphics(appid, cache, runs):
     return text
 
 
-def write_games_table():
-    """Writes the README's table from games.json. False when there is no README to write, as in
-    the installed app, or it has no marker lines."""
+def between(text, start, end, body):
+    """text with what is between two marker lines replaced by body; None without the markers."""
+    if start not in text or end not in text:
+        return None
+    head, rest = text.split(start, 1)
+    return head + start + "\n" + body + "\n" + end + rest.split(end, 1)[1]
+
+
+def cell(value):
+    return str(value or "").replace("|", "/").replace("\n", " ")
+
+
+def games_table():
+    """The README's games table, from games.json."""
     games = read_json(GAMES, {}).get("games", [])
-    try:
-        with open(README) as f:
-            text = f.read()
-    except OSError:
-        return False
-    if GAMES_START not in text or GAMES_END not in text:
-        return False
     order = {v: i for i, v in enumerate(VERDICTS)}
     rows = ["| Game | Graphics | Verdict | Notes | Tested |", "|---|---|---|---|---|"]
     for g in sorted(games, key=lambda g: (order.get(g.get("verdict"), 9), g.get("name", "").lower())):
-        cell = lambda v: str(v or "").replace("|", "/").replace("\n", " ")
         rows.append("| %s | %s | %s | %s | %s |" % (cell(g.get("name")), cell(g.get("graphics")),
                                                  VERDICT_TEXT.get(g.get("verdict"), cell(g.get("verdict"))),
                                                  cell(g.get("note")), cell(g.get("tested"))))
-    head, rest = text.split(GAMES_START, 1)
-    new = head + GAMES_START + "\n" + "\n".join(rows) + "\n" + GAMES_END + rest.split(GAMES_END, 1)[1]
+    return "\n".join(rows)
+
+
+def parity_problems(parity, caps):
+    """What is wrong in parity.json, as sentences; [] when it can be written out."""
+    problems = []
+    features = caps.get("features", {})
+    for section in parity.get("sections", []):
+        for row in section.get("rows", []):
+            name = row.get("feature", "?")
+            if row.get("status") not in PARITY_STATUS:
+                problems.append("%s: status %r is not one of %s" % (name, row.get("status"), ", ".join(PARITY_STATUS)))
+            if row.get("status") == "works" and not row.get("here"):
+                problems.append("%s: \"works\" needs its evidence in \"here\"" % name)
+            if row.get("readme_missing") and row.get("status") not in ("missing", "partial"):
+                problems.append("%s: the README still lists it as missing (readme_missing), and its status is %s"
+                                % (name, row.get("status")))
+            cap = row.get("capability")
+            if cap and cap not in features:
+                problems.append("%s: no feature %r in capabilities.json" % (name, cap))
+            elif cap and CAPABILITY_STATUS.get(features[cap].get("status")) != row.get("status"):
+                problems.append("%s: status %s here, and capabilities.json says %s for %s"
+                                % (name, row.get("status"), features[cap].get("status"), cap))
+    return problems
+
+
+def parity_tables(parity):
+    """PARITY.md's review date and tables, from parity.json."""
+    out = ["Last reviewed %s." % parity.get("reviewed", "?")]
+    for section in parity.get("sections", []):
+        columns = section["columns"]
+        out += ["", "## " + section["title"], "", "| %s |" % " | ".join(columns), "|" + "---|" * len(columns)]
+        for row in section["rows"]:
+            here = "**%s**%s" % (row["status"], (": " + cell(row["here"])) if row.get("here") else "")
+            cells = [cell(row["feature"])] + ([cell(row.get("linux"))] if len(columns) == 4 else []) + [here, cell(row.get("takes")) or "—"]
+            out.append("| %s |" % " | ".join(cells))
+    return "\n".join(out)
+
+
+def missing_list(parity):
+    """The README's "Missing so far" list: the rows of parity.json that name themselves for it."""
+    names = [row["readme_missing"] for section in parity.get("sections", []) for row in section.get("rows", [])
+             if row.get("readme_missing")]
+    return "\n".join("- %s%s" % (n, "." if i == len(names) - 1 else ";") for i, n in enumerate(names))
+
+
+def docs():
+    """{path: (text now, text as the data files give it)} for the README and PARITY.md, and the
+    problems found in the data. A document that is not there, as in the installed app, or has
+    lost its marker lines, is a problem too."""
+    parity = read_json(PARITY, {})
+    problems = parity_problems(parity, read_json(CAPABILITIES, {}))
+    parts = {README: [(GAMES_START, GAMES_END, games_table()), (MISSING_START, MISSING_END, missing_list(parity))],
+             PARITY_DOC: [(PARITY_START, PARITY_END, parity_tables(parity))]}
+    out = {}
+    for path, blocks in parts.items():
+        try:
+            with open(path, encoding="utf-8") as f:
+                text = new = f.read()
+        except OSError:
+            problems.append("no %s" % path)
+            continue
+        for start, end, body in blocks:
+            changed = between(new, start, end, body)
+            if changed is None:
+                problems.append("%s has no \"%s\" ... \"%s\" lines" % (path, start, end))
+            else:
+                new = changed
+        out[path] = (text, new)
+    return out, problems
+
+
+def write_games_table():
+    """Writes the README's table from games.json. False when there is no README to write, as in
+    the installed app, or it has no marker lines."""
+    try:
+        with open(README, encoding="utf-8") as f:
+            text = f.read()
+    except OSError:
+        return False
+    new = between(text, GAMES_START, GAMES_END, games_table())
+    if new is None:
+        return False
     if new != text:
-        write_file(README, new)
+        write_file(README, new, encoding="utf-8")
     return True
+
+
+def cmd_docs(check):
+    """Writes what the data files say into the README and PARITY.md; with --check, only says
+    which of them differ (exit status 1), as the unit test and the commit hook do."""
+    texts, problems = docs()
+    for problem in problems:
+        print("PROBLEM: " + problem)
+    stale = [path for path, (text, new) in texts.items() if text != new]
+    for path in stale:
+        if check:
+            print("%s is not what the data files say: run \"macos/steamplay docs\"" % os.path.relpath(path))
+        else:
+            write_file(path, texts[path][1], encoding="utf-8")
+            print("wrote " + os.path.relpath(path))
+    if not stale and not problems:
+        print("the README and PARITY.md are what the data files say")
+    return 1 if problems or (check and stale) else 0
 
 
 def update_games_list(appid, name, verdict, note, graphics):
@@ -2809,6 +2922,8 @@ def main(argv):
         sys.exit(cmd_report_show(int(argv[2]), "--json" in argv))
     elif argv == ["games"]:
         sys.exit(cmd_games())
+    elif argv in (["docs"], ["docs", "--check"]):
+        sys.exit(cmd_docs("--check" in argv))
     elif len(argv) == 4 and argv[0] == "record" and argv[1].isdigit() and argv[2].isdigit():
         sys.exit(cmd_record(int(argv[1]), int(argv[2]), argv[3]))
     elif len(argv) >= 1 and argv[0] == "survey":
