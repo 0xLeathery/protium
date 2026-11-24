@@ -15,7 +15,10 @@
 # playtime; not the overlay, which Steam would have to inject into the game's process).
 #
 # Environment overrides:
-#   WINE_INSTALL    the bundle (default ~/projects/proton-macos-build/install-aarch64)
+#   WINE_INSTALL    the bundle (default: Protium.app's Contents/SharedSupport/runtime when this
+#                   script is the app's copy, else ~/projects/proton-macos-build/install-aarch64)
+#   PROTIUM_PYTHON  the Python that runs macos/steamplay (default: Protium.app's own when this
+#                   script is the app's copy, else python3 from PATH)
 #   STEAM_ROOT      Mac Steam's data folder (default ~/Library/Application Support/Steam)
 #   WIN_STEAM_DLLS  a folder with Valve's Windows steamclient.dll and steamclient64.dll, which
 #                   Mac Steam does not ship (Linux Steam has them in legacycompat/); copy them from
@@ -49,7 +52,17 @@
 set -euo pipefail
 
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
+# inside Protium.app this script is Contents/Resources/steamplay/steamplay-run.sh, next to the
+# app's runtime and Python in Contents/SharedSupport
+app_support="$SCRIPT_DIR/../../SharedSupport"
+if [ -z "${WINE_INSTALL:-}" ] && [ -x "$app_support/runtime/bin/wine" ]; then
+    WINE_INSTALL=$(cd "$app_support/runtime" && pwd)
+fi
+if [ -z "${PROTIUM_PYTHON:-}" ] && [ -x "$app_support/python/bin/python3" ]; then
+    PROTIUM_PYTHON=$(cd "$app_support/python/bin" && pwd)/python3
+fi
 WINE_INSTALL=${WINE_INSTALL:-$HOME/projects/proton-macos-build/install-aarch64}
+PROTIUM_PYTHON=${PROTIUM_PYTHON:-python3}
 STEAM_ROOT=${STEAM_ROOT:-$HOME/Library/Application Support/Steam}
 WIN_STEAM_DLLS=${WIN_STEAM_DLLS:-$HOME/Library/Application Support/SteamPlay/steamclient-windows}
 
@@ -147,7 +160,7 @@ FONTS
 # What the game's install scripts ask for, once per prefix: Steam for Windows and for Linux run
 # them before a game's first start, Mac Steam does not (see "installscript" in macos/steamplay).
 # Red Dead Redemption 2's installs the Vulkan runtime that the option below is about.
-STEAMPLAY_WINE="$WINE_INSTALL/bin/wine" WINEDEBUG=-all python3 "$SCRIPT_DIR/steamplay" installscript "$appid" \
+STEAMPLAY_WINE="$WINE_INSTALL/bin/wine" WINEDEBUG=-all "$PROTIUM_PYTHON" "$SCRIPT_DIR/steamplay" installscript "$appid" \
     || log "app $appid: an install script step did not finish (macos/steamplay installscript $appid --again repeats them)"
 # Steam's own compatibility options for the game, which Proton's script takes the same way.
 # nativevulkanloader: the game is to load Khronos's vulkan-1.dll, which its own installer puts

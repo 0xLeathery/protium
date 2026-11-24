@@ -17,6 +17,8 @@
     macos/steamplay guard install|remove
                                       have that done by itself, as a login item of this user
     macos/steamplay tools             install the compatibility tools only (Steam quit)
+    macos/steamplay steamclient [--again]
+                                      fetch Valve's Windows steamclient DLLs from Valve's servers
     macos/steamplay links [app id...] put back the symbolic links Steam left out of a Mac build
     macos/steamplay installscript <app id> [--dry-run] [--again] [--mark-done]
                                       do what a Windows game's install scripts ask for, in its prefix
@@ -728,47 +730,138 @@ def cmd_status():
     return 1 if problems else 0
 
 
+def app_contents():
+    """Protium.app's Contents folder when this script is the app's copy
+    (Contents/Resources/steamplay/steamplay, with the runtime in Contents/SharedSupport/runtime),
+    else None: a checkout or the guard's copy."""
+    contents = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    if os.path.basename(contents) == "Contents" \
+            and os.access(os.path.join(contents, "SharedSupport", "runtime", "bin", "wine"), os.X_OK):
+        return contents
+    return None
+
+
 def install_paths():
-    """(the checkout's macos folder, the build root) for the installed tools. Run from a checkout,
-    this copy records both in INSTALL_JSON; run from the guard's copy, it reads them from there.
-    (None, None) when neither is known."""
+    """What the installed tools need to know, as a dict: macos_dir (where steamplay-launch is),
+    and when known wine_install, python and tool_log. Run from a checkout or from Protium.app,
+    this copy records it in INSTALL_JSON; run from the guard's copy, it reads it from there.
+    {} when neither is known."""
     here = os.path.dirname(os.path.abspath(__file__))
     if os.access(os.path.join(here, "steamplay-launch"), os.X_OK):
-        paths = {"macos_dir": here, "build_root": BUILD_ROOT}
+        contents = app_contents()
+        if contents:
+            python = os.path.join(contents, "SharedSupport", "python", "bin", "python3")
+            paths = {"macos_dir": here,
+                     "wine_install": os.path.join(contents, "SharedSupport", "runtime"),
+                     "python": python if os.access(python, os.X_OK) else sys.executable,
+                     "tool_log": os.path.expanduser("~/Library/Logs/Protium/steamplay-tools.log")}
+        else:
+            paths = {"macos_dir": here, "build_root": BUILD_ROOT,
+                     "tool_log": os.path.join(BUILD_ROOT, "evidence", "steamplay", "probe.log")}
         try:
             os.makedirs(HOME_DIR, exist_ok=True)
             write_file(INSTALL_JSON, json.dumps(paths, indent=1) + "\n")
         except OSError:
             pass
-        return here, BUILD_ROOT
+        return paths
     try:
         with open(INSTALL_JSON) as f:
             paths = json.load(f)
-        return paths.get("macos_dir"), paths.get("build_root")
-    except (OSError, ValueError, AttributeError):
-        return None, None
+        if not isinstance(paths, dict):
+            return {}
+        if "tool_log" not in paths and paths.get("build_root"):     # written before tool_log
+            paths["tool_log"] = os.path.join(paths["build_root"], "evidence", "steamplay", "probe.log")
+        return paths
+    except (OSError, ValueError):
+        return {}
 
 
 def install_tools():
     """Copies the tools into the folder Steam scans, each with a protium.conf that tells its run
-    script where the checkout and the build root are. Returns what it installed, or None when the
-    folder is missing or not writable."""
+    script where steamplay-launch, the Wine install, Python and its log are. Returns what it
+    installed, or None when the folder is missing or not writable."""
     if not os.path.isdir(TOOLS_DIR) or not os.access(TOOLS_DIR, os.W_OK):
         return None
-    macos_dir, build_root = install_paths()
+    paths = install_paths()
+    conf = ["# Written by macos/steamplay when it installed this tool. The environment wins over it."]
+    for var, key in (("PROTON_DIR", "macos_dir"), ("WINE_INSTALL", "wine_install"),
+                     ("PROTIUM_PYTHON", "python"), ("STEAMPLAY_TOOL_LOG", "tool_log")):
+        if paths.get(key):
+            conf.append('[ -n "${%s:-}" ] || %s=%s' % (var, var, shlex.quote(paths[key])))
+            conf.append("export " + var)
+    if paths.get("tool_log"):
+        os.makedirs(os.path.dirname(paths["tool_log"]), exist_ok=True)
     for tool in TOOLS:
         target = os.path.join(TOOLS_DIR, tool)
         if os.path.isdir(target):
             shutil.rmtree(target)
         shutil.copytree(os.path.join(TOOLS_SRC, tool), target)
-        if macos_dir:
-            conf = ["# Written by macos/steamplay when it installed this tool. The environment wins over it."]
-            conf.append('[ -n "${PROTON_DIR:-}" ] || PROTON_DIR=%s' % shlex.quote(macos_dir))
-            if build_root:
-                log = os.path.join(build_root, "evidence", "steamplay", "probe.log")
-                conf.append('[ -n "${STEAMPLAY_TOOL_LOG:-}" ] || STEAMPLAY_TOOL_LOG=%s' % shlex.quote(log))
+        if paths.get("macos_dir"):
             write_file(os.path.join(target, "protium.conf"), "\n".join(conf) + "\n")
     return TOOLS
+
+
+# Valve's Windows steamclient.dll and steamclient64.dll, which a game's steam_api loads from Steam's
+# folder in its prefix and which Mac Steam does not ship. They are not redistributed: this fetches
+# them on the player's Mac from the package of Valve's Windows client that holds them, as Steam's
+# own Windows installer does, and checks it against the SHA-256 in Valve's manifest.
+STEAMCLIENT_DIR = os.environ.get("WIN_STEAM_DLLS") or os.path.join(HOME_DIR, "steamclient-windows")
+STEAMCLIENT_DLLS = ("steamclient.dll", "steamclient64.dll")
+CLIENT_CDN = "https://client-update.steamstatic.com/"
+CLIENT_MANIFEST = CLIENT_CDN + "steam_client_win32"
+CLIENT_PACKAGE = "bins_win32"
+
+
+def curl(url, output=None):
+    """GET url with macOS's own curl (the system's certificates, whatever Python runs this), to the
+    file output, or as bytes."""
+    cmd = ["/usr/bin/curl", "-fsSL", "--retry", "3", "--max-time", "600", url]
+    if output:
+        cmd[1:1] = ["-o", output]
+    r = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if r.returncode != 0:
+        die("could not download %s: %s" % (url, r.stderr.decode(errors="replace").strip() or "curl %d" % r.returncode))
+    return r.stdout
+
+
+def cmd_steamclient(again):
+    import hashlib
+    import zipfile
+    if not again and all(os.path.isfile(os.path.join(STEAMCLIENT_DIR, d)) for d in STEAMCLIENT_DLLS):
+        print("Valve's Windows client DLLs are in %s" % STEAMCLIENT_DIR)
+        return 0
+    manifest = vdf_parse(curl(CLIENT_MANIFEST).decode("utf-8", errors="replace"))
+    package = dict((k, v) for k, v in vdf_block(manifest, ["win32", CLIENT_PACKAGE]) if isinstance(v, str))
+    name, sha2 = package.get("file"), package.get("sha2", "").lower()
+    if not name or not re.fullmatch(r"[A-Za-z0-9_.]+", name) or not re.fullmatch(r"[0-9a-f]{64}", sha2):
+        die("Valve's client manifest has no usable %s package" % CLIENT_PACKAGE)
+    os.makedirs(STEAMCLIENT_DIR, exist_ok=True)
+    zip_path = os.path.join(STEAMCLIENT_DIR, ".%s.zip" % CLIENT_PACKAGE)
+    try:
+        print("downloading %s (%s MB) from Valve" % (name, int(package.get("size", "0")) // 1000000))
+        curl(CLIENT_CDN + name, zip_path)
+        digest = hashlib.sha256()
+        with open(zip_path, "rb") as f:
+            for chunk in iter(lambda: f.read(1 << 20), b""):
+                digest.update(chunk)
+        if digest.hexdigest() != sha2:
+            die("%s does not have the SHA-256 Valve's manifest gives" % name)
+        with zipfile.ZipFile(zip_path) as z:
+            members = {os.path.basename(m): m for m in z.namelist()}
+            for dll in STEAMCLIENT_DLLS:
+                if dll not in members:
+                    die("%s has no %s" % (name, dll))
+                data = z.read(members[dll])
+                tmp = os.path.join(STEAMCLIENT_DIR, dll + ".steamplay-tmp")
+                with open(tmp, "wb") as f:
+                    f.write(data)
+                os.replace(tmp, os.path.join(STEAMCLIENT_DIR, dll))
+                print("%s: %d bytes" % (dll, len(data)))
+    finally:
+        if os.path.exists(zip_path):
+            os.remove(zip_path)
+    print("Valve's Windows client DLLs are in %s" % STEAMCLIENT_DIR)
+    return 0
 
 
 def cmd_tools():
@@ -1220,7 +1313,12 @@ def cmd_guard_install():
         if os.path.isdir(dest):
             shutil.rmtree(dest)
         shutil.copytree(os.path.join(here, "steamplay-tools"), dest)
-    python = "/usr/bin/python3" if os.access("/usr/bin/python3", os.X_OK) else sys.executable
+    # Protium.app runs this with its own Python, which a fresh Mac's /usr/bin/python3 (a stub that
+    # asks for the Command Line Tools) cannot stand in for
+    if app_contents():
+        python = sys.executable
+    else:
+        python = "/usr/bin/python3" if os.access("/usr/bin/python3", os.X_OK) else sys.executable
     plist = {
         "Label": GUARD_LABEL,
         "ProgramArguments": [python, script, "guard", "watch"],
@@ -1327,6 +1425,8 @@ def main(argv):
         cmd_guard_remove()
     elif argv == ["tools"]:
         cmd_tools()
+    elif argv in (["steamclient"], ["steamclient", "--again"]):
+        sys.exit(cmd_steamclient("--again" in argv))
     elif argv in (["hud"], ["hud", "on"], ["hud", "off"]):
         cmd_hud(argv[1] if len(argv) > 1 else None)
     elif len(argv) >= 1 and argv[0] == "links" and all(a.isdigit() for a in argv[1:]):

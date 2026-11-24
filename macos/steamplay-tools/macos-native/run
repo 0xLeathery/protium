@@ -19,7 +19,7 @@ case $verb in
         # ones that are missing (macos/steamplay links)
         STEAMPLAY=${STEAMPLAY:-$HOME/Library/Application Support/SteamPlay/steamplay}
         [ -f "$STEAMPLAY" ] || STEAMPLAY="$PROTON_DIR/steamplay"
-        [ -n "${SteamAppId:-}" ] && [ -f "$STEAMPLAY" ] && /usr/bin/python3 "$STEAMPLAY" links "$SteamAppId" >> "$LOG" 2>&1
+        [ -n "${SteamAppId:-}" ] && [ -f "$STEAMPLAY" ] && "${PROTIUM_PYTHON:-/usr/bin/python3}" "$STEAMPLAY" links "$SteamAppId" >> "$LOG" 2>&1
         # a Mac game's launch entry is its app bundle: start the program inside it, so that it
         # keeps the environment Steam gives a game (its app id among it). Steam starts this tool
         # as an Intel program, and a universal game would follow it into Rosetta: ask for the
