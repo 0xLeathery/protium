@@ -58,23 +58,51 @@ Protium builds on athei's macOS work: Mesa, DXMT, vkd3d-proton and FEX come from
 commits each build script names, and Direct3D 9 is athei's mtld3d. Protium's own fixes to those
 projects are in [macos/patches](../macos/patches), and each one says at its head what it fixes.
 
-## Requirements
+## Getting started
+
+There is no installer yet: today Protium is built from source, on the Mac that runs it. These
+are the steps, in order.
+
+### 1. What you need
 
 - An Apple Silicon Mac. Only macOS 27 has been tried.
-- Xcode with its Metal toolchain, Homebrew, and
-  [llvm-mingw](https://github.com/mstorsjo/llvm-mingw) for the Windows side of the build.
-- For x86 games, an Apple Developer provisioning profile that grants the cross-architecture
-  entitlement. macOS gives a program memory below 4 GB, 4K pages and hardware TSO only when its
-  loader is signed with that entitlement. Windows programs under FEX need the first two, and the
-  third makes FEX faster.
-  `macos/bundle-wine.sh` says how the profile is used.
+- Xcode with its Metal toolchain, and Homebrew. Each build script names any Homebrew formula
+  it is missing.
+- A paid Apple Developer Program membership. Windows games are x86 code, and FEX can only run
+  them when the Wine loader is signed with the cross-architecture entitlement, which gives
+  memory below 4 GB and 4K pages (and hardware TSO, which makes FEX faster).
 
-## Building
+### 2. A provisioning profile for the loader
 
-Each script documents its inputs, outputs and environment overrides at its head. Builds go to
-`~/projects/proton-macos-build` unless `BUILD_ROOT` says otherwise.
+In the developer portal (Certificates, Identifiers & Profiles):
+
+1. **Identifiers:** register an App ID for the loader and enable its *Cross-architecture
+   Compatibility Framework* capability.
+2. **Certificates:** an *Apple Development* certificate (Xcode → Settings → Accounts → Manage
+   Certificates → +).
+3. **Devices:** register your Mac with its Provisioning UDID (`system_profiler SPHardwareDataType`).
+4. **Profiles:** a *macOS App Development* profile for that App ID, your certificate and your Mac.
+   Save it as `~/projects/proton-macos-build/signing/loader.provisionprofile`.
+
+`macos/bundle-wine.sh` signs the loader with it and takes the bundle identifier and team from it.
+
+### 3. Downloads
+
+- [llvm-mingw](https://github.com/mstorsjo/llvm-mingw/releases) 20261020, the
+  `ucrt-macos-universal` build, unpacked into `~/projects/proton-macos-toolchain/` (or set
+  `TOOLCHAIN_DIR`).
+- [mtld3d](https://github.com/athei/mtld3d/releases) v0.15.3 (`mtld3d-v0.15.3.tar.xz`) in
+  `~/projects/proton-macos-build/third-party/mtld3d/`, for Direct3D 9. The bundle checks its
+  SHA-256; without it, Direct3D 9 falls back to Wine's own.
+- Valve's Windows `steamclient.dll` and `steamclient64.dll`, from the top folder of a Windows Steam
+  install, in `~/Library/Application Support/SteamPlay/steamclient-windows/` (or set
+  `WIN_STEAM_DLLS`). Mac Steam does not ship them, and Protium cannot either.
+
+### 4. Build
 
 ```sh
+git clone --recurse-submodules https://github.com/0xLeathery/protium
+cd protium
 macos/build-vulkan.sh          # the Vulkan loader
 macos/build-gstreamer.sh       # GStreamer, for Media Foundation audio and video
 macos/build-wine.sh            # Wine, native arm64 (needs the two above)
@@ -88,9 +116,29 @@ macos/bundle-wine.sh           # install everything into one bundle, with mtld3d
 macos/make-steamplay-app.sh    # "Steam Play.app"
 ```
 
-Then, with Steam quit, `macos/steamplay setup` installs the two compatibility tools and sets up
-Steam Play. `macos/steamplay status` shows the result, and `macos/steamplay` with no arguments
-lists its other commands.
+Each script documents its inputs, outputs and environment overrides at its head. Builds go to
+`~/projects/proton-macos-build` unless `BUILD_ROOT` says otherwise. The checkout itself can live
+anywhere.
+
+### 5. Set up Steam
+
+Steam looks for compatibility tools in `/usr/local/share/steam/compatibilitytools.d`. Make that
+folder once and give it to your user:
+
+```sh
+sudo mkdir -p /usr/local/share/steam/compatibilitytools.d
+sudo chown "$USER" /usr/local/share/steam/compatibilitytools.d
+```
+
+Then quit Steam and run:
+
+```sh
+macos/steamplay setup          # the two tools, Steam's platform switch, a tool for every game
+macos/steamplay guard install  # keeps the switch and the tools in place when Steam updates
+```
+
+Start Steam, install a Windows game and press Play. `macos/steamplay status` shows the switch, the
+tools and each game's choice, and `macos/steamplay` with no arguments lists the other commands.
 
 `macos/tests/check-wave*.sh` are the checks each stage of the port was accepted with.
 
