@@ -36,8 +36,8 @@ written. "Known problems" is a heading of our own, next to Keep a Changelog's.
 - With full resolution on, launchers and games in a window are half as large on screen as
   before.
 - With screens of different kinds connected, Protium follows the main one.
-- This has not yet been tried on a real Retina or 4K screen, only by making a normal screen
-  behave like one.
+- This has been tried on one monitor's high-density mode, with test programs. It has not yet
+  been tried on a MacBook's own screen, or with a full game.
 
 ## [0.3.1] - 2026-11-24
 
