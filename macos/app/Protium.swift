@@ -27,6 +27,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var updateVersion = ""
     var updateHasImage = false
     var tellCheckbox: NSButton!
+    var hiresCheckbox: NSButton!
     var notifyButton: NSButton!
     /// what steamplay printed since the last command started, for the lines the app reads
     var lastOutput = ""
@@ -79,14 +80,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         updateRow.addArrangedSubview(NSButton(title: "Later", target: self, action: #selector(updateLater)))
         updateRow.isHidden = true
 
+        // the settings, on a row of their own below the buttons
+        let options = NSStackView()
+        options.orientation = .horizontal
+        hiresCheckbox = NSButton(checkboxWithTitle: "Use the screen's full resolution in games", target: self, action: #selector(hiresChanged))
+        hiresCheckbox.state = .on
+        hiresCheckbox.toolTip = "On a Retina or 4K screen, games can use every pixel. Turn this off if games run too slowly; you can also pick a lower resolution in a game's own settings."
+        options.addArrangedSubview(hiresCheckbox)
         tellCheckbox = NSButton(checkboxWithTitle: "Tell me about new versions", target: self, action: #selector(tellChanged))
         tellCheckbox.state = .on
-        row.addArrangedSubview(tellCheckbox)
+        options.addArrangedSubview(tellCheckbox)
         notifyButton = NSButton(title: "Allow notifications…", target: self, action: #selector(allowNotifications))
-        row.addArrangedSubview(notifyButton)
+        options.addArrangedSubview(notifyButton)
         showNotificationState()
+        askSteamplay(["hires"]) { text in self.hiresCheckbox.state = text.contains("in games: off") ? .off : .on }
 
-        let stack = NSStackView(views: [title, updateRow, scroll, row])
+        let stack = NSStackView(views: [title, updateRow, scroll, row, options])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 10
@@ -203,6 +212,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     self.showNotificationState()
                 }
             }
+        }
+    }
+
+    /// Checked is "automatic": full resolution when the main screen is a HiDPI one.
+    @objc func hiresChanged() {
+        askSteamplay(["hires", hiresCheckbox.state == .on ? "auto" : "off"]) { text in
+            self.say("\n" + text)
         }
     }
 

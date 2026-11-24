@@ -123,10 +123,11 @@ export WINEDLLOVERRIDES="${WINEDLLOVERRIDES:-mscoree,mshtml=}"
 if [ -z "${MTL_HUD_ENABLED:-}" ] && [ -e "${STEAMPLAY_HOME:-$HOME/Library/Application Support/SteamPlay}/hud" ]; then
     export MTL_HUD_ENABLED=1
 fi
-# Whether the game is told a HiDPI screen's pixels or its points ("macos/steamplay hires"); Wine's
-# Mac driver reads this as it starts, and every process of the game has to get the same answer
+# Whether a game is told a HiDPI screen's pixels or its points ("macos/steamplay hires"). Wine's
+# Mac driver reads this in every process, and all that run in a prefix have to get the same
+# answer: so it is one setting for every game, set here before anything of Wine's starts
 if [ -z "${WINE_MAC_RETINA:-}" ]; then
-    WINE_MAC_RETINA=$("$PROTIUM_PYTHON" "$SCRIPT_DIR/steamplay" hires --value "$appid" 2>/dev/null) || WINE_MAC_RETINA=auto
+    WINE_MAC_RETINA=$("$PROTIUM_PYTHON" "$SCRIPT_DIR/steamplay" hires --value 2>/dev/null) || WINE_MAC_RETINA=auto
     export WINE_MAC_RETINA
 fi
 # GLib in lib/external would load GIO modules from Homebrew's folder, which on a player's Mac

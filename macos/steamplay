@@ -48,10 +48,10 @@
                                       write a game's compatibility tool directly (Steam quit)
     macos/steamplay hud [on|off]      show macOS's Metal performance HUD (frames per second,
                                       frame times) over every Windows game, from its next start
-    macos/steamplay hires [<app id>] [auto|on|off]
-                                      whether games get a HiDPI (Retina) screen's real pixels, for
-                                      every game or for one: auto (the default) when the main
-                                      screen is HiDPI, off never, on always
+    macos/steamplay hires [auto|off|on]
+                                      whether games get a HiDPI (Retina) screen's real pixels:
+                                      auto (the default) when the main screen is HiDPI, off
+                                      never; on is always, for trying it on another screen
 
 Mac Steam downloads a Windows build when its download platform is forced, but will not launch
 it. "sync" adds a non-Steam shortcut per game to the signed-in user's shortcuts.vdf, named
@@ -2082,46 +2082,38 @@ def cmd_hud(state):
     print("the performance HUD is %s for games started from now on" % ("on" if os.path.exists(HUD_FLAG) else "off"))
 
 
-HIRES = os.path.join(HOME_DIR, "hires.json")
+HIRES = os.path.join(HOME_DIR, "hires")
 HIRES_STATES = {"auto": "auto", "on": "1", "off": "0"}
 
 
-def hires_settings():
-    """("auto" | "on" | "off" for every game, {app id: "on" | "off"} for single ones)."""
-    data = json_file(HIRES, {})
-    data = data if isinstance(data, dict) else {}
-    games = data.get("games") if isinstance(data.get("games"), dict) else {}
-    return (data.get("all") if data.get("all") in HIRES_STATES else "auto",
-            {int(k): v for k, v in games.items() if k.isdigit() and v in ("on", "off")})
+def hires_setting():
+    """"auto", "on" or "off": what the file says, and auto without one."""
+    try:
+        with open(HIRES) as f:
+            state = f.read().strip()
+    except OSError:
+        return "auto"
+    return state if state in HIRES_STATES else "auto"
 
 
-def cmd_hires(args):
+def cmd_hires(state):
     """On a HiDPI screen macOS counts in points, two pixels to a point each way, and a game that
     is told the points draws a quarter of the screen's pixels. Wine's Mac driver tells games the
-    pixels instead when WINE_MAC_RETINA says so; steamplay-run.sh sets that from here ("hires
-    --value <app id>" prints it: auto, 1 or 0)."""
-    everything, games = hires_settings()
-    if len(args) == 2 and args[0] == "--value":
-        print(HIRES_STATES[games.get(int(args[1]), everything)])
+    pixels when the main screen is HiDPI; steamplay-run.sh hands it this setting as
+    WINE_MAC_RETINA ("hires --value" prints that: auto, 1 or 0). It is one setting for every
+    game: the processes of a game, and what Steam starts in its prefix before it, have to agree,
+    and they do when each of them is told the same."""
+    if state == "--value":
+        print(HIRES_STATES[hires_setting()])
         return 0
-    appid = int(args[0]) if args and args[0].isdigit() else None
-    state = args[-1] if args and args[-1] in HIRES_STATES else None
-    if state:
-        if appid is None:
-            everything = state
-        elif state == "auto":
-            games.pop(appid, None)
-        else:
-            games[appid] = state
+    if state == "auto":
+        if os.path.exists(HIRES):
+            os.remove(HIRES)
+    elif state:
         os.makedirs(HOME_DIR, exist_ok=True)
-        write_file(HIRES, json.dumps({"all": everything, "games": {str(k): v for k, v in sorted(games.items())}}, indent=1) + "\n")
-    words = {"auto": "automatic (on when the main screen is HiDPI)", "on": "on", "off": "off"}
-    if appid is not None:
-        print("Full resolution for app %d: %s" % (appid, words[games[appid]] if appid in games else "as for every game"))
-    print("Full resolution in games: %s" % words[everything])
-    for game, value in sorted(games.items()):
-        if game != appid:
-            print("  app %d: %s" % (game, value))
+        write_file(HIRES, state + "\n")
+    print("Full resolution in games: %s" % {"auto": "automatic (on when the main screen is HiDPI)", "on": "on, whatever the screen",
+                                          "off": "off"}[hires_setting()])
     if state:
         print("This applies to games started from now on.")
     return 0
@@ -2988,11 +2980,8 @@ def main(argv):
         cmd_uninstall("--dry-run" in argv)
     elif argv in (["steamclient"], ["steamclient", "--again"]):
         sys.exit(cmd_steamclient("--again" in argv))
-    elif argv and argv[0] == "hires" and (
-            argv[1:] == [] or (len(argv) == 2 and (argv[1] in HIRES_STATES or argv[1].isdigit()))
-            or (len(argv) == 3 and argv[2].isdigit() and argv[1] == "--value")
-            or (len(argv) == 3 and argv[1].isdigit() and argv[2] in HIRES_STATES)):
-        sys.exit(cmd_hires(argv[1:]))
+    elif argv == ["hires"] or (len(argv) == 2 and argv[0] == "hires" and (argv[1] in HIRES_STATES or argv[1] == "--value")):
+        sys.exit(cmd_hires(argv[1] if len(argv) > 1 else None))
     elif argv in (["hud"], ["hud", "on"], ["hud", "off"]):
         cmd_hud(argv[1] if len(argv) > 1 else None)
     elif len(argv) >= 1 and argv[0] == "links" and all(a.isdigit() for a in argv[1:]):
@@ -3074,9 +3063,7 @@ def cmd_diagnose():
                            stderr=subprocess.DEVNULL, universal_newlines=True, timeout=30)
         kept = [l.strip() for l in r.stdout.splitlines()
                 if re.match(r"\s*(Resolution|UI Looks like|Main Display|Display Type|Mirror):", l)]
-        everything, games = hires_settings()
-        return "\n".join(kept + ["full resolution in games: %s%s" % (
-            everything, "".join(", app %d %s" % g for g in sorted(games.items())))]) + "\n"
+        return "\n".join(kept + ["full resolution in games: %s" % hires_setting()]) + "\n"
 
     logs = os.path.dirname(GUARD_LOG)
     parts = [("Protium and this Mac", facts),
