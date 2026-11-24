@@ -154,6 +154,8 @@ for f in steamplay steamplay-launch steamplay-run.sh; do
     cp "$SCRIPT_DIR/$f" "$C/Resources/steamplay/$f"
 done
 rsync -a --exclude .DS_Store "$SCRIPT_DIR/steamplay-tools" "$SCRIPT_DIR/compat" "$C/Resources/steamplay/"
+# what "steamplay version" answers with, and the app compares the newest release to
+echo "$VERSION" >"$C/Resources/steamplay/VERSION"
 
 log "the Wine install"
 rsync -a --exclude .DS_Store "$INSTALL_DIR/" "$C/SharedSupport/runtime/"

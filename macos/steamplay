@@ -17,6 +17,7 @@
     macos/steamplay result <app id> works|plays-with-problems|menu-only|broken [note]
                                       say how a game did; it counts before any guess, and goes
                                       into compat/games.json and the README's games table
+    macos/steamplay version [--check] this version of Protium, and whether a newer one is out
     macos/steamplay games             write the README's games table again from compat/games.json
     macos/steamplay survey --away [--seconds N] [--games N] [--only <app id>...]
                                       start each untried installed game for a while (takes the screen)
@@ -889,6 +890,56 @@ def curl(url, output=None):
     if r.returncode != 0:
         die("could not download %s: %s" % (url, r.stderr.decode(errors="replace").strip() or "curl %d" % r.returncode))
     return r.stdout
+
+
+# ---- this version, and whether there is a newer one
+#
+# The version is in the file VERSION next to this script (the app) or in app/VERSION (a
+# checkout). "version --check" asks GitHub for the newest release of Protium. That is one request
+# to a public address, which says nothing about this Mac or its games.
+
+RELEASES_API = "https://api.github.com/repos/0xLeathery/protium/releases/latest"
+RELEASES_PAGE = "https://github.com/0xLeathery/protium/releases"
+
+
+def protium_version():
+    here = os.path.dirname(os.path.abspath(__file__))
+    for path in (os.path.join(here, "VERSION"), os.path.join(here, "app", "VERSION")):
+        try:
+            with open(path) as f:
+                return f.read().strip()
+        except OSError:
+            pass
+    return ""
+
+
+def version_key(text):
+    return tuple(int(n) for n in re.findall(r"\d+", text)[:3])
+
+
+def cmd_version(check):
+    """Prints "current <version>" and, with check, "latest <version> <page>" and "newer yes|no",
+    or "latest unknown <why>". The app reads these lines."""
+    current = protium_version()
+    print("current %s" % (current or "unknown"))
+    if not check:
+        return 0
+    r = subprocess.run(["/usr/bin/curl", "-fsSL", "--max-time", "15", "-H", "Accept: application/vnd.github+json", RELEASES_API],
+                       stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    try:
+        release = json.loads(r.stdout.decode("utf-8", errors="replace")) if r.returncode == 0 else None
+    except ValueError:
+        release = None
+    tag = release.get("tag_name", "") if isinstance(release, dict) else ""
+    if not re.fullmatch(r"v?\d+\.\d+\.\d+", tag):
+        print("latest unknown %s" % ((r.stderr.decode(errors="replace").strip().split("\n") or [""])[-1] or "no release found"))
+        return 0
+    page = release.get("html_url", "")
+    if not page.startswith(RELEASES_PAGE):
+        page = RELEASES_PAGE
+    print("latest %s %s" % (tag.lstrip("v"), page))
+    print("newer %s" % ("yes" if current and version_key(tag) > version_key(current) else "no"))
+    return 0
 
 
 def cmd_steamclient(again):
@@ -2184,6 +2235,8 @@ def main(argv):
         sys.exit(cmd_data_update())
     elif len(argv) >= 3 and argv[0] == "result" and argv[1].isdigit() and argv[2] in VERDICTS:
         sys.exit(cmd_result(int(argv[1]), argv[2], " ".join(argv[3:])))
+    elif argv in (["version"], ["version", "--check"]):
+        sys.exit(cmd_version("--check" in argv))
     elif argv == ["games"]:
         sys.exit(cmd_games())
     elif len(argv) == 4 and argv[0] == "record" and argv[1].isdigit() and argv[2].isdigit():

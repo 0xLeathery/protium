@@ -17,6 +17,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let output = NSTextView()
     var buttons: [NSButton] = []
     var busy = false
+    /// "Protium 0.3.0 is out" and a button to its page; hidden until a newer release is found
+    let updateRow = NSStackView()
+    let updateLabel = NSTextField(labelWithString: "")
+    var updatePage: URL?
 
     let contents = Bundle.main.bundleURL.appendingPathComponent("Contents")
     var steamplay: String { contents.appendingPathComponent("Resources/steamplay/steamplay").path }
@@ -52,7 +56,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         buttons[0].keyEquivalent = "\r"
 
-        let stack = NSStackView(views: [title, scroll, row])
+        updateLabel.font = NSFont.systemFont(ofSize: 13, weight: .semibold)
+        updateRow.orientation = .horizontal
+        updateRow.addArrangedSubview(updateLabel)
+        updateRow.addArrangedSubview(NSButton(title: "Get it", target: self, action: #selector(openUpdatePage)))
+        updateRow.isHidden = true
+
+        let stack = NSStackView(views: [title, updateRow, scroll, row])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 10
@@ -70,6 +80,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
         status()
+        checkForUpdate()
+    }
+
+    // MARK: a newer version
+
+    /// Asks, through steamplay, whether GitHub has a newer release of Protium than this one, and
+    /// shows the row above the output if so. Says nothing when there is none or no network.
+    func checkForUpdate() {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: python)
+        process.arguments = [steamplay, "version", "--check"]
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = FileHandle.nullDevice
+        process.terminationHandler = { _ in
+            let text = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+            var fields: [String: [String]] = [:]
+            for line in text.split(separator: "\n") {
+                let words = line.split(separator: " ").map(String.init)
+                if let key = words.first { fields[key] = Array(words.dropFirst()) }
+            }
+            DispatchQueue.main.async {
+                if let current = fields["current"]?.first, current != "unknown" { self.window.title = "Protium \(current)" }
+                guard fields["newer"]?.first == "yes", let latest = fields["latest"], latest.count == 2,
+                      let page = URL(string: latest[1]), page.scheme == "https", page.host == "github.com" else { return }
+                self.updatePage = page
+                self.updateLabel.stringValue = "Protium \(latest[0]) is out. This is \(fields["current"]?.first ?? "an older version")."
+                self.updateRow.isHidden = false
+            }
+        }
+        try? process.run()
+    }
+
+    @objc func openUpdatePage() {
+        if let page = updatePage { NSWorkspace.shared.open(page) }
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
