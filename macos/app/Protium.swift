@@ -8,6 +8,7 @@
 // Copyright (C) 2026 Ethan Hurst. GPL-3.0-or-later, see LICENSE.protium.
 
 import AppKit
+import UserNotifications
 
 let steamBundleID = "com.valvesoftware.steam"
 let toolsDir = "/usr/local/share/steam/compatibilitytools.d"
@@ -17,10 +18,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let output = NSTextView()
     var buttons: [NSButton] = []
     var busy = false
-    /// "Protium 0.3.0 is out" and a button to its page; hidden until a newer release is found
+    /// "Protium 0.3.0 is out", Update and Later; hidden until a newer release is found
     let updateRow = NSStackView()
     let updateLabel = NSTextField(labelWithString: "")
+    var updateButton: NSButton!
     var updatePage: URL?
+    var updateVersion = ""
+    var updateHasImage = false
+    var tellCheckbox: NSButton!
+    /// what steamplay printed since the last command started, for the lines the app reads
+    var lastOutput = ""
+    var steamplayHome: String {
+        ProcessInfo.processInfo.environment["STEAMPLAY_HOME"]
+            ?? NSHomeDirectory() + "/Library/Application Support/SteamPlay"
+    }
+    var ownVersion: String { Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "" }
 
     let contents = Bundle.main.bundleURL.appendingPathComponent("Contents")
     var steamplay: String { contents.appendingPathComponent("Resources/steamplay/steamplay").path }
@@ -59,8 +71,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         updateLabel.font = NSFont.systemFont(ofSize: 13, weight: .semibold)
         updateRow.orientation = .horizontal
         updateRow.addArrangedSubview(updateLabel)
-        updateRow.addArrangedSubview(NSButton(title: "Get it", target: self, action: #selector(openUpdatePage)))
+        updateButton = NSButton(title: "Update", target: self, action: #selector(update))
+        updateRow.addArrangedSubview(updateButton)
+        updateRow.addArrangedSubview(NSButton(title: "Later", target: self, action: #selector(updateLater)))
         updateRow.isHidden = true
+
+        tellCheckbox = NSButton(checkboxWithTitle: "Tell me about new versions", target: self, action: #selector(tellChanged))
+        tellCheckbox.state = .on
+        row.addArrangedSubview(tellCheckbox)
 
         let stack = NSStackView(views: [title, updateRow, scroll, row])
         stack.orientation = .vertical
@@ -79,42 +97,140 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ])
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+        window.title = "Protium \(ownVersion)"
+        afterUpdate()
         status()
         checkForUpdate()
     }
 
     // MARK: a newer version
 
-    /// Asks, through steamplay, whether GitHub has a newer release of Protium than this one, and
-    /// shows the row above the output if so. Says nothing when there is none or no network.
-    func checkForUpdate() {
+    /// Runs steamplay quietly and gives its output, on the main thread.
+    func askSteamplay(_ args: [String], then done: @escaping (String) -> Void) {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: python)
-        process.arguments = ["-B", steamplay, "version", "--check"]
+        process.arguments = ["-B", steamplay] + args
         let pipe = Pipe()
         process.standardOutput = pipe
         process.standardError = FileHandle.nullDevice
         process.terminationHandler = { _ in
             let text = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+            DispatchQueue.main.async { done(text) }
+        }
+        do { try process.run() } catch { done("") }
+    }
+
+    /// Asks, through steamplay, whether GitHub has a newer release of Protium than this one. If
+    /// so it shows the row above the output and what the newer versions change. Says nothing
+    /// when there is none, no network, or the player turned the asking off.
+    func checkForUpdate() {
+        askSteamplay(["version", "--check"]) { text in
             var fields: [String: [String]] = [:]
-            for line in text.split(separator: "\n") {
+            var changes: [String] = []
+            var inChanges = false
+            for line in text.components(separatedBy: "\n") {
+                if line == "changes-begin" { inChanges = true; continue }
+                if line == "changes-end" { inChanges = false; continue }
+                if inChanges { changes.append(line); continue }
                 let words = line.split(separator: " ").map(String.init)
                 if let key = words.first { fields[key] = Array(words.dropFirst()) }
             }
-            DispatchQueue.main.async {
-                if let current = fields["current"]?.first, current != "unknown" { self.window.title = "Protium \(current)" }
-                guard fields["newer"]?.first == "yes", let latest = fields["latest"], latest.count == 2,
-                      let page = URL(string: latest[1]), page.scheme == "https", page.host == "github.com" else { return }
-                self.updatePage = page
-                self.updateLabel.stringValue = "Protium \(latest[0]) is out. This is \(fields["current"]?.first ?? "an older version")."
-                self.updateRow.isHidden = false
+            self.tellCheckbox.state = fields["check"]?.first == "off" ? .off : .on
+            guard fields["newer"]?.first == "yes", let latest = fields["latest"], latest.count == 2,
+                  let page = URL(string: latest[1]), page.scheme == "https", page.host == "github.com" else {
+                self.updateRow.isHidden = true
+                return
             }
+            self.updatePage = page
+            self.updateVersion = latest[0]
+            self.updateHasImage = fields["download"] != nil
+            self.updateButton.title = self.updateHasImage ? "Update" : "Open its page"
+            self.updateLabel.stringValue = "Protium \(latest[0]) is out. This is \(self.ownVersion)."
+            if self.updateRow.isHidden {
+                self.say("\nNew since this version:\n\n" + changes.joined(separator: "\n") + "\n")
+            }
+            self.updateRow.isHidden = false
         }
-        try? process.run()
     }
 
-    @objc func openUpdatePage() {
-        if let page = updatePage { NSWorkspace.shared.open(page) }
+    @objc func updateLater() { updateRow.isHidden = true }
+
+    @objc func tellChanged() {
+        askSteamplay(["updates", tellCheckbox.state == .on ? "on" : "off"]) { _ in self.checkForUpdate() }
+    }
+
+    /// Downloads the newer release, has steamplay test it, and hands over to the helper that
+    /// puts it in this app's place once this app has quit. Every refusal is shown as it is.
+    @objc func update() {
+        guard !busy else { return }
+        guard updateHasImage else {
+            if let page = updatePage { NSWorkspace.shared.open(page) }
+            return
+        }
+        guard inStablePlace() else { return }
+        setBusy(true)
+        runSteamplay(["update", "--fetch"]) { code in
+            let words = self.lastOutput.components(separatedBy: "\n").last(where: { $0.hasPrefix("ok fetched ") })?
+                .dropFirst("ok fetched ".count).split(separator: " ").map(String.init) ?? []
+            guard code == 0, words.count >= 2, let version = words.last else {
+                self.setBusy(false)
+                return
+            }
+            let image = words.dropLast().joined(separator: " ")
+            self.runSteamplay(["update", "--install", image, version, String(ProcessInfo.processInfo.processIdentifier)]) { code in
+                guard code == 0 else {
+                    self.setBusy(false)
+                    return
+                }
+                self.say("\nProtium quits now and comes back as \(version).\n")
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { NSApp.terminate(nil) }
+            }
+        }
+    }
+
+    /// The first start after an update: tells the helper that the new version runs (it puts the
+    /// old one back otherwise), brings Steam's tools up to date, and says what is new, from the
+    /// changelog the app carries.
+    func afterUpdate() {
+        let path = steamplayHome + "/update-pending.json"
+        guard let data = FileManager.default.contents(atPath: path),
+              var pending = (try? JSONSerialization.jsonObject(with: data)) as? [String: String] else { return }
+        if let failed = pending["failed"] {
+            try? FileManager.default.removeItem(atPath: path)
+            _ = alert("Protium was not updated", failed)
+            return
+        }
+        guard pending["new"] == ownVersion, pending["started"] == nil else {
+            try? FileManager.default.removeItem(atPath: path)     // an update that is over
+            return
+        }
+        pending["started"] = ownVersion
+        if let out = try? JSONSerialization.data(withJSONObject: pending) {
+            try? out.write(to: URL(fileURLWithPath: path))
+        }
+        say("Updated from \(pending["old"] ?? "an older version") to \(ownVersion).\n\n" + whatsNew(since: pending["old"] ?? "") + "\n")
+        askSteamplay(["tools", "--refresh"]) { text in if !text.isEmpty { self.say(text) } }
+    }
+
+    /// The sections of the bundled CHANGELOG.md for the versions after `old`, up to this one.
+    func whatsNew(since old: String) -> String {
+        let file = contents.appendingPathComponent("Resources/steamplay/CHANGELOG.md").path
+        guard let text = try? String(contentsOfFile: file, encoding: .utf8) else { return "" }
+        func key(_ v: String) -> [Int] { v.split(separator: ".").prefix(3).map { Int($0) ?? 0 } }
+        func newer(_ a: String, than b: String) -> Bool { key(a).lexicographicallyPrecedes(key(b)) == false && key(a) != key(b) }
+        var out: [String] = []
+        var keep = false
+        for line in text.components(separatedBy: "\n") {
+            if line.hasPrefix("## [") {
+                let version = String(line.dropFirst(4).prefix(while: { $0 != "]" }))
+                keep = version.first?.isNumber == true && newer(version, than: old) && !newer(version, than: ownVersion)
+                if keep { out.append("What's new in \(version)") }
+                continue
+            }
+            if line.hasPrefix("[") && line.contains("]: ") { keep = false }
+            if keep { out.append(line.hasPrefix("### ") ? String(line.dropFirst(4)) + ":" : line) }
+        }
+        return out.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
@@ -122,6 +238,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: output
 
     func say(_ text: String) {
+        lastOutput += text
         output.textStorage?.append(NSAttributedString(string: text, attributes: [
             .font: output.font!, .foregroundColor: NSColor.textColor]))
         output.scrollToEndOfDocument(nil)
@@ -136,6 +253,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// The completion gets the exit status, on the main thread.
     func runSteamplay(_ args: [String], then done: @escaping (Int32) -> Void) {
         say("\n$ steamplay \(args.joined(separator: " "))\n")
+        lastOutput = ""
         let process = Process()
         process.executableURL = URL(fileURLWithPath: python)
         process.arguments = ["-B", steamplay] + args     // -B: nothing is written into the app
@@ -240,6 +358,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self.setBusy(false)
             self.say(ok ? "\nSet up. Start Steam: Windows games now install and play from your library.\n"
                         : "\nSetting up did not finish; the lines above say why.\n")
+            // asked here, with Protium in front, and never when a game starts
+            if ok { UNUserNotificationCenter.current().requestAuthorization(options: [.alert]) { _, _ in } }
         }
     }
 
@@ -261,6 +381,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if ok { self.say("\nProtium is out of Steam. You can now delete Protium.app.\n") }
         }
     }
+}
+
+// "Protium --notify <version> <what is new>": one notification that a newer version is out, for
+// steamplay when a game starts. No window; nothing happens unless the player allowed
+// notifications. Clicking it opens Protium, which shows the update as usual.
+if CommandLine.arguments.count >= 3, CommandLine.arguments[1] == "--notify" {
+    let center = UNUserNotificationCenter.current()
+    let done = DispatchSemaphore(value: 0)
+    center.getNotificationSettings { settings in
+        guard settings.authorizationStatus == .authorized || settings.authorizationStatus == .provisional else {
+            done.signal()
+            return
+        }
+        let content = UNMutableNotificationContent()
+        content.title = "Protium \(CommandLine.arguments[2]) is out"
+        content.body = CommandLine.arguments.dropFirst(3).joined(separator: " ")
+        center.add(UNNotificationRequest(identifier: "update-\(CommandLine.arguments[2])", content: content, trigger: nil)) { _ in
+            done.signal()
+        }
+    }
+    _ = done.wait(timeout: .now() + 10)
+    exit(0)
 }
 
 let app = NSApplication.shared

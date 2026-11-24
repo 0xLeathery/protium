@@ -19,7 +19,7 @@ MIN_MACOS=${MIN_MACOS:-27.0}
 commit() { git -C "$1" rev-parse --short=8 HEAD 2>/dev/null || echo unknown; }
 
 # the section, without the blank lines around it
-awk -v v="[$VERSION]" '/^## /{on = ($2 == v); next} /^\[[^]]*\]: /{on = 0} on' "$PROTON_DIR/CHANGELOG.md" \
+awk -v v="[$VERSION]" '/^## /{on = ($2 == v); next} /^\[[^]]*\]: /{on = 0} on' "${CHANGELOG:-$PROTON_DIR/CHANGELOG.md}" \
     | awk 'NF {for (; blank > 0; blank--) print ""; print; seen = 1; next} seen {blank++}'
 cat <<EOF
 

@@ -233,6 +233,8 @@ rm -f "$hang".*.txt
 # which "macos/steamplay discover" judges games by. Like the watcher above, this waits for this
 # process, which becomes Wine's.
 started=$(date +%s)
+# One notice when a newer Protium is out, once per version; the game does not wait for it
+("$PROTIUM_PYTHON" "$SCRIPT_DIR/steamplay" version --notify) </dev/null >/dev/null 2>&1 &
 (
     while kill -0 $$ 2>/dev/null; do sleep 2; done
     "$PROTIUM_PYTHON" "$SCRIPT_DIR/steamplay" record "$appid" "$started" "$logfile"

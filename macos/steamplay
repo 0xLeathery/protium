@@ -22,6 +22,10 @@
                                       is out and what it changes (GitHub is asked once a day at
                                       most, or at once with --now)
     macos/steamplay updates [on|off]  whether Protium asks at all (on unless turned off)
+    macos/steamplay update --fetch | --verify <disk image> <version> | --install <disk image> <version> [pid]
+                                      what the app's Update button runs: download the newest
+                                      release and test it, test a disk image, put its app in
+                                      this one's place (after process pid has gone)
     macos/steamplay games             write the README's games table again from compat/games.json
     macos/steamplay survey --away [--seconds N] [--games N] [--only <app id>...]
                                       start each untried installed game for a while (takes the screen)
@@ -1066,7 +1070,7 @@ def cmd_updates(choice):
 BUNDLE_ID = "com.redshot.protium"
 APP_REQUIREMENT = ('anchor apple generic and identifier "%s" and certificate 1[field.1.2.840.113635.100.6.2.6] exists '
                    'and certificate leaf[field.1.2.840.113635.100.6.1.13] exists and certificate leaf[subject.OU] = "922Z3D8FB9"' % BUNDLE_ID)
-UPDATE_CACHE = os.path.expanduser("~/Library/Caches/Protium")
+UPDATE_CACHE = os.environ.get("PROTIUM_UPDATE_CACHE") or os.path.expanduser("~/Library/Caches/Protium")
 UPDATE_PENDING = os.path.join(HOME_DIR, "update-pending.json")
 
 
@@ -1152,6 +1156,111 @@ def cmd_update_verify(image, version):
     return 0
 
 
+def cmd_update_fetch():
+    """Downloads the newest release's disk image and tests it. Prints "ok fetched <file>
+    <version>". PROTIUM_UPDATE_IMAGE names a file to take instead of downloading, for the checks;
+    it is tested like a download."""
+    app = this_app()
+    if not app:
+        return refused("this is a checkout, update it with git")
+    newer = newer_releases(now=True)
+    if not newer:
+        return refused("there is no newer version than %s" % (protium_version() or "this one"))
+    release = newer[0]
+    if not release["download"]:
+        return refused("release %s has no disk image of ours to download; see %s" % (release["version"], release["page"]))
+    running = games_running(app)
+    if running:
+        return refused("a game is running from this Protium (%s); quit it first" % os.path.basename(running[0]))
+    os.makedirs(UPDATE_CACHE, exist_ok=True)
+    image = os.path.join(UPDATE_CACHE, "Protium-%s.dmg" % release["version"])
+    if os.environ.get("PROTIUM_UPDATE_IMAGE"):
+        shutil.copyfile(os.environ["PROTIUM_UPDATE_IMAGE"], image)
+    else:
+        print("downloading Protium %s" % release["version"])
+        sys.stdout.flush()
+        curl(release["download"], image)
+    problem = with_image(image, lambda found: app_problem(found, release["version"], protium_version()))
+    if problem:
+        return refused(problem, image)
+    print("ok fetched %s %s" % (image, release["version"]))
+    return 0
+
+
+# Puts the new app where the old one is, once the old one has quit, and puts the old one back
+# when the new one does not start: $1 the app, $2 the new copy next to it, $3 where the old one
+# waits, $4 the file the new app writes "started" into, $5 the process to wait for (or 0), $6
+# 1 to open the app afterwards.
+SWAP_HELPER = r"""#!/bin/sh
+app=$1 copy=$2 old=$3 pending=$4 pid=$5 open=$6
+give_up() { rm -rf "$copy"; rm -f "$pending"; exit 1; }
+n=0
+while [ "$pid" != 0 ] && kill -0 "$pid" 2>/dev/null; do
+    n=$((n + 1)); [ $n -gt 120 ] && give_up
+    sleep 0.5
+done
+mv "$app" "$old" || give_up
+if ! mv "$copy" "$app"; then mv "$old" "$app"; give_up; fi
+[ "$open" = 1 ] && /usr/bin/open "$app"
+n=0
+while [ $n -lt 60 ]; do
+    if grep -q '"started"' "$pending" 2>/dev/null; then rm -rf "$old"; exit 0; fi
+    n=$((n + 1)); sleep 0.5
+done
+# the new one did not start: the old one comes back
+/usr/bin/pkill -f "^$app/Contents/MacOS/Protium" 2>/dev/null
+mv "$app" "$copy.failed" && mv "$old" "$app"
+rm -rf "$copy.failed"
+printf '{"failed": "the new version did not start; the old one was put back"}\n' >"$pending"
+[ "$open" = 1 ] && /usr/bin/open "$app"
+exit 1
+"""
+
+
+def cmd_update_install(image, version, wait_pid):
+    """Tests the disk image again, copies its app next to this one, tests the copy, and leaves
+    the swap to a helper that outlives this process. Prints "ok installing <version>"."""
+    app = this_app()
+    if not app:
+        return refused("this is a checkout, update it with git")
+    folder, current = os.path.dirname(app), protium_version()
+    if "/AppTranslocation/" in app or app.startswith("/Volumes/"):
+        return refused("Protium is running from a disk image or a temporary copy; move it to Applications first")
+    if not os.access(folder, os.W_OK):
+        return refused("%s cannot be written by this user, so the app there cannot be replaced" % folder)
+    running = games_running(app)
+    if running:
+        return refused("a game is running from this Protium (%s); quit it first" % os.path.basename(running[0]))
+    copy = os.path.join(folder, ".Protium-%s.app" % version)
+    old = os.path.join(folder, ".Protium-old.app")
+    for leftover in (copy, old):
+        if os.path.lexists(leftover):
+            shutil.rmtree(leftover, ignore_errors=True)
+
+    def take(found):
+        problem = app_problem(found, version, current)
+        if problem:
+            return problem
+        r = subprocess.run(["/usr/bin/ditto", found, copy], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        return None if r.returncode == 0 else "the app could not be copied: %s" % r.stderr.decode(errors="replace").strip()
+    problem = with_image(image, take) or app_problem(copy, version, current)
+    if problem:
+        shutil.rmtree(copy, ignore_errors=True)
+        return refused(problem, image)
+    os.makedirs(UPDATE_CACHE, exist_ok=True)
+    os.makedirs(HOME_DIR, exist_ok=True)
+    helper = os.path.join(UPDATE_CACHE, "swap.sh")
+    write_file(helper, SWAP_HELPER)
+    write_file(UPDATE_PENDING, json.dumps({"old": current, "new": version}) + "\n")
+    subprocess.Popen(["/bin/sh", helper, app, copy, old, UPDATE_PENDING, str(wait_pid),
+                      "0" if os.environ.get("PROTIUM_UPDATE_NO_OPEN") else "1"],
+                     stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+    if os.path.dirname(os.path.abspath(image)) == UPDATE_CACHE:
+        os.remove(image)
+    print("ok installing %s" % version)
+    return 0
+
+
 def cmd_steamclient(again):
     import hashlib
     import zipfile
@@ -1200,6 +1309,56 @@ def cmd_tools():
             "    sudo mkdir -p %s && sudo chown \"$USER\" %s" % (TOOLS_DIR, TOOLS_DIR, TOOLS_DIR))
     for tool in TOOLS:
         print("installed %s in %s" % (tool, os.path.join(TOOLS_DIR, tool)))
+
+
+def cmd_tools_refresh():
+    """After an update of the app: installs the tools again when the ones in Steam's folder are
+    not the app's (their protium.conf apart). Says nothing when they are the same."""
+    def files(folder):
+        out = {}
+        for root, _, names in os.walk(folder):
+            for name in names:
+                if name not in ("protium.conf", ".DS_Store"):
+                    path = os.path.join(root, name)
+                    with open(path, "rb") as f:
+                        out[os.path.relpath(path, folder)] = f.read()
+        return out
+    if all(os.path.isdir(os.path.join(TOOLS_DIR, t)) and files(os.path.join(TOOLS_DIR, t)) == files(os.path.join(TOOLS_SRC, t)) for t in TOOLS):
+        return 0
+    if not any(os.path.isdir(os.path.join(TOOLS_DIR, t)) for t in TOOLS):
+        return 0        # never set up: "Set up Steam" does it
+    if steam_running():
+        print("This version has newer tools for Steam. Quit Steam and click Repair.")
+        return 0
+    if install_tools() is None:
+        print("This version has newer tools for Steam. Click Repair.")
+        return 0
+    print("Steam's tools are brought up to date.")
+    return 0
+
+
+def cmd_version_notify():
+    """When a game starts: one notification for a newer version, once per version. The app posts
+    it ("Protium --notify"); nothing happens in a checkout or with the asking turned off."""
+    app = this_app()
+    newer = newer_releases()
+    if not app or not newer:
+        return 0
+    kept = json_file(UPDATE_CHECK, {})
+    if kept.get("told") == newer[0]["version"]:
+        return 0
+    first = next((re.sub(r"^[-*] +", "", line.strip()) for line in newer[0]["notes"].split("\n")
+                  if line.strip() and not line.startswith("#")), "Open Protium to update.")
+    first = re.sub(r"\s+", " ", first)[:160]
+    binary = os.path.join(app, "Contents", "MacOS", "Protium")
+    if os.environ.get("PROTIUM_NOTIFY_TEST"):
+        print("notify %s %s" % (newer[0]["version"], first))
+    elif os.access(binary, os.X_OK):
+        subprocess.run([binary, "--notify", newer[0]["version"], first], stdin=subprocess.DEVNULL,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=30)
+    kept["told"] = newer[0]["version"]
+    write_file(UPDATE_CHECK, json.dumps(kept, indent=1))
+    return 0
 
 
 # ---------------------------------------------------------------- symbolic links of Mac builds
@@ -2439,6 +2598,10 @@ def main(argv):
         cmd_guard_remove()
     elif argv == ["tools"]:
         cmd_tools()
+    elif argv == ["tools", "--refresh"]:
+        sys.exit(cmd_tools_refresh())
+    elif argv == ["version", "--notify"]:
+        sys.exit(cmd_version_notify())
     elif len(argv) >= 1 and argv[0] == "discover" and all(a.isdigit() or a in ("--installed", "--json") for a in argv[1:]):
         sys.exit(cmd_discover(argv[1:]))
     elif argv == ["data", "update"]:
@@ -2449,6 +2612,10 @@ def main(argv):
         sys.exit(cmd_version("--check" in argv, "--now" in argv))
     elif len(argv) == 4 and argv[:2] == ["update", "--verify"]:
         sys.exit(cmd_update_verify(argv[2], argv[3]))
+    elif argv == ["update", "--fetch"]:
+        sys.exit(cmd_update_fetch())
+    elif len(argv) in (4, 5) and argv[:2] == ["update", "--install"] and (len(argv) == 4 or argv[4].isdigit()):
+        sys.exit(cmd_update_install(argv[2], argv[3], int(argv[4]) if len(argv) == 5 else 0))
     elif argv in (["updates"], ["updates", "on"], ["updates", "off"]):
         sys.exit(cmd_updates(argv[1] if len(argv) > 1 else None))
     elif argv == ["games"]:

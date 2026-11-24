@@ -41,6 +41,8 @@
 #   TOOLCHAIN_DIR   llvm-mingw, for llvm-strip (default as in build-wine.sh)
 #   NOTARY_PROFILE  notarytool keychain profile (default protium-notary)
 #   NOTARIZE        auto (default: when the keychain profile exists), 1 or 0
+#   CHANGELOG       the changelog to take the version's section from and to put into the app
+#                   (default CHANGELOG.md; macos/tests/check-update.sh's test build has its own)
 #   MIN_MACOS       the oldest macOS the release supports (default 27.0); a Mach-O file that
 #                   needs a newer one stops the release
 
@@ -79,7 +81,7 @@ loader_app=$INSTALL_DIR/lib/wine/aarch64-unix/wine.app
 [ "$(shasum -a 256 "$PYTHON_TARBALL" | cut -d' ' -f1)" = "$PYTHON_SHA256" ] || die "$PYTHON_TARBALL does not have the pinned SHA-256"
 [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "VERSION $VERSION is not x.y.z"
 # the release's section of CHANGELOG.md: what the app and the release's page say is new
-CHANGELOG=$PROTON_DIR/CHANGELOG.md
+CHANGELOG=${CHANGELOG:-$PROTON_DIR/CHANGELOG.md}
 # (Keep a Changelog: "## [1.2.3] - 2026-01-31", and the links at the end of the file are not part of it)
 changes() { awk -v v="[$VERSION]" '/^## /{on = ($2 == v); next} /^\[[^]]*\]: /{on = 0} on' "$CHANGELOG"; }
 [ -n "$(changes | tr -d '[:space:]')" ] || die "CHANGELOG.md has no section \"## [$VERSION] - <date>\": move what is under [Unreleased] into one first"
@@ -125,7 +127,7 @@ rm -rf "$app"
 mkdir -p "$C/MacOS" "$C/Resources/steamplay" "$C/SharedSupport/licenses"
 
 log "the window"
-swiftc -swift-version 5 -O -target "arm64-apple-macos$MIN_MACOS" -framework AppKit \
+swiftc -swift-version 5 -O -target "arm64-apple-macos$MIN_MACOS" -framework AppKit -framework UserNotifications \
     -o "$C/MacOS/Protium" "$SCRIPT_DIR/app/Protium.swift"
 log "the icon"
 icon_work=$(mktemp -d)
@@ -339,5 +341,5 @@ if [ "$NOTARIZE" = 1 ]; then
     spctl -a -vv -t open --context context:primary-signature "$dmg" 2>&1 | sed 's/^/:: /' >&2 || true
 fi
 # the release's page, for macos/publish-release.sh
-"$SCRIPT_DIR/release-notes.sh" "$VERSION" "$dmg" >"$RELEASE_DIR/Protium-$VERSION.notes.md"
+CHANGELOG=$CHANGELOG "$SCRIPT_DIR/release-notes.sh" "$VERSION" "$dmg" >"$RELEASE_DIR/Protium-$VERSION.notes.md"
 log "done: $dmg ($(du -h "$dmg" | cut -f1); app $(du -sh "$app" | cut -f1))"
