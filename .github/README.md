@@ -92,8 +92,9 @@ As of November 2026, from each project's own pages:
 
 What Protium sets out to do differently:
 
-- **Valve's Proton tree.** Protium is a port of Proton 11 with its Wine, Steam bridge and
-  launcher, not a separate Wine build, and it follows Proton as it moves.
+- **Valve's Proton tree.** Protium is built from Proton 11's own tree, with its Wine and its
+  Steam bridge, not from a separate Wine build. Proton's launcher script is not ported yet: a
+  smaller one of Protium's own starts the games.
 - **Open graphics layers.** Direct3D goes to Metal through mtld3d, DXMT and vkd3d-proton, not
   through Apple's D3DMetal, so every layer can be read and fixed.
 - **Nothing to buy and nothing under Rosetta.** Only the game's own code is translated. Wine, the

@@ -5,14 +5,14 @@
 #
 #   macos/steamplay-run.sh <app id> [game arguments...]
 #
-# Mac Steam downloads a Windows build when its download platform is forced (in its console:
-# @sSteamCmdForcePlatformType windows, then app_install <app id>), but it neither shows the
-# Steam Play settings nor launches a compatibility tool on macOS. This script does the launch:
-# it finds the game through Steam's library folders and the app's manifest, gives it a prefix
-# in <library>/steamapps/compatdata/<app id>/pfx as Proton does, puts Valve's Windows client
-# DLLs where steam_api looks for them, and starts the game through Proton's steam.exe, so
-# that lsteamclient connects it to the running Mac Steam (login, ownership, stats and
-# playtime; not the overlay, which Steam would have to inject into the game's process).
+# Steam Play's compatibility tool (macos/steamplay-tools/proton-macos/run) gets here through
+# macos/steamplay-launch when the player presses Play; it can also be run by hand. It stands in
+# for Valve's "proton" script, which is not ported: it finds the game through Steam's library
+# folders and the app's manifest, gives it a prefix in
+# <library>/steamapps/compatdata/<app id>/pfx as Proton does, does what the game's install
+# scripts ask for, puts Valve's Windows client DLLs where steam_api looks for them, and starts
+# the game through Proton's steam.exe, so that lsteamclient connects it to the running Mac
+# Steam (login, ownership, stats and playtime; not the overlay, which does not draw yet).
 #
 # Environment overrides:
 #   WINE_INSTALL    the bundle (default: Protium.app's Contents/SharedSupport/runtime when this
