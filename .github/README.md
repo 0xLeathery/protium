@@ -11,8 +11,8 @@ The name: protium is hydrogen-1, the lightest form of the lightest element, one 
 electron. It is Proton with nothing added that it does not need: no Rosetta, no virtual machine.
 The icon is a letter P whose bowl is the electron's orbit, with the proton at its centre.
 
-Protium is early. It is built and tested on one Mac (an M4 Pro on macOS 27.2), and there is no
-installer for other Macs yet.
+Protium is early. Its app installs on any Apple Silicon Mac with macOS 27, but it has been built
+and tested on one (an M4 Pro on macOS 27.2).
 
 Protium is not affiliated with or endorsed by Valve or Apple. Steam and Proton are trademarks of
 Valve Corporation, and Mac and Metal are trademarks of Apple Inc.
@@ -50,8 +50,7 @@ Steam Play itself works on Mac Steam:
 Missing so far:
 - the Steam overlay;
 - OpenGL above 2.1;
-- .NET programs (wine-mono) and embedded web views (wine-gecko);
-- an installer and signing for other Macs.
+- .NET programs (wine-mono) and embedded web views (wine-gecko).
 
 Games with kernel-level anti-cheat are not expected to work.
 
@@ -76,10 +75,26 @@ Protium builds on athei's macOS work: Mesa, DXMT, vkd3d-proton and FEX come from
 commits each build script names, and Direct3D 9 is athei's mtld3d. Protium's own fixes to those
 projects are in [macos/patches](../macos/patches), and each one says at its head what it fixes.
 
-## Getting started
+## Install
 
-There is no installer yet: today Protium is built from source, on the Mac that runs it. These
-are the steps, in order.
+You need an Apple Silicon Mac with macOS 27.0 or later and Steam for Mac.
+
+1. Download `Protium-<version>.dmg` from the
+   [latest release](https://github.com/0xLeathery/protium/releases/latest) and open it.
+2. Drag Protium into the Applications folder and open it from there.
+3. Quit Steam, then click **Set up Steam** in Protium's window. It asks for an administrator
+   password once, to make the folder Steam finds its compatibility tools in, and it fetches Valve's
+   Windows client DLLs from Valve's own servers.
+4. Start Steam, install a Windows game from your library and press Play.
+
+Protium's window also has **Repair**, **Status** and **Uninstall**. Uninstall takes Protium out of
+Steam again; saves in Steam Cloud and the folders in `steamapps/compatdata` stay.
+
+The app is signed with a Developer ID and notarized by Apple.
+
+## Build from source
+
+Protium can also be built on the Mac that runs it. These are the steps, in order.
 
 ### 1. What you need
 
