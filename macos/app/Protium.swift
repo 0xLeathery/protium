@@ -8,6 +8,7 @@
 // Copyright (C) 2026 Ethan Hurst. GPL-3.0-or-later, see LICENSE.protium.
 
 import AppKit
+import Darwin
 import UserNotifications
 
 let steamBundleID = "com.valvesoftware.steam"
@@ -26,6 +27,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var updateVersion = ""
     var updateHasImage = false
     var tellCheckbox: NSButton!
+    var notifyButton: NSButton!
     /// what steamplay printed since the last command started, for the lines the app reads
     var lastOutput = ""
     var steamplayHome: String {
@@ -79,6 +81,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         tellCheckbox = NSButton(checkboxWithTitle: "Tell me about new versions", target: self, action: #selector(tellChanged))
         tellCheckbox.state = .on
         row.addArrangedSubview(tellCheckbox)
+        notifyButton = NSButton(title: "Allow notifications…", target: self, action: #selector(allowNotifications))
+        row.addArrangedSubview(notifyButton)
+        showNotificationState()
 
         let stack = NSStackView(views: [title, updateRow, scroll, row])
         stack.orientation = .vertical
@@ -159,6 +164,46 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc func updateLater() { updateRow.isHidden = true }
+
+    // MARK: macOS notifications
+
+    /// The button says what macOS allows: it asks while that is undecided, and is done once the
+    /// player allowed notifications.
+    func showNotificationState() {
+        UNUserNotificationCenter.current().getNotificationSettings { settings in
+            DispatchQueue.main.async {
+                switch settings.authorizationStatus {
+                case .authorized, .provisional:
+                    self.notifyButton.title = "Notifications allowed"
+                    self.notifyButton.isEnabled = false
+                case .denied:
+                    self.notifyButton.title = "Notifications are off…"
+                default:
+                    self.notifyButton.title = "Allow notifications…"
+                }
+            }
+        }
+    }
+
+    /// Asked from the open window, where macOS shows its question. A game's start never asks.
+    @objc func allowNotifications() {
+        let center = UNUserNotificationCenter.current()
+        center.getNotificationSettings { settings in
+            if settings.authorizationStatus == .denied {
+                DispatchQueue.main.async {
+                    _ = self.alert("Notifications are off for Protium",
+                                   "Turn them on in System Settings, under Notifications, Protium. Protium then tells you there too when a newer version is out. The banner in the game does not need this.")
+                }
+                return
+            }
+            center.requestAuthorization(options: [.alert]) { _, error in
+                DispatchQueue.main.async {
+                    if let error = error { self.say("\nmacOS did not ask about notifications: \(error.localizedDescription)\n") }
+                    self.showNotificationState()
+                }
+            }
+        }
+    }
 
     @objc func tellChanged() {
         askSteamplay(["updates", tellCheckbox.state == .on ? "on" : "off"]) { _ in self.checkForUpdate() }
@@ -364,7 +409,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self.say(ok ? "\nSet up. Start Steam: Windows games now install and play from your library.\n"
                         : "\nSetting up did not finish; the lines above say why.\n")
             // asked here, with Protium in front, and never when a game starts
-            if ok { UNUserNotificationCenter.current().requestAuthorization(options: [.alert]) { _, _ in } }
+            if ok { self.allowNotifications() }
         }
     }
 
@@ -388,37 +433,120 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 }
 
-// "Protium --notify <version> <what is new>": one notification that a newer version is out, for
-// steamplay when a game starts. No window; nothing happens unless the player allowed
-// notifications. Clicking it opens Protium, which shows the update as usual.
-if CommandLine.arguments.count >= 3, CommandLine.arguments[1] == "--notify" {
-    let center = UNUserNotificationCenter.current()
-    let done = DispatchSemaphore(value: 0)
-    center.getNotificationSettings { settings in
-        guard settings.authorizationStatus == .authorized || settings.authorizationStatus == .provisional else {
-            done.signal()
-            return
-        }
-        let content = UNMutableNotificationContent()
-        content.title = "Protium \(CommandLine.arguments[2]) is out"
-        content.body = CommandLine.arguments.dropFirst(3).joined(separator: " ")
-        center.add(UNNotificationRequest(identifier: "update-\(CommandLine.arguments[2])", content: content, trigger: nil)) { _ in
-            done.signal()
-        }
-    }
-    _ = done.wait(timeout: .now() + 10)
-    exit(0)
-}
+// "Protium --game-notice <version> <what is new>": tells the player in the game they just started
+// that a newer Protium is out. steamplay starts it when a game starts. It is an application
+// without a Dock icon that never becomes the active one: it waits for a game window of this
+// Protium to be on screen, shows a small banner at the top of that screen for a few seconds,
+// which the mouse goes straight through, posts a macOS notification as well if the player
+// allowed those, and ends.
+if CommandLine.arguments.count >= 3, CommandLine.arguments[1] == "--game-notice" {
+    let version = CommandLine.arguments[2]
+    let line = CommandLine.arguments.dropFirst(3).joined(separator: " ")
+    let runtime = ProcessInfo.processInfo.environment["PROTIUM_RUNTIME"]
+        ?? Bundle.main.bundleURL.appendingPathComponent("Contents/SharedSupport/runtime").path
+    let notice = NSApplication.shared
+    notice.setActivationPolicy(.accessory)
 
-// "Protium --allow-notifications": asks for the permission "Set up Steam" asks for, by itself,
-// and says what the answer was. For macos/tests and for a player who said no the first time.
-if CommandLine.arguments.count == 2, CommandLine.arguments[1] == "--allow-notifications" {
-    let done = DispatchSemaphore(value: 0)
-    UNUserNotificationCenter.current().requestAuthorization(options: [.alert]) { granted, error in
-        print(granted ? "notifications allowed" : "notifications not allowed\(error.map { ": \($0.localizedDescription)" } ?? "")")
-        done.signal()
+    /// The screen rectangle (origin top left, as Quartz counts) of a game's window: one of at
+    /// least 640 by 480 that belongs to a program of this Protium's Wine.
+    func gameWindow() -> CGRect? {
+        let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
+        for window in list {
+            guard let pid = window[kCGWindowOwnerPID as String] as? Int32,
+                  let dict = window[kCGWindowBounds as String] as? NSDictionary,
+                  let bounds = CGRect(dictionaryRepresentation: dict), bounds.width >= 640, bounds.height >= 480 else { continue }
+            var buffer = [CChar](repeating: 0, count: 4096)
+            guard proc_pidpath(pid, &buffer, UInt32(buffer.count)) > 0 else { continue }
+            if String(cString: buffer).hasPrefix(runtime + "/") { return bounds }
+        }
+        return nil
     }
-    _ = done.wait(timeout: .now() + 120)
+
+    func show(over game: CGRect) {
+        // Quartz counts from the top of the main screen, AppKit from its bottom
+        let mainHeight = NSScreen.screens.first?.frame.height ?? 0
+        let centre = NSPoint(x: game.midX, y: mainHeight - game.midY)
+        let screen = NSScreen.screens.first(where: { $0.frame.contains(centre) }) ?? NSScreen.main ?? NSScreen.screens[0]
+        let size = NSSize(width: 520, height: 88)
+        let frame = NSRect(x: screen.frame.midX - size.width / 2, y: screen.frame.maxY - size.height - 56,
+                           width: size.width, height: size.height)
+        let panel = NSPanel(contentRect: frame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        panel.level = NSWindow.Level(rawValue: Int(CGShieldingWindowLevel()) + 1)   // above a fullscreen game
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
+        panel.hasShadow = true
+        panel.ignoresMouseEvents = true     // a click here is the game's
+        panel.hidesOnDeactivate = false
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
+        panel.title = "Protium notice"
+
+        let back = NSVisualEffectView(frame: NSRect(origin: .zero, size: size))
+        back.material = .hudWindow
+        back.state = .active
+        back.blendingMode = .behindWindow
+        back.wantsLayer = true
+        back.layer?.cornerRadius = 18
+        back.layer?.masksToBounds = true
+        let title = NSTextField(labelWithString: "Protium \(version) is out")
+        title.font = NSFont.systemFont(ofSize: 15, weight: .semibold)
+        title.textColor = .white
+        let what = NSTextField(labelWithString: line)
+        what.font = NSFont.systemFont(ofSize: 12)
+        what.textColor = NSColor.white.withAlphaComponent(0.85)
+        what.lineBreakMode = .byTruncatingTail
+        let how = NSTextField(labelWithString: "Open Protium to update.")
+        how.font = NSFont.systemFont(ofSize: 12)
+        how.textColor = NSColor.white.withAlphaComponent(0.6)
+        let text = NSStackView(views: [title, what, how])
+        text.orientation = .vertical
+        text.alignment = .leading
+        text.spacing = 3
+        let row = NSStackView()
+        row.orientation = .horizontal
+        row.spacing = 14
+        row.edgeInsets = NSEdgeInsets(top: 12, left: 16, bottom: 12, right: 16)
+        if let icon = NSImage(contentsOf: Bundle.main.bundleURL.appendingPathComponent("Contents/Resources/Protium.icns")) {
+            let image = NSImageView(image: icon)
+            image.widthAnchor.constraint(equalToConstant: 56).isActive = true
+            image.heightAnchor.constraint(equalToConstant: 56).isActive = true
+            row.addArrangedSubview(image)
+        }
+        row.addArrangedSubview(text)
+        row.frame = back.bounds
+        row.autoresizingMask = [.width, .height]
+        back.addSubview(row)
+        panel.contentView = back
+
+        panel.alphaValue = 0
+        panel.orderFrontRegardless()
+        NSAnimationContext.runAnimationGroup { $0.duration = 0.4; panel.animator().alphaValue = 1 }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 8.4) {
+            NSAnimationContext.runAnimationGroup({ $0.duration = 0.6; panel.animator().alphaValue = 0 },
+                                                 completionHandler: { exit(0) })
+        }
+        // the same, for Notification Centre, if the player allowed notifications
+        let center = UNUserNotificationCenter.current()
+        center.getNotificationSettings { settings in
+            guard settings.authorizationStatus == .authorized || settings.authorizationStatus == .provisional else { return }
+            let content = UNMutableNotificationContent()
+            content.title = "Protium \(version) is out"
+            content.body = line.isEmpty ? "Open Protium to update." : line
+            center.add(UNNotificationRequest(identifier: "update-\(version)", content: content, trigger: nil)) { _ in }
+        }
+    }
+
+    var waited = 0
+    Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { timer in
+        waited += 1
+        if let game = gameWindow() {
+            timer.invalidate()
+            // not over a splash screen that is gone a moment later
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) { show(over: gameWindow() ?? game) }
+        } else if waited >= 180 {
+            exit(0)     // no game came
+        }
+    }
+    notice.run()
     exit(0)
 }
 
