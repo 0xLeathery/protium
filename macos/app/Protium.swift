@@ -19,7 +19,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let output = NSTextView()
     var buttons: [NSButton] = []
     var busy = false
-    /// "Protium 0.3.0 is out", Update and Later; hidden until a newer release is found
+    /// "Protium 0.3.0 is available", Update and Later; hidden until a newer release is found
     let updateRow = NSStackView()
     let updateLabel = NSTextField(labelWithString: "")
     var updateButton: NSButton!
@@ -47,7 +47,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         window.title = "Protium"
         window.center()
 
-        let title = NSTextField(labelWithString: "Steam Play for this Mac: Windows games from your Steam library.")
+        let title = NSTextField(labelWithString: "Play Windows games from your Steam library on this Mac.")
         title.font = NSFont.systemFont(ofSize: 13, weight: .medium)
 
         output.isEditable = false
@@ -156,9 +156,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self.updateVersion = latest[0]
             self.updateHasImage = fields["download"] != nil
             self.updateButton.title = self.updateHasImage ? "Update" : "Open its page"
-            self.updateLabel.stringValue = "Protium \(latest[0]) is out. This is \(self.ownVersion)."
+            self.updateLabel.stringValue = "Protium \(latest[0]) is available. You have \(self.ownVersion)."
             if self.updateRow.isHidden {
-                self.say("\nNew since this version:\n\n" + changes.joined(separator: "\n") + "\n")
+                self.say("\nWhat's new:\n\n" + changes.joined(separator: "\n") + "\n")
             }
             self.updateRow.isHidden = false
         }
@@ -193,13 +193,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if settings.authorizationStatus == .denied {
                 DispatchQueue.main.async {
                     _ = self.alert("Notifications are off for Protium",
-                                   "Turn them on in System Settings, under Notifications, Protium. Protium then tells you there too when a newer version is out. The banner in the game does not need this.")
+                                   "Turn them on in System Settings > Notifications > Protium to be told there when a new version is available. The banner shown in games works either way.")
                 }
                 return
             }
             center.requestAuthorization(options: [.alert]) { _, error in
                 DispatchQueue.main.async {
-                    if let error = error { self.say("\nmacOS did not ask about notifications: \(error.localizedDescription)\n") }
+                    if let error = error { self.say("\nmacOS couldn't ask for permission to send notifications: \(error.localizedDescription)\n") }
                     self.showNotificationState()
                 }
             }
@@ -233,7 +233,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     self.setBusy(false)
                     return
                 }
-                self.say("\nProtium quits now and comes back as \(version).\n")
+                self.say("\nProtium will now quit and reopen as version \(version).\n")
                 DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { NSApp.terminate(nil) }
             }
         }
@@ -248,7 +248,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
               var pending = (try? JSONSerialization.jsonObject(with: data)) as? [String: String] else { return }
         if let failed = pending["failed"] {
             try? FileManager.default.removeItem(atPath: path)
-            _ = alert("Protium was not updated", failed)
+            _ = alert("Protium wasn't updated", failed)
             return
         }
         guard pending["new"] == ownVersion, pending["started"] == nil else {
@@ -295,6 +295,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         output.scrollToEndOfDocument(nil)
     }
 
+    /// What the window does not show (which command ran, and with what status), kept in
+    /// ~/Library/Logs/SteamPlay/app.log for whoever looks into a problem.
+    func note(_ line: String) {
+        let folder = NSHomeDirectory() + "/Library/Logs/SteamPlay"
+        try? FileManager.default.createDirectory(atPath: folder, withIntermediateDirectories: true)
+        let stamp = ISO8601DateFormatter().string(from: Date())
+        guard let data = "\(stamp) \(line)\n".data(using: .utf8) else { return }
+        if let handle = FileHandle(forWritingAtPath: folder + "/app.log") {
+            handle.seekToEndOfFile()
+            handle.write(data)
+            handle.closeFile()
+        } else {
+            FileManager.default.createFile(atPath: folder + "/app.log", contents: data)
+        }
+    }
+
     func setBusy(_ on: Bool) {
         busy = on
         buttons.forEach { $0.isEnabled = !on }
@@ -303,7 +319,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Runs the app's steamplay with its own Python; the output goes to the window as it comes.
     /// The completion gets the exit status, on the main thread.
     func runSteamplay(_ args: [String], then done: @escaping (Int32) -> Void) {
-        say("\n$ steamplay \(args.joined(separator: " "))\n")
+        say("\n")
+        note("$ steamplay \(args.joined(separator: " "))")
         lastOutput = ""
         let process = Process()
         process.executableURL = URL(fileURLWithPath: python)
@@ -327,7 +344,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         do {
             try process.run()
         } catch {
-            say("could not start steamplay: \(error.localizedDescription)\n")
+            say("Protium couldn't run its helper: \(error.localizedDescription)\n")
             done(-1)
         }
     }
@@ -337,7 +354,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let first = steps.first else { return done(true) }
         runSteamplay(first) { code in
             if code != 0 {
-                self.say("stopped: steamplay \(first.joined(separator: " ")) failed (\(code))\n")
+                self.note("stopped: steamplay \(first.joined(separator: " ")) failed (\(code))")
                 return done(false)
             }
             self.runSteps(Array(steps.dropFirst()), then: done)
@@ -360,7 +377,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let path = Bundle.main.bundlePath
         if path.contains("/AppTranslocation/") || path.hasPrefix("/Volumes/") {
             _ = alert("Move Protium to Applications first",
-                      "Drag Protium into the Applications folder and open it from there. Steam will start games through this copy of Protium, so it has to stay in one place.")
+                      "Drag Protium into the Applications folder and open it from there. Steam starts games through Protium, so the app has to stay in one place.")
             return false
         }
         return true
@@ -370,7 +387,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func steamQuit() -> Bool {
         var running = NSRunningApplication.runningApplications(withBundleIdentifier: steamBundleID)
         if running.isEmpty { return true }
-        if alert("Quit Steam first", "Protium changes Steam's settings, which Steam only reads when it starts.",
+        if alert("Quit Steam first", "Steam needs to be closed while Protium changes its settings.",
                  buttons: ["Quit Steam", "Cancel"]) != .alertFirstButtonReturn { return false }
         running.forEach { $0.terminate() }
         for _ in 0..<60 {
@@ -378,7 +395,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if running.allSatisfy({ $0.isTerminated }) { return true }
             RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.5))
         }
-        _ = alert("Steam is still running", "Quit Steam yourself, then try again.")
+        _ = alert("Steam is still running", "Quit Steam, then try again.")
         return false
     }
 
@@ -386,15 +403,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// administrator's password and then given to this user.
     func toolsDirReady() -> Bool {
         if FileManager.default.isWritableFile(atPath: toolsDir) { return true }
-        say("making \(toolsDir) (macOS asks for an administrator's password)\n")
+        say("Protium needs to create a folder for Steam (\(toolsDir)), and macOS will ask for your password.\n")
         let source = """
             do shell script "mkdir -p \(toolsDir) && chown " & quoted form of "\(NSUserName())" & " \(toolsDir)" ¬
-                with prompt "Protium makes the folder Steam finds its compatibility tools in." with administrator privileges
+                with prompt "Protium needs to create the folder where Steam looks for compatibility tools." with administrator privileges
             """
         var error: NSDictionary?
         NSAppleScript(source: source)?.executeAndReturnError(&error)
         if let error = error {
-            say("not made: \(error[NSAppleScript.errorMessage] ?? "cancelled")\n")
+            say("The folder wasn't created: \(error[NSAppleScript.errorMessage] ?? "cancelled")\n")
             return false
         }
         return FileManager.default.isWritableFile(atPath: toolsDir)
@@ -407,8 +424,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         setBusy(true)
         let finish = { (ok: Bool) in
             self.setBusy(false)
-            self.say(ok ? "\nSet up. Start Steam: Windows games now install and play from your library.\n"
-                        : "\nSetting up did not finish; the lines above say why.\n")
+            self.say(ok ? "\nDone. Open Steam and your Windows games can be installed and played from your library.\n"
+                        : "\nSetup didn't finish. Fix the problem shown above and press Set up Steam again, or press Diagnostics to save a report.\n")
             // asked here, with Protium in front, and never when a game starts
             if ok { self.allowNotifications() }
         }
@@ -441,14 +458,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc func uninstall() {
         guard !busy else { return }
-        if alert("Take Protium out of Steam?",
-                 "Steam then takes this Mac for a Mac again and removes the Windows builds of the games it installed through Protium. Their saves in Steam Cloud and their folders in steamapps/compatdata stay.",
+        if alert("Remove Protium from Steam?",
+                 "Steam will go back to showing only Mac games and will delete the Windows games it installed through Protium. Cloud saves are kept, and local save data stays in steamapps/compatdata.",
                  buttons: ["Uninstall", "Cancel"]) != .alertFirstButtonReturn { return }
         guard steamQuit() else { return }
         setBusy(true)
         runSteps([["uninstall"]]) { ok in
             self.setBusy(false)
-            if ok { self.say("\nProtium is out of Steam. You can now delete Protium.app.\n") }
+            self.say(ok ? "\nProtium has been removed from Steam. You can delete Protium.app now.\n"
+                        : "\nUninstall didn't finish. Fix the problem shown above and try again, or press Diagnostics to save a report.\n")
         }
     }
 }
@@ -510,7 +528,7 @@ if CommandLine.arguments.count >= 3, CommandLine.arguments[1] == "--game-notice"
         back.wantsLayer = true
         back.layer?.cornerRadius = 18
         back.layer?.masksToBounds = true
-        let title = NSTextField(labelWithString: "Protium \(version) is out")
+        let title = NSTextField(labelWithString: "Protium \(version) is available")
         title.font = NSFont.systemFont(ofSize: 15, weight: .semibold)
         title.textColor = .white
         let what = NSTextField(labelWithString: line)
@@ -558,7 +576,7 @@ if CommandLine.arguments.count >= 3, CommandLine.arguments[1] == "--game-notice"
         center.getNotificationSettings { settings in
             guard settings.authorizationStatus == .authorized || settings.authorizationStatus == .provisional else { return }
             let content = UNMutableNotificationContent()
-            content.title = "Protium \(version) is out"
+            content.title = "Protium \(version) is available"
             content.body = line.isEmpty ? "Open Protium to update." : line
             center.add(UNNotificationRequest(identifier: "update-\(version)", content: content, trigger: nil)) { _ in }
         }

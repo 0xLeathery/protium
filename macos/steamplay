@@ -140,6 +140,11 @@ def die(msg):
     sys.exit("steamplay: error: " + msg)
 
 
+def stop(msg):
+    """Ends with a sentence for the player, as Protium's window shows it."""
+    sys.exit(msg)
+
+
 # ---------------------------------------------------------------- text VDF (manifests, libraries)
 
 def text_vdf_values(path, key):
@@ -682,15 +687,15 @@ def wanted_mapping():
 
 def cmd_setup(dry_run):
     if steam_ready():
-        die(steam_ready())
+        stop(steam_ready())
     if not dry_run and steam_running():
-        die("quit Steam first: it reads its tools and settings when it starts")
+        stop("Quit Steam first, then try again.")
     wanted = wanted_mapping()
     have = current_mapping()
     changes = {a: t for a, (t, _) in wanted.items() if have.get(a) != t}
     native = sum(1 for t, _ in wanted.values() if t == NATIVE)
-    print("%d games get their Mac build, %d with a Mac or Linux build get Proton, every other game Proton by default"
-          % (native, len(wanted) - native - 1))
+    print("%d games will use their Mac version. %d games that have a Mac or Linux version will use their Windows "
+          "version instead. All other games use their Windows version." % (native, len(wanted) - native - 1))
     cache = app_cache()
     names = {a: cache[a]["name"] for a in cache}
     for appid, _, lib, _ in installed_apps():
@@ -702,22 +707,22 @@ def cmd_setup(dry_run):
         return
     cmd_tools()
     write_switch("linux")
-    print("switch: %s linux" % SWITCH)
+    print("Steam is set to offer Windows games.")
     if changes:
         cmd_map(changes, quiet=True)
     else:
-        print("mappings already as wanted")
+        print("Steam's game settings are already up to date.")
     hooked = hooked_apps()
     if hooked:
         cmd_hook(hooked, True, False)
-    print("done; start Steam")
+    print("Steam is set up.")
 
 
 def cmd_uninstall(dry_run):
     """Undoes setup: the guard, the tools, the switch, the games' mappings to the tools and the
     launch options hook set. Game files, prefixes (compatdata) and SteamPlay's own folder stay."""
     if not dry_run and steam_running():
-        die("quit Steam first: it rewrites its settings when it quits")
+        stop("Quit Steam first, then try again.")
     # a Steam that never started has no settings to undo; the rest is still taken out
     have_settings = os.path.isfile(os.path.join(STEAM_ROOT, "config", "config.vdf"))
     mapped = sorted(a for a, t in current_mapping().items() if t in (PROTON, NATIVE)) if have_settings else []
@@ -733,7 +738,7 @@ def cmd_uninstall(dry_run):
         cmd_guard_remove()
     for tool in present:
         shutil.rmtree(os.path.join(TOOLS_DIR, tool))
-        print("removed %s" % os.path.join(TOOLS_DIR, tool))
+        print("Removed %s." % os.path.join(TOOLS_DIR, tool))
     for path in SWITCH_FILES:
         try:
             with open(path) as f:
@@ -746,14 +751,14 @@ def cmd_uninstall(dry_run):
                 write_file(path, "\n".join(kept) + "\n")
             else:
                 os.remove(path)
-            print("switch removed from %s" % path)
+            print("Removed Protium's setting from %s." % path)
     if mapped:
         cmd_map({a: None for a in mapped}, quiet=True)
-        print("%d game(s) no longer mapped to Protium's tools" % len(mapped))
+        print("%d game(s) no longer use Protium's tools." % len(mapped))
     if hooked:
         cmd_hook(hooked, True, False)
-    print("done. Steam takes this Mac for a Mac again when it starts, and it removes the Windows builds\n"
-          "of games it installed through Steam Play; their prefixes in steamapps/compatdata stay.")
+    print("Done. The next time Steam starts it will show only Mac games again, and it will delete the Windows\n"
+          "games it installed through Protium. Their save data in steamapps/compatdata is kept.")
 
 
 def cmd_prefer(appid, choice):
@@ -806,26 +811,27 @@ def hooked_apps():
 
 def cmd_status():
     if steam_ready():
-        die(steam_ready())
+        stop(steam_ready())
     problems = []
     root, bundle = switch_state()
     print("Steam is %s" % ("running" if steam_running() else "not running"))
-    print("switch: %s (the copy Steam reads, next to its executables); %s (Steam root)" % (bundle or "none", root or "none"))
+    print("Platform setting: %s (in Steam's app folder, the one Steam reads); %s (in Steam's data folder)"
+          % (bundle or "none", root or "none"))
     if bundle != "linux":
-        problems.append("the switch is not on linux: Steam Play is off, and Steam will take Windows installs for "
-                        "wrong at its next start")
+        problems.append("Windows games are switched off in Steam. At its next start Steam will treat installed "
+                        "Windows games as broken.")
     present = [t for t in TOOLS if os.access(os.path.join(TOOLS_DIR, t, "run"), os.X_OK)]
-    print("tools in %s: %s" % (TOOLS_DIR, ", ".join(present) or "none"))
+    print("Tools in %s: %s" % (TOOLS_DIR, ", ".join(present) or "none"))
     if len(present) != len(TOOLS):
-        problems.append("tools are missing: Steam will take the games mapped to them for Linux games")
+        problems.append("Protium's tools are missing from Steam, so Steam will treat the games that use them as Linux games.")
     have, wanted, cache = current_mapping(), wanted_mapping(), app_cache()
-    print("default for games not listed: %s" % (have.get(0) or "none"))
+    print("Default tool for games not listed below: %s" % (have.get(0) or "none"))
     if have.get(0) != PROTON:
-        problems.append("no default mapping to %s" % PROTON)
+        problems.append("Steam has no default tool set for Windows games.")
     stale = sum(1 for a, (t, _) in wanted.items() if have.get(a) != t)
-    print("mappings: %d of ours in Steam's settings, %d to write" % (sum(1 for t in have.values() if t in TOOLS), stale))
+    print("Games assigned to Protium's tools: %d (%d still to update)" % (sum(1 for t in have.values() if t in TOOLS), stale))
     if stale:
-        problems.append("%d game(s) are not mapped by the rule yet (new games?)" % stale)
+        problems.append("%d game(s) haven't been assigned a tool yet. They may be new." % stale)
     for appid, name, lib, depots in installed_apps():
         if appid not in cache or cache[appid]["type"] not in ("game", "demo", "application", "beta"):
             continue
@@ -834,15 +840,16 @@ def cmd_status():
         print("  %-9d %-42s %-13s %s; mapped: %s; depots: %s" % (appid, name[:42], tool, why, mapped, " ".join(depots) or "none"))
     loaded = subprocess.run(["/bin/launchctl", "print", "gui/%d/%s" % (os.getuid(), GUARD_LABEL)],
                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
-    print("guard: %s" % ("installed" if loaded else "not installed (nothing repairs a lost switch or tool by itself)"))
+    print("Background helper: %s" % ("running" if loaded else "not running, so nothing repairs Steam's setup if it gets lost"))
     if steam_running():
-        print("Steam's own log says of this start: %s" % session_state())
+        print("Steam's log for this session: %s" % session_state())
     if guard_gave_up():
-        problems.append("Steam started without Steam Play %d times running, and the guard let it run" % GUARD_TRIES)
+        problems.append("Steam started without Protium's tools %d times in a row, so the background helper stopped "
+                        "restarting it." % GUARD_TRIES)
     for p in problems:
         print("PROBLEM: " + p)
     if problems:
-        print("Quit Steam and run: %s setup" % os.path.abspath(__file__))
+        print("To fix this, quit Steam and press Repair (or run: %s setup)." % os.path.abspath(__file__))
     return 1 if problems else 0
 
 
@@ -1092,7 +1099,7 @@ def cmd_updates(choice):
         write_file(SETTINGS, json.dumps(settings, indent=1))
         if choice == "off" and os.path.exists(UPDATE_CHECK):
             os.remove(UPDATE_CHECK)
-    print("telling about new versions: %s" % ("on" if update_check_wanted() else "off"))
+    print("Update notices: %s" % ("on" if update_check_wanted() else "off"))
     return 0
 
 
@@ -1302,7 +1309,7 @@ def cmd_steamclient(again):
     import hashlib
     import zipfile
     if not again and all(os.path.isfile(os.path.join(STEAMCLIENT_DIR, d)) for d in STEAMCLIENT_DLLS):
-        print("Valve's Windows client DLLs are in %s" % STEAMCLIENT_DIR)
+        print("Steam's Windows files are in %s." % STEAMCLIENT_DIR)
         return 0
     manifest = vdf_parse(curl(CLIENT_MANIFEST).decode("utf-8", errors="replace"))
     package = dict((k, v) for k, v in vdf_block(manifest, ["win32", CLIENT_PACKAGE]) if isinstance(v, str))
@@ -1312,7 +1319,7 @@ def cmd_steamclient(again):
     os.makedirs(STEAMCLIENT_DIR, exist_ok=True)
     zip_path = os.path.join(STEAMCLIENT_DIR, ".%s.zip" % CLIENT_PACKAGE)
     try:
-        print("downloading %s (%s MB) from Valve" % (name, int(package.get("size", "0")) // 1000000))
+        print("Downloading Steam's Windows files from Valve (%s, %s MB)..." % (name, int(package.get("size", "0")) // 1000000))
         curl(CLIENT_CDN + name, zip_path)
         digest = hashlib.sha256()
         with open(zip_path, "rb") as f:
@@ -1334,18 +1341,18 @@ def cmd_steamclient(again):
     finally:
         if os.path.exists(zip_path):
             os.remove(zip_path)
-    print("Valve's Windows client DLLs are in %s" % STEAMCLIENT_DIR)
+    print("Steam's Windows files are in %s." % STEAMCLIENT_DIR)
     return 0
 
 
 def cmd_tools():
     if steam_running():
-        die("quit Steam first: it reads its tools when it starts")
+        stop("Quit Steam first, then try again.")
     if install_tools() is None:
-        die("%s is missing or not writable. Make it once, as an administrator:\n"
+        stop("%s is missing or can't be written to. Create it once as an administrator:\n"
             "    sudo mkdir -p %s && sudo chown \"$USER\" %s" % (TOOLS_DIR, TOOLS_DIR, TOOLS_DIR))
     for tool in TOOLS:
-        print("installed %s in %s" % (tool, os.path.join(TOOLS_DIR, tool)))
+        print("Installed %s in %s." % (tool, os.path.join(TOOLS_DIR, tool)))
 
 
 def cmd_tools_refresh():
@@ -1367,12 +1374,12 @@ def cmd_tools_refresh():
     if not any(os.path.isdir(os.path.join(TOOLS_DIR, t)) for t in TOOLS):
         return 0        # never set up: "Set up Steam" does it
     if steam_running():
-        print("This version has newer tools for Steam. Quit Steam and click Repair.")
+        print("This version has newer tools for Steam. Quit Steam and press Repair.")
         return 0
     if install_tools() is None:
-        print("This version has newer tools for Steam. Click Repair.")
+        print("This version has newer tools for Steam. Press Repair.")
         return 0
-    print("Steam's tools are brought up to date.")
+    print("Protium's tools in Steam have been updated.")
     return 0
 
 
@@ -1765,7 +1772,7 @@ def guard_may_stop(session):
     gave_up = len(stops) >= GUARD_TRIES
     if gave_up:
         state = {"stops": stops, "gave_up": start}
-        guard_log("PROBLEM: Steam started without Steam Play %d times in %d minutes: letting it run. "
+        guard_log("PROBLEM: Steam started without Protium's tools %d times in %d minutes. Leaving it running. "
                   "Open Protium and press Repair." % (GUARD_TRIES, GUARD_WINDOW // 60))
         if not (os.environ.get("STEAMPLAY_FAKE_STEAM") or os.environ.get("STEAMPLAY_FAKE_RUNNING_PID")):
             subprocess.run(["/usr/bin/osascript", "-e", 'display notification "Steam is running without Protium. '
@@ -1805,12 +1812,12 @@ def cmd_guard():
     if bundle != "linux" or root != "linux":
         write_switch("linux")
         if bundle != "linux":
-            guard_log("the switch was %s: set to linux again" % (bundle or "gone"))
+            guard_log("Steam's platform setting was %s. Set it back to linux." % (bundle or "missing"))
     if not tools_installed():
         if install_tools() is None:
-            guard_log("PROBLEM: the tools are missing and %s is missing or not writable" % TOOLS_DIR)
+            guard_log("PROBLEM: Protium's tools are missing and %s can't be written to." % TOOLS_DIR)
         else:
-            guard_log("the tools were missing: installed again in %s" % TOOLS_DIR)
+            guard_log("Protium's tools were missing. Reinstalled them in %s." % TOOLS_DIR)
     if steam_running():
         session = session_lines()
         state = session_state(session)
@@ -1823,27 +1830,27 @@ def cmd_guard():
         if state == "ok" and os.path.exists(GUARD_STOPS):
             os.remove(GUARD_STOPS)
         if state in ("ignored", "no-tools") and guard_may_stop(session):
-            guard_log("Steam is running without Steam Play (%s): stopping it before it removes installs" % state)
+            guard_log("Steam started without Protium's tools (%s). Stopping it before it deletes installed Windows games." % state)
             if not fake:
-                subprocess.run(["/usr/bin/osascript", "-e", 'display notification "Steam started without Steam Play. '
-                                'Restarting it to protect your installed games." with title "Steam Play"'],
+                subprocess.run(["/usr/bin/osascript", "-e", 'display notification "Steam started without Protium\'s tools. '
+                                'Restarting it to protect your installed games." with title "Protium"'],
                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             if not stop_steam():
-                guard_log("PROBLEM: Steam did not stop")
+                guard_log("PROBLEM: Steam didn't stop.")
                 return 1
-            guard_log("Steam stopped; the switch and the tools are in place")
+            guard_log("Steam stopped. The platform setting and the tools are in place.")
             if tools_installed() and switch_state()[1] == "linux" and not fake:
                 subprocess.run([OPEN, "-g", "-a", "Steam"])
-                guard_log("Steam started again")
+                guard_log("Restarted Steam.")
     if not steam_running():
         try:
             wanted, have = wanted_mapping(), current_mapping()
             changes = {a: t for a, (t, _) in wanted.items() if have.get(a) != t}
             if changes:
                 cmd_map(changes, quiet=True, silent=True)
-                guard_log("%d game(s) mapped by the rule" % len(changes))
+                guard_log("Assigned a tool to %d game(s)." % len(changes))
         except (OSError, ValueError, SystemExit) as e:
-            guard_log("PROBLEM: could not check the mappings: %s" % e)
+            guard_log("PROBLEM: couldn't check the games' tool settings: %s" % e)
     return 0
 
 
@@ -1967,7 +1974,7 @@ def guard_job_is_old():
 
 def cmd_guard_install():
     if install_tools() is None and not tools_installed():
-        die("%s is missing or not writable; run setup first" % TOOLS_DIR)
+        stop("%s is missing or can't be written to. Press Set up Steam first." % TOOLS_DIR)
     guard_job_install()
 
 
@@ -2013,9 +2020,8 @@ def guard_job_install():
             break
         time.sleep(1)
     if r.returncode:
-        die("launchctl could not load %s" % GUARD_PLIST)
-    print("the guard is installed: %s keeps %s guard watch running" % (GUARD_PLIST, script))
-    print("it logs to %s" % GUARD_LOG)
+        stop("macOS couldn't start Protium's background helper (%s)." % GUARD_PLIST)
+    print("Protium's background helper is running. It keeps Steam set up for Windows games and logs to %s." % GUARD_LOG)
 
 
 def cmd_guard_remove():
@@ -2023,7 +2029,7 @@ def cmd_guard_remove():
     for path in (GUARD_PLIST, GUARD_WRAPPER):
         if os.path.exists(path):
             os.remove(path)
-    print("the guard is removed. Nothing now puts the switch or the tools back if they go missing.")
+    print("Protium's background helper has been removed.")
 
 
 def cmd_map(choices, dry_run=False, quiet=False, silent=False):
@@ -2052,7 +2058,7 @@ def cmd_map(choices, dry_run=False, quiet=False, silent=False):
     shutil.copy2(path, os.path.join(BACKUPS, "config.vdf.%s" % time.strftime("%Y%m%d-%H%M%S")))
     write_file(path, "\n".join(vdf_dump(tree)) + "\n", encoding="utf-8", errors="surrogateescape")
     if not silent:
-        print("%d mapping(s) written to %s" % (len(choices), path))
+        print("Updated the tool settings of %d game(s) in %s." % (len(choices), path))
 
 
 def cmd_play(appid):
@@ -2884,7 +2890,7 @@ def main(argv):
         sys.exit(cmd_diagnose())
     elif argv == ["setup", "--check"]:
         if steam_ready():
-            die(steam_ready())
+            stop(steam_ready())
     elif argv in (["setup"], ["setup", "--dry-run"]):
         cmd_setup("--dry-run" in argv)
     elif argv == ["status"]:
@@ -3019,8 +3025,8 @@ def cmd_diagnose():
              ("Steam's latest start, from its compatibility log", last_start),
              ("Steam's bootstrap log, last 50 lines", lambda: tail(os.path.join(STEAM_ROOT, "logs", "bootstrap_log.txt"), 50)),
              ("Steam's crash dumps of the last seven days (names only)", dumps)]
-    text = ("Protium diagnostics, %s\nThis file holds the names of your installed games and nothing that says who you are: "
-            "your home folder is written as ~ and Steam account numbers as <id>. Read it before you share it.\n"
+    text = ("Protium diagnostics, %s\nThis file includes the names of your installed games. Your home folder is written as ~ "
+            "and Steam account numbers as <id>. Please read it before you share it.\n"
             % time.strftime("%Y-%m-%d %H:%M:%S"))
     for title, part in parts:
         try:
