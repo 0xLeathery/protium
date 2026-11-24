@@ -1,7 +1,7 @@
 /*
  * Prints what a program is told about the primary display, each on a line of its own:
  *
- *   display_report.exe
+ *   display_report.exe [unaware]
  *
  *   monitor 3840x2160            the primary monitor's rectangle
  *   current 3840x2160@60         the current display mode
@@ -13,13 +13,15 @@
  *
  * On a Mac's HiDPI display these are its pixels when Wine's Mac driver is in Retina mode and
  * its points when it is not, and all of them have to agree: macos/tests/check-hires.sh compares
- * them. A console program: it opens no window. Built with the mingw compiler: -luser32 -lgdi32.
+ * them. With "unaware" it does not say that it lays itself out for the display's DPI, as most
+ * older games do not: Windows then tells it sizes as they would be at 96 DPI. A console program: it opens no window. Built with the mingw compiler: -luser32 -lgdi32.
  */
 #define _WIN32_WINNT 0x0A00   /* GetDpiForSystem */
 #include <windows.h>
 #include <stdio.h>
+#include <string.h>
 
-int main(void)
+int main(int argc, char **argv)
 {
     MONITORINFO info = { sizeof(info) };
     DEVMODEW mode = { .dmSize = sizeof(mode) };
@@ -28,7 +30,7 @@ int main(void)
 
     /* say that this program lays itself out for the display's DPI, so that it is told the
      * real numbers; without it Windows answers 96 whatever the display */
-    SetProcessDPIAware();
+    if (argc < 2 || strcmp(argv[1], "unaware")) SetProcessDPIAware();
 
     GetMonitorInfoW(MonitorFromPoint((POINT){ 0, 0 }, MONITOR_DEFAULTTOPRIMARY), &info);
     printf("monitor %ldx%ld\n", info.rcMonitor.right - info.rcMonitor.left, info.rcMonitor.bottom - info.rcMonitor.top);

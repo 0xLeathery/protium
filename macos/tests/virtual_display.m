@@ -12,6 +12,11 @@
  * moves to it) and puts the arrangement back afterwards: Wine's Mac driver decides by the main
  * display. Windows put on it are seen with screencapture -D or CGDisplayCreateImage.
  *
+ * NOT WORKING on macOS 27.2 (2026-11-24): the display gets a number and a mode, and this tool
+ * prints its line, but the display never comes online (CGGetOnlineDisplayList does not list it)
+ * and so cannot become the main one; why is not found yet. Until it is, Retina mode is tried on
+ * a display of one pixel to a point with WINE_MAC_RETINA=1.
+ *
  * CGVirtualDisplay is in CoreGraphics without a public header; the declarations below are what
  * this tool uses of it. It changes the arrangement of screens, so run it only while nobody is
  * using the Mac.
