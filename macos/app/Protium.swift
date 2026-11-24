@@ -402,14 +402,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: actions
 
     @objc func setUp() {
-        guard !busy, inStablePlace(), steamQuit(), toolsDirReady() else { return }
+        guard !busy, inStablePlace(), steamQuit() else { return }
         setBusy(true)
-        runSteps([["steamclient"], ["setup"], ["guard", "install"], ["status"]]) { ok in
+        let finish = { (ok: Bool) in
             self.setBusy(false)
             self.say(ok ? "\nSet up. Start Steam: Windows games now install and play from your library.\n"
                         : "\nSetting up did not finish; the lines above say why.\n")
             // asked here, with Protium in front, and never when a game starts
             if ok { self.allowNotifications() }
+        }
+        // whether this Steam can be set up at all comes first: nobody is asked for an
+        // administrator's password on a Mac where setting up cannot work
+        runSteps([["setup", "--check"]]) { ready in
+            guard ready, self.toolsDirReady() else { return finish(false) }
+            self.runSteps([["steamclient"], ["setup"], ["guard", "install"], ["status"]], then: finish)
         }
     }
 

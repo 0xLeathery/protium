@@ -121,6 +121,7 @@ import signal
 import struct
 import subprocess
 import time
+import traceback
 import zlib
 
 BUILD_ROOT = os.environ.get("BUILD_ROOT", os.path.expanduser("~/projects/proton-macos-build"))
@@ -337,19 +338,44 @@ def shortcut_id(exe, name):
 
 # ---------------------------------------------------------------- user and artwork
 
-def steam_user_config():
-    """The config folder of the user who signed in last: the one whose localconfig.vdf is newest."""
+def signed_in_user_config():
+    """The config folder of the user who signed in last (the one whose localconfig.vdf is newest),
+    or None when nobody has signed in to this Steam yet."""
     base = os.path.join(STEAM_ROOT, "userdata")
     best = None
-    for uid in os.listdir(base):
+    try:
+        uids = os.listdir(base)
+    except OSError:
+        return None
+    for uid in uids:
         cfg = os.path.join(base, uid, "config")
         lc = os.path.join(cfg, "localconfig.vdf")
         if uid.isdigit() and uid != "0" and os.path.exists(lc):
             if not best or os.path.getmtime(lc) > os.path.getmtime(os.path.join(best, "localconfig.vdf")):
                 best = cfg
-    if not best:
-        die("no signed-in Steam user under " + base)
     return best
+
+
+def steam_user_config():
+    best = signed_in_user_config()
+    if not best:
+        die("no signed-in Steam user under " + os.path.join(STEAM_ROOT, "userdata"))
+    return best
+
+
+def steam_ready():
+    """None when this Steam has what setup reads, else a sentence for the player that says what to
+    do. Steam writes its app cache, its settings and its library list on its first start, and a
+    user's folder when somebody signs in; a Steam that was installed and never opened has none."""
+    if not os.path.isdir(STEAM_ROOT):
+        return ("Steam isn't installed, or hasn't been opened yet. Install Steam, open it and sign in, "
+                "then press Set up Steam again.")
+    needed = [os.path.join(STEAM_ROOT, "appcache", "appinfo.vdf"), os.path.join(STEAM_ROOT, "config", "config.vdf"),
+              os.path.join(STEAM_ROOT, "steamapps", "libraryfolders.vdf")]
+    if not all(os.path.isfile(f) for f in needed) or not signed_in_user_config():
+        return ("Steam hasn't finished its first start. Open Steam, sign in, wait for your library to appear, "
+                "quit Steam, then press Set up Steam again.")
+    return None
 
 
 def artwork(appid):
@@ -503,6 +529,7 @@ INSTALL_JSON = os.path.join(HOME_DIR, "install.json")
 GUARD_LABEL = "com.redshot.steamplay.guard"
 GUARD_PLIST = os.path.expanduser("~/Library/LaunchAgents/%s.plist" % GUARD_LABEL)
 GUARD_LOG = os.environ.get("STEAMPLAY_GUARD_LOG", os.path.expanduser("~/Library/Logs/SteamPlay/guard.log"))
+ERROR_LOG = os.path.join(os.path.dirname(GUARD_LOG), "steamplay-error.log")
 SWITCH = "@sSteamCmdForcePlatformType"
 # Steam reads the second, next to its executables; the first is kept the same for whoever looks
 SWITCH_FILES = [os.path.join(STEAM_ROOT, "steam_dev.cfg"),
@@ -652,6 +679,8 @@ def wanted_mapping():
 
 
 def cmd_setup(dry_run):
+    if steam_ready():
+        die(steam_ready())
     if not dry_run and steam_running():
         die("quit Steam first: it reads its tools and settings when it starts")
     wanted = wanted_mapping()
@@ -687,8 +716,10 @@ def cmd_uninstall(dry_run):
     launch options hook set. Game files, prefixes (compatdata) and SteamPlay's own folder stay."""
     if not dry_run and steam_running():
         die("quit Steam first: it rewrites its settings when it quits")
-    mapped = sorted(a for a, t in current_mapping().items() if t in (PROTON, NATIVE))
-    hooked = hooked_apps()
+    # a Steam that never started has no settings to undo; the rest is still taken out
+    have_settings = os.path.isfile(os.path.join(STEAM_ROOT, "config", "config.vdf"))
+    mapped = sorted(a for a, t in current_mapping().items() if t in (PROTON, NATIVE)) if have_settings else []
+    hooked = hooked_apps() if signed_in_user_config() else []
     present = [t for t in TOOLS if os.path.isdir(os.path.join(TOOLS_DIR, t))]
     if dry_run:
         print("would remove the guard, the tools %s from %s, the switch, %d mapping(s) and %d hook(s)"
@@ -772,6 +803,8 @@ def hooked_apps():
 
 
 def cmd_status():
+    if steam_ready():
+        die(steam_ready())
     problems = []
     root, bundle = switch_state()
     print("Steam is %s" % ("running" if steam_running() else "not running"))
@@ -2699,6 +2732,9 @@ def main(argv):
         cmd_sync("--dry-run" in argv[1:], "--remove" in argv[1:])
     elif len(argv) == 2 and argv[0] == "play" and argv[1].isdigit():
         cmd_play(int(argv[1]))
+    elif argv == ["setup", "--check"]:
+        if steam_ready():
+            die(steam_ready())
     elif argv in (["setup"], ["setup", "--dry-run"]):
         cmd_setup("--dry-run" in argv)
     elif argv == ["status"]:
@@ -2764,5 +2800,23 @@ def main(argv):
         sys.exit(__doc__)
 
 
+def run(argv):
+    """main, with a fault nobody foresaw told in one line: the traceback goes to ERROR_LOG, where
+    "diagnose" finds it, and not into Protium's window. The guard's watch has its own."""
+    try:
+        main(argv)
+    except (KeyboardInterrupt, BrokenPipeError):
+        raise
+    except Exception as e:
+        try:
+            os.makedirs(os.path.dirname(ERROR_LOG), exist_ok=True)
+            with open(ERROR_LOG, "a") as f:
+                f.write("%s steamplay %s\n%s\n" % (time.strftime("%Y-%m-%d %H:%M:%S"), " ".join(argv), traceback.format_exc()))
+        except OSError:
+            pass
+        sys.exit("Something went wrong that Protium didn't expect: %s: %s\nThe details are in %s"
+                 % (type(e).__name__, e, ERROR_LOG))
+
+
 if __name__ == "__main__":
-    main(sys.argv[1:])
+    run(sys.argv[1:])
