@@ -61,9 +61,9 @@
    "app": 393080,
    "graphics": "Direct3D 11",
    "name": "Call of Duty: Modern Warfare Remastered (2017)",
-   "note": "Plays at 60 fps at 5120x1440. The first load of a level takes several minutes while shaders compile, and mouse look is uneven",
+   "note": "Plays at 5120x1440 and 60 fps, mouse look even. The first load of a level takes several minutes while shaders compile",
    "tested": "2026-11-24",
-   "verdict": "plays-with-problems"
+   "verdict": "works"
   }
  ]
 }

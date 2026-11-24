@@ -22,11 +22,11 @@ Valve Corporation, and Mac and Metal are trademarks of Apple Inc.
 <!-- games: written by "macos/steamplay games" from macos/compat/games.json -->
 | Game | Graphics | Verdict | Notes | Tested |
 |---|---|---|---|---|
+| Call of Duty: Modern Warfare Remastered (2017) | Direct3D 11 | Works | Plays at 5120x1440 and 60 fps, mouse look even. The first load of a level takes several minutes while shaders compile | 2026-11-24 |
 | Call of Duty: World at War | Direct3D 9, 32-bit | Works | Plays well; cutscenes can be skipped | 2026-11-24 |
 | IRON NEST: Heavy Turret Simulator | Direct3D 11 and Direct3D 12 | Works | Plays from its Steam library entry, with stats and cloud saves | 2026-11 |
 | Just Die Already | Direct3D 11 | Works | Plays from Steam | 2026-11 |
 | Left 4 Dead | Direct3D 9, 32-bit | Works | Stats and Steam Cloud work | 2026-11 |
-| Call of Duty: Modern Warfare Remastered (2017) | Direct3D 11 | Plays, with problems | Plays at 60 fps at 5120x1440. The first load of a level takes several minutes while shaders compile, and mouse look is uneven | 2026-11-24 |
 | Call of Duty: WWII | Direct3D 11 | Plays, with problems | Loads a mission, but stutters | 2026-11 |
 | Red Dead Redemption 2 | Vulkan | Plays, with problems | Reaches gameplay. Its frame rate is limited by CPU time | 2026-11 |
 | GTFO | Direct3D 11 | Starts, not played further | Starts, and its network layer and PlayFab sign-in come up. Matches untested | 2026-11 |
