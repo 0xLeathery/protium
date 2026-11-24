@@ -5,6 +5,7 @@
  *   thread_rip_sampler.exe <process name substring> regs <thread id> [count, default 5]
  *   thread_rip_sampler.exe <process name substring> stack [thread id, or 0 for all] [bytes, default 0x6000]
  *   thread_rip_sampler.exe <process name substring> dump <address> <bytes> <file>
+ *   thread_rip_sampler.exe <process name substring> watch <address> [interval ms, default 20] [from offset] [to offset]
  *
  * Finds the process of that name, or else the first whose name contains it, then for each sample
  * suspends each of its threads, reads its context (Rip and Rsp), and resumes it. Prints, per
@@ -20,7 +21,9 @@
  * some stale ones. This reads a waiting thread's callers without attaching as a debugger, which
  * some games end themselves over. With "dump", it writes that much of the process's memory to a
  * file, unreadable pages as zeroes: a program whose code is encrypted on disk can be read as it
- * runs. Built for x86_64 with the mingw compiler: -lpsapi.
+ * runs. With "watch", it follows 32 bytes of the process's memory and the call chain of its first
+ * thread until the process is gone, then prints the last snapshots: what a program that ends
+ * itself was doing just before. Built for x86_64 with the mingw compiler: -lpsapi.
  */
 #include <windows.h>
 #include <tlhelp32.h>
@@ -191,6 +194,103 @@ int main( int argc, char **argv )
         fclose( out );
         printf( "sampler: wrote %#llx bytes from %#llx to %s, %llu unreadable pages\n",
                 (unsigned long long)size, (unsigned long long)addr, argv[5], (unsigned long long)bad );
+        return 0;
+    }
+    if (argc > 3 && !strcmp( argv[2], "watch" ))
+    {
+        /* every interval: 32 bytes at an address, and where the process's first thread is with the
+         * return addresses into the program on its stack. A change of the bytes is printed as it
+         * is seen; when the process is gone, so are the last snapshots before it went. */
+        enum { RING = 8192, ADDRS = 14 };
+        static struct { DWORD ms, at_rcx; DWORD64 mem[4], rip, rbx, rcx, r8, rbp, ret[ADDRS]; unsigned char frame[0x180]; } ring[RING];
+        DWORD64 lo = argc > 5 ? strtoull( argv[5], NULL, 16 ) : 0, hi = argc > 6 ? strtoull( argv[6], NULL, 16 ) : ~0ull;
+        int shown_last = 0;
+        DWORD64 addr = strtoull( argv[3], NULL, 16 ), stack[0x180], seen[4] = { ~0ull };
+        int every = argc > 4 ? atoi( argv[4] ) : 20, n = 0, k, r;
+        DWORD tid = tids[0], start = GetTickCount();
+        HANDLE thread;
+        const struct module *mod, *exe = NULL;
+
+        load_modules( process );
+        for (i = 0; i < nmods; i++) if (strstr( mods[i].name, argv[1] )) { exe = &mods[i]; break; }
+        for (i = 1; i < (int)ntids; i++) if (tids[i] < tid) tid = tids[i];
+        if (!exe || !(thread = OpenThread( THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT | THREAD_QUERY_INFORMATION, FALSE, tid )))
+        {
+            printf( "sampler: no module or thread to watch\n" );
+            return 1;
+        }
+        printf( "sampler: watching %#llx and thread %#lx of %s (base %#llx) every %d ms\n",
+                (unsigned long long)addr, tid, exe->name, (unsigned long long)exe->base, every );
+        for (;;)
+        {
+            CONTEXT ctx = { 0 };
+            SIZE_T got = 0;
+            int at = n % RING;
+
+            if (!ReadProcessMemory( process, (void *)addr, ring[at].mem, sizeof(ring[at].mem), NULL )) break;
+            ctx.ContextFlags = CONTEXT_CONTROL | CONTEXT_INTEGER;
+            memset( ring[at].ret, 0, sizeof(ring[at].ret) );
+            ring[at].ms = GetTickCount() - start;
+            ring[at].rip = 0;
+            if (SuspendThread( thread ) != (DWORD)-1)
+            {
+                if (GetThreadContext( thread, &ctx ))
+                {
+                    ring[at].rip = ctx.Rip;
+                    ring[at].rbx = ctx.Rbx;
+                    ring[at].rcx = ctx.Rcx;
+                    ring[at].r8 = ctx.R8;
+                    ring[at].rbp = ctx.Rbp;
+                    ring[at].at_rcx = ~0u;
+                    /* in the range asked for: also what rcx points to and 0x180 bytes from rbp */
+                    if (argc > 5 && ctx.Rip - exe->base >= lo && ctx.Rip - exe->base < hi)
+                    {
+                        memset( ring[at].frame, 0, sizeof(ring[at].frame) );
+                        ReadProcessMemory( process, (void *)ctx.Rcx, &ring[at].at_rcx, sizeof(DWORD), NULL );
+                        ReadProcessMemory( process, (void *)ctx.Rbp, ring[at].frame, sizeof(ring[at].frame), NULL );
+                    }
+                    ReadProcessMemory( process, (void *)ctx.Rsp, stack, sizeof(stack), &got );
+                }
+                ResumeThread( thread );
+            }
+            for (k = 0, r = 0; k < (int)(got / sizeof(*stack)) && r < ADDRS; k++)
+                if (stack[k] >= exe->base && stack[k] - exe->base < exe->size) ring[at].ret[r++] = stack[k] - exe->base;
+            if (memcmp( seen, ring[at].mem, sizeof(seen) ))
+            {
+                memcpy( seen, ring[at].mem, sizeof(seen) );
+                printf( "%6lu ms: %016llx %016llx %016llx %016llx\n", ring[at].ms, (unsigned long long)seen[0],
+                        (unsigned long long)seen[1], (unsigned long long)seen[2], (unsigned long long)seen[3] );
+                fflush( stdout );
+            }
+            n++;
+            if (every) Sleep( every );
+        }
+        /* with a range of addresses in the program given, only the snapshots that found the thread
+         * there, with three of its registers: the last 80 of them */
+        printf( "sampler: the process is gone after %d snapshots; the last ones (ms, the four values, where, rbx rcx r8, returns into %s):\n", n, exe->name );
+        for (k = n - 1, r = 0; k >= 0 && k >= n - RING && r < 4000; k--)
+            if (ring[k % RING].rip - exe->base >= lo && ring[k % RING].rip - exe->base < hi) r++;
+        for (k = k + 1; k < n; k++)
+        {
+            int at = k % RING;
+            if (ring[at].rip - exe->base < lo || ring[at].rip - exe->base >= hi) continue;
+            mod = find_module( ring[at].rip );
+            printf( "%6lu %llx %llx %llx %llx %s+%#llx rbx %llx rcx %llx r8 %llx |", ring[at].ms,
+                    (unsigned long long)ring[at].mem[0], (unsigned long long)ring[at].mem[1],
+                    (unsigned long long)ring[at].mem[2], (unsigned long long)ring[at].mem[3], mod ? mod->name : "?",
+                    (unsigned long long)(mod ? ring[at].rip - mod->base : ring[at].rip), (unsigned long long)ring[at].rbx,
+                    (unsigned long long)ring[at].rcx, (unsigned long long)ring[at].r8 );
+            for (r = 0; r < ADDRS && ring[at].ret[r]; r++) printf( " %llx", (unsigned long long)ring[at].ret[r] );
+            printf( "\n" );
+            if (argc > 5)
+            {
+                printf( "  [rcx] %lx rbp %llx frame", ring[at].at_rcx, (unsigned long long)ring[at].rbp );
+                for (r = 0; r < (int)sizeof(ring[at].frame); r++) printf( " %02x", ring[at].frame[r] );
+                printf( "\n" );
+            }
+            shown_last++;
+        }
+        (void)shown_last;
         return 0;
     }
     if (argc > 2 && !strcmp( argv[2], "stack" ))
