@@ -1,0 +1,17 @@
+#!/bin/sh
+# Before a commit that touches macos/steamplay, its data files or the documents written from
+# them: run the unit tests, which also fail when the README or PARITY.md is not what
+# compat/games.json and compat/parity.json say ("macos/steamplay docs" writes them again).
+#
+# Turned on once per clone with:  git config core.hooksPath .githooks
+# It looks at the files as they are in the folder, not at what is staged.
+git diff --cached --name-only | grep -q -E '^(macos/steamplay$|macos/compat/|macos/PARITY\.md$|macos/tests/test_steamplay\.py$|\.github/README\.md$)' || exit 0
+cd "$(git rev-parse --show-toplevel)" || exit 1
+PYTHON=/usr/bin/python3; [ -x "$PYTHON" ] || PYTHON=python3
+if ! out=$("$PYTHON" -B -m unittest macos/tests/test_steamplay.py 2>&1); then
+    echo "$out" | tail -40
+    echo
+    echo "pre-commit: macos/tests/test_steamplay.py fails. If it is the documents:"
+    echo "  macos/steamplay docs     and add what it wrote to the commit"
+    exit 1
+fi

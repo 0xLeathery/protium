@@ -1,0 +1,17 @@
+# Protium's own checks that need no Mac: the unit tests of macos/steamplay, which also fail when
+# the README or macos/PARITY.md is not what macos/compat/games.json and parity.json say.
+name: Protium checks
+on:
+  push:
+    branches: [macos-port]
+  pull_request:
+    branches: [macos-port]
+permissions:
+  contents: read
+jobs:
+  steamplay:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Unit tests, and the documents against their data
+        run: python3 -B -m unittest macos/tests/test_steamplay.py

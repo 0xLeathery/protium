@@ -15,6 +15,7 @@ import shutil
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 sys.dont_write_bytecode = True
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -27,6 +28,13 @@ _loader = importlib.machinery.SourceFileLoader("steamplay", os.path.join(HERE, "
 _spec = importlib.util.spec_from_loader("steamplay", _loader)
 sp = importlib.util.module_from_spec(_spec)
 _loader.exec_module(sp)
+
+
+def quiet(test):
+    """Keeps what the script prints for the player out of the test's output."""
+    patch = mock.patch("builtins.print")
+    patch.start()
+    test.addCleanup(patch.stop)
 
 
 def tearDownModule():
@@ -132,6 +140,7 @@ class Unhook(unittest.TestCase):
         self.config = os.path.join(sp.STEAM_ROOT, "userdata", "1234", "config")
         os.makedirs(self.config)
         self.path = os.path.join(self.config, "localconfig.vdf")
+        quiet(self)
 
     def tearDown(self):
         shutil.rmtree(sp.STEAM_ROOT)
@@ -292,6 +301,7 @@ class GuardLimit(unittest.TestCase):
     def setUp(self):
         if os.path.exists(sp.GUARD_STOPS):
             os.remove(sp.GUARD_STOPS)
+        quiet(self)
 
     def test_stops_three_times_then_leaves_steam_running(self):
         session = ["[2026-11-25 10:00:00] Startup - updater built"]

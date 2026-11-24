@@ -22,6 +22,19 @@ version, the Protium commit, and the `steamplay-run.log` from the game's
   passing, and adds a test there when it changes how Steam's files are read or written.
 - Send your own work. Do not copy code from other projects into a pull request.
 
+## The status documents
+
+The games table and the "Missing so far" list in the README, and the tables in `macos/PARITY.md`,
+are written from `macos/compat/games.json` and `macos/compat/parity.json`. Do not edit them in
+the documents. A change that makes something work, or breaks it, changes its row in
+`parity.json` in the same commit; then `macos/steamplay docs` writes the documents again.
+The unit tests fail while a document and its data differ. They run on every push, and before
+each commit once you have turned the hook on in your clone:
+
+```sh
+git config core.hooksPath .githooks
+```
+
 ## License of contributions
 
 By sending a pull request you agree that your change is published under the license of the
