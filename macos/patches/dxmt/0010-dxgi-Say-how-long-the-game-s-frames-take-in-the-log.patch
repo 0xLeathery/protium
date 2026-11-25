@@ -9,7 +9,12 @@ goes, how the frames of the whole run so far were:
   DXGI: frame times: 54000 frames in 900 s, median 16.5 ms, 95% 17.0 ms, 99% 33.5 ms,
   worst 412.0 ms, 31 over 50 ms
 
-"macos/steamplay record" keeps the last such line with the run. The time a window is hidden
+After it comes a line for that half minute alone, with the times of its slow frames (the
+first 24), which shows whether they come at an even pace, as something on a timer makes them:
+
+  DXGI: the last 30 s: 1650 frames, 3 over 50 ms: at 3.4 s (52 ms), 13.9 s (61 ms), 24.4 s (55 ms)
+
+"macos/steamplay record" keeps the last line of the first kind with the run. The time a window is hidden
 (Present says it is occluded) is no frame's. Direct3D 10 and 11 only: Direct3D 9, 12 and Vulkan
 do not come through here.
 
@@ -54,7 +59,7 @@ diff --git a/src/d3d11/d3d11_swapchain.cpp b/src/d3d11/d3d11_swapchain.cpp
  
      // A sync interval above 0 waits for the display's vertical blank, as on Windows, unless the
      // game allows tearing; dxgi.syncInterval replaces the game's interval when it is set
-@@ -1359,6 +1366,65 @@
+@@ -1359,6 +1366,93 @@
    WMT::Object native_view_;
    WMT::MetalLayer layer_weak_;
    ULONG presentation_count_;
@@ -72,6 +77,16 @@ diff --git a/src/d3d11/d3d11_swapchain.cpp b/src/d3d11/d3d11_swapchain.cpp
 +  double frame_total_ms_ = 0;
 +  frame_clock::time_point frame_last_{};
 +  frame_clock::time_point frame_said_{};
++  // the half minute since the last line: its frames, and when its slow ones came (the first 24),
++  // which shows whether they come at an even pace, as something on a timer would make them
++  struct SlowFrame {
++    float at_s;
++    float ms;
++  };
++  static constexpr size_t kSlowFrames = 24;
++  std::array<SlowFrame, kSlowFrames> window_slow_{};
++  size_t window_slow_count_ = 0;
++  uint64_t window_frames_ = 0;
 +
 +  void NoteFrame() {
 +    auto now = frame_clock::now();
@@ -80,8 +95,13 @@ diff --git a/src/d3d11/d3d11_swapchain.cpp b/src/d3d11/d3d11_swapchain.cpp
 +      frame_steps_[std::min(size_t(ms * 2.0), kFrameSteps - 1)]++;
 +      frame_count_++;
 +      frame_total_ms_ += ms;
-+      if (ms > 50.0)
++      window_frames_++;
++      if (ms > 50.0) {
 +        frame_slow_++;
++        if (window_slow_count_ < kSlowFrames && frame_said_ != frame_clock::time_point{})
++          window_slow_[window_slow_count_] = {std::chrono::duration<float>(now - frame_said_).count(), float(ms)};
++        window_slow_count_++;
++      }
 +      if (ms > frame_worst_ms_)
 +        frame_worst_ms_ = ms;
 +    }
@@ -91,6 +111,9 @@ diff --git a/src/d3d11/d3d11_swapchain.cpp b/src/d3d11/d3d11_swapchain.cpp
 +    if (now - frame_said_ >= std::chrono::seconds(30)) {
 +      frame_said_ = now;
 +      SayFrameTimes();
++      SayWindow();
++      window_frames_ = 0;
++      window_slow_count_ = 0;
 +    }
 +  }
 +
@@ -114,6 +137,16 @@ diff --git a/src/d3d11/d3d11_swapchain.cpp b/src/d3d11/d3d11_swapchain.cpp
 +             "worst %.1f ms, %llu over 50 ms",
 +             (unsigned long long)frame_count_, (unsigned long long)(frame_total_ms_ / 1000.0), FrameTimeAt(0.50),
 +             FrameTimeAt(0.95), FrameTimeAt(0.99), frame_worst_ms_, (unsigned long long)frame_slow_);
++    Logger::info(text);
++  }
++
++  void SayWindow() const {
++    char text[800];
++    int used = snprintf(text, sizeof(text), "DXGI: the last 30 s: %llu frames, %llu over 50 ms",
++                        (unsigned long long)window_frames_, (unsigned long long)window_slow_count_);
++    for (size_t i = 0; i < std::min(window_slow_count_, kSlowFrames) && used < int(sizeof(text)) - 32; i++)
++      used += snprintf(text + used, sizeof(text) - used, "%s%.1f s (%.0f ms)", i ? ", " : ": at ",
++                       window_slow_[i].at_s, window_slow_[i].ms);
 +    Logger::info(text);
 +  }
 +
