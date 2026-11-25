@@ -247,9 +247,9 @@
     {
      "feature": "Game controllers",
      "linux": "SDL/hidraw",
-     "status": "works",
-     "here": "an Xbox controller, XInput and DirectInput (item 8, IOHID); rumble, PlayStation and Switch controllers untested",
-     "takes": "Test; add rumble if absent"
+     "status": "partial",
+     "here": "since 0.4.2 controllers come through SDL as on Linux, with the layout of an Xbox controller for every one, and rumble; it is built in and starts, but no controller has been tried with it yet. An Xbox controller worked through the earlier path, XInput and DirectInput (item 8, IOHID). PlayStation and Switch controllers and rumble are untested",
+     "takes": "Players' reports for each kind of controller; `PROTON_NO_SDL=1` in a game's settings file goes back to the earlier path"
     },
     {
      "feature": "TLS, HTTP, crypto",

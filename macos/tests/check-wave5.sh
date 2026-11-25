@@ -495,7 +495,7 @@ if want 11; then
     for f in $(git -C "$PROTON_DIR" diff --name-only "$SUPER_WAVE_BASE" HEAD | grep -v '^macos/'); do
         # Protium's own project files are built into nothing: the README, contributing guide and
         # issue template GitHub shows, the changelog, the licenses, and which Wine the wine submodule is
-        case $f in .github/*|CHANGELOG.md|LICENSE|LICENSE.protium|.gitignore|.gitmodules|wine) continue ;; esac
+        case $f in .github/*|.githooks/*|CHANGELOG.md|LICENSE|LICENSE.protium|.gitignore|.gitmodules|wine) continue ;; esac
         case " $SUPER_FILES " in
             *" $f "*) a=$(git -C "$PROTON_DIR" show "$SUPER_WAVE_BASE:$f" | unifdef -U__APPLE__ 2>/dev/null | shasum)
                       b=$(git -C "$PROTON_DIR" show "HEAD:$f" | unifdef -U__APPLE__ 2>/dev/null | shasum)

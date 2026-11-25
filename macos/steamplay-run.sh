@@ -35,6 +35,10 @@
 #                   (WINEFSYNC=1), as Proton does on Linux.
 #   WINE_FSYNC_STATS  seconds between lines in the log that say how each process slept and
 #                   what it woke; WINE_FSYNC_PARANOID=1 reports a wake-up that did not arrive
+#   PROTON_DISABLE_HIDRAW  1 (the default here) has every game controller come through SDL with
+#                   the layout of an Xbox controller; 0 lets Wine take a PlayStation controller
+#                   as itself, for a game that knows it. PROTON_NO_SDL=1 turns SDL off: then
+#                   controllers come as macOS reports them, as before Protium 0.4.2.
 #   FEX_DISKCACHE   0 to have FEX translate a game's x86 code afresh at every start. By default
 #                   (1) it keeps the translated code in the prefix and reads it back the next
 #                   time, which shortens starts and loads after the first.
@@ -148,6 +152,12 @@ if [ "${PROTON_NO_FSYNC:-0}" = 1 ]; then
 else
     export WINEFSYNC="${WINEFSYNC:-1}"
 fi
+# Game controllers come through SDL, which gives every one of them the layout of an Xbox
+# controller, the only one most games know. Wine would take a PlayStation controller as itself
+# instead (raw HID), for the few games that know it: on Linux Steam Input stands in for the
+# others then, and there is none here. PROTON_DISABLE_HIDRAW=0 in a game's env file gives that
+# game the controller as itself, PROTON_NO_SDL=1 turns SDL off for it.
+export PROTON_DISABLE_HIDRAW="${PROTON_DISABLE_HIDRAW:-1}"
 # FEX's cache of translated code. Without the second setting a 32-bit and a 64-bit process of
 # one game delete each other's files, as each takes the other's for stale.
 export FEX_DISKCACHE="${FEX_DISKCACHE:-1}"

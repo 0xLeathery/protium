@@ -10,6 +10,21 @@ written. "Known problems" is a heading of our own, next to Keep a Changelog's.
 
 ## [Unreleased]
 
+### Changed
+
+- Game controllers now come through SDL, as they do with Proton on Linux. A PlayStation or
+  Switch controller should now work in games that expect an Xbox controller, and rumble
+  should work. Until now only an Xbox controller was known to work.
+
+### Known problems
+
+- The new controller support has not been tried with a controller yet. Please report how yours
+  does: which controller, USB or Bluetooth, which game, and whether the buttons and rumble are
+  right.
+- If a controller worked before and does not now, add the line `PROTON_NO_SDL=1` to the game's
+  settings file, `~/Library/Application Support/SteamPlay/env.<app id>`, to go back to how
+  it was, and tell us.
+
 ## [0.4.1] - 2026-11-25
 
 ### Fixed

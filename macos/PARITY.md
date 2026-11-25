@@ -50,7 +50,7 @@ Last reviewed 2026-11-25.
 | Audio output | PulseAudio/ALSA | **works**: CoreAudio, and a stream follows a change of the default output; crackle in Call of Duty: WWII is open | Find the crackle |
 | Microphone, voice chat | same | **untested** | Needs macOS's microphone prompt to reach the loader |
 | Keyboard, mouse, cursor capture | X11/Wayland driver | **works**: item 4; mouse look is even in games that move the pointer back to the middle every frame (check-mouse.sh); one unreproduced stuck cursor in IRON NEST | — |
-| Game controllers | SDL/hidraw | **works**: an Xbox controller, XInput and DirectInput (item 8, IOHID); rumble, PlayStation and Switch controllers untested | Test; add rumble if absent |
+| Game controllers | SDL/hidraw | **partial**: since 0.4.2 controllers come through SDL as on Linux, with the layout of an Xbox controller for every one, and rumble; it is built in and starts, but no controller has been tried with it yet. An Xbox controller worked through the earlier path, XInput and DirectInput (item 8, IOHID). PlayStation and Switch controllers and rumble are untested | Players' reports for each kind of controller; `PROTON_NO_SDL=1` in a game's settings file goes back to the earlier path |
 | TLS, HTTP, crypto | GnuTLS, libgcrypt | **works**: items 1, 2; Kerberos/NTLM sign-in missing | Rarely needed by games |
 | .NET Framework programs (wine-mono) | bundled | **missing**: not in the bundle, and disabled at launch | Add Proton's wine-mono to the bundle |
 | Embedded web views in launchers (wine-gecko) | bundled | **missing**: not in the bundle, and disabled at launch | Add it; test one publisher launcher |

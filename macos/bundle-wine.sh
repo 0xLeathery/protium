@@ -93,7 +93,7 @@ BRIDGE_DIST=${BRIDGE_DIST:-$BUILD_ROOT/steam-bridge-dist}
 GST_DIST=${GST_DIST:-$BUILD_ROOT/gst-dist}
 MTLD3D_TARBALL=${MTLD3D_TARBALL:-$BUILD_ROOT/third-party/mtld3d/mtld3d-v0.15.3.tar.xz}
 MTLD3D_SHA256=038f00c9d868a2fcb71034dac645df1fa1500a4b4056f845e400e777e7a4a294
-HOST_DYLIBS=${HOST_DYLIBS:-libfreetype.6.dylib libgnutls.30.dylib libgmp.10.dylib libgcrypt.20.dylib}
+HOST_DYLIBS=${HOST_DYLIBS:-libfreetype.6.dylib libgnutls.30.dylib libgmp.10.dylib libgcrypt.20.dylib libSDL2-2.0.0.dylib}
 WOW64=${WOW64:-auto}
 VULKAN_DIST=${VULKAN_DIST:-$BUILD_ROOT/vulkan-dist}
 MESA_DIST=${MESA_DIST:-$BUILD_ROOT/mesa-dist}
@@ -343,6 +343,15 @@ for lib in $HOST_DYLIBS; do
     copy_host_dylib "$brew_prefix/lib/$lib"
     ln -sf "../../external/$lib" "$unixdir/$lib"
 done
+# Homebrew's SDL 2 is sdl2-compat, which opens SDL 3 itself when it starts, first as
+# @loader_path/libSDL3.dylib: no reference of its own tells copy_host_dylib about it
+case " $HOST_DYLIBS " in
+    *" libSDL2-2.0.0.dylib "*)
+        if otool -L "$brew_prefix/lib/libSDL2-2.0.0.dylib" | grep -q sdl2-compat; then
+            copy_host_dylib "$brew_prefix/lib/libSDL3.0.dylib"
+            ln -sf libSDL3.0.dylib "$extdir/libSDL3.dylib"
+        fi ;;
+esac
 # GStreamer, which winegstreamer.so links by the absolute paths of GST_DIST: its libraries go into
 # lib/external like the host libraries, the plugins into lib/external/gstreamer-1.0 and the plugin
 # scanner, a program that GStreamer starts to read new plugins, into lib/external

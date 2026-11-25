@@ -187,6 +187,10 @@ CONFIGURE_ARGS=(
     # dlls/bcrypt/Makefile.in passes GnuTLS's and GMP's include flags but not libgcrypt's, which
     # only works where gcrypt.h is in a default include directory
     "CPPFLAGS=$(pkg-config --cflags libgcrypt)"
+    # SDL 2 for winebus, as Proton has it on Linux: it knows PlayStation, Switch and other
+    # controllers, gives every one the layout XInput games expect, and does rumble. Opened at
+    # run time from lib/external (Homebrew's sdl2-compat, which opens SDL 3 beside it).
+    --with-sdl
     # not available (or not wanted) on this host: disable explicitly instead of letting configure guess
     --without-opengl --without-x --without-wayland --without-xcomposite --without-xcursor --without-xfixes
     --without-xinerama --without-xinput --without-xinput2 --without-xrandr --without-xrender
@@ -195,7 +199,7 @@ CONFIGURE_ARGS=(
     --without-capi --without-cups --without-dbus --without-fontconfig
     --without-gettext --without-gettextpo --without-gphoto --without-gssapi
     --without-hwloc --without-inotify --without-krb5 --without-netapi --without-pcap
-    --without-pcsclite --without-piper --without-sane --without-sdl --without-udev --without-usb
+    --without-pcsclite --without-piper --without-sane --without-udev --without-usb
     --without-v4l2 --without-vosk "${vulkan_args[@]}" "${gst_args[@]}"
     # Proton modules that need Linux-only libraries absent here (libdrm for amd_ags_x64); winedmo
     # goes with GST_DIST's FFmpeg, above
