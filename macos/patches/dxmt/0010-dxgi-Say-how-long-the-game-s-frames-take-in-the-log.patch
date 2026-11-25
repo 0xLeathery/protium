@@ -14,6 +14,13 @@ first 24), which shows whether they come at an even pace, as something on a time
 
   DXGI: the last 30 s: 1650 frames, 3 over 50 ms: at 3.4 s (52 ms), 13.9 s (61 ms), 24.4 s (55 ms)
 
+A third line says where a frame of that half minute spent its time inside DXMT, from the
+statistics its HUD shows: how often it waited for the GPU and how long, how often a query made
+it flush, how long it waited for an earlier frame and for a drawable, and what committing and
+encoding took:
+
+  DXGI: a frame of the last 30 s: 3.0 command buffers, 1.20 waits for the GPU (4.10 ms), ...
+
 "macos/steamplay record" keeps the last line of the first kind with the run. The time a window is hidden
 (Present says it is occluded) is no frame's. Direct3D 10 and 11 only: Direct3D 9, 12 and Vulkan
 do not come through here.
@@ -59,7 +66,15 @@ diff --git a/src/d3d11/d3d11_swapchain.cpp b/src/d3d11/d3d11_swapchain.cpp
  
      // A sync interval above 0 waits for the display's vertical blank, as on Windows, unless the
      // game allows tearing; dxgi.syncInterval replaces the game's interval when it is set
-@@ -1359,6 +1366,93 @@
+@@ -1114,6 +1121,7 @@
+     hud.begin();
+     auto &frame = statistics.at(frame_id - 1); // show the previous one frame statistics
+     auto &average = statistics.average();
++    NoteWaits(frame);
+     Flags<FeatureCompatibility> flags = frame.compatibility_flags;
+     char text[] = "---------------------------";
+     if (flags.test(FeatureCompatibility::UnsupportedGeometryDraw)) {
+@@ -1359,6 +1367,132 @@
    WMT::Object native_view_;
    WMT::MetalLayer layer_weak_;
    ULONG presentation_count_;
@@ -112,6 +127,7 @@ diff --git a/src/d3d11/d3d11_swapchain.cpp b/src/d3d11/d3d11_swapchain.cpp
 +      frame_said_ = now;
 +      SayFrameTimes();
 +      SayWindow();
++      SayWaits();
 +      window_frames_ = 0;
 +      window_slow_count_ = 0;
 +    }
@@ -137,6 +153,44 @@ diff --git a/src/d3d11/d3d11_swapchain.cpp b/src/d3d11/d3d11_swapchain.cpp
 +             "worst %.1f ms, %llu over 50 ms",
 +             (unsigned long long)frame_count_, (unsigned long long)(frame_total_ms_ / 1000.0), FrameTimeAt(0.50),
 +             FrameTimeAt(0.95), FrameTimeAt(0.99), frame_worst_ms_, (unsigned long long)frame_slow_);
++    Logger::info(text);
++  }
++
++  // Where the frames of the half minute spent their time inside DXMT, from the statistics its
++  // HUD shows: added up here on the encoding thread, said and cleared by the thread that presents
++  struct Waits {
++    std::atomic<uint64_t> frames{0}, command_buffers{0}, syncs{0}, sync_ns{0}, stalls{0}, latency_ns{0}, drawable_ns{0},
++        commit_ns{0}, encode_ns{0};
++  };
++  mutable Waits waits_;
++
++  void NoteWaits(const FrameStatistics &frame) {
++    auto ns = [](clock::duration d) { return uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(d).count()); };
++    waits_.frames += 1;
++    waits_.command_buffers += frame.command_buffer_count;
++    waits_.syncs += frame.sync_count;
++    waits_.sync_ns += ns(frame.sync_interval);
++    waits_.stalls += frame.event_stall;
++    waits_.latency_ns += ns(frame.present_latency_interval);
++    waits_.drawable_ns += ns(frame.drawable_blocking_interval);
++    waits_.commit_ns += ns(frame.commit_interval);
++    waits_.encode_ns += ns(frame.encode_prepare_interval + frame.encode_flush_interval);
++  }
++
++  void SayWaits() const {
++    double frames = double(waits_.frames.exchange(0));
++    double buffers = double(waits_.command_buffers.exchange(0)), syncs = double(waits_.syncs.exchange(0));
++    double sync_ms = waits_.sync_ns.exchange(0) / 1e6, stalls = double(waits_.stalls.exchange(0));
++    double latency_ms = waits_.latency_ns.exchange(0) / 1e6, drawable_ms = waits_.drawable_ns.exchange(0) / 1e6;
++    double commit_ms = waits_.commit_ns.exchange(0) / 1e6, encode_ms = waits_.encode_ns.exchange(0) / 1e6;
++    if (frames < 1)
++      return;
++    char text[400];
++    snprintf(text, sizeof(text),
++             "DXGI: a frame of the last 30 s: %.1f command buffers, %.2f waits for the GPU (%.2f ms), %.2f query "
++             "flushes, %.2f ms for an earlier frame, %.2f ms for a drawable, commit %.2f ms, encoding %.2f ms",
++             buffers / frames, syncs / frames, sync_ms / frames, stalls / frames, latency_ms / frames,
++             drawable_ms / frames, commit_ms / frames, encode_ms / frames);
 +    Logger::info(text);
 +  }
 +
