@@ -1814,14 +1814,49 @@ def write_guard_wrapper(python, script):
     os.chmod(GUARD_WRAPPER, 0o755)
 
 
+def app_bundle_id():
+    """Protium.app's bundle identifier when this script is the app's copy, else None."""
+    contents = app_contents()
+    try:
+        with open(os.path.join(contents or "", "Info.plist"), "rb") as f:
+            return plistlib.load(f).get("CFBundleIdentifier") or None
+    except (OSError, ValueError):
+        return None
+
+
+def guard_job_plist():
+    """What launchd is told of the guard. The job is /bin/sh with a script (see
+    GUARD_WRAPPER_TEXT for why), and macOS named it by that in its "background items" notice
+    and in Login Items: "sh", which tells a player nothing and looks like something to turn
+    off. AssociatedBundleIdentifiers is how a job of this kind says which app it belongs to."""
+    plist = {
+        "Label": GUARD_LABEL,
+        "ProgramArguments": ["/bin/sh", GUARD_WRAPPER],
+        "EnvironmentVariables": {"STEAMPLAY_HOME": HOME_DIR, "STEAM_ROOT": STEAM_ROOT, "STEAMPLAY_TOOLS_DIR": TOOLS_DIR},
+        "RunAtLoad": True,
+        "KeepAlive": True,
+        "ProcessType": "Background",
+        "StandardOutPath": os.path.join(os.path.dirname(GUARD_LOG), "guard.out"),
+        "StandardErrorPath": os.path.join(os.path.dirname(GUARD_LOG), "guard.out"),
+    }
+    bundle = app_bundle_id()
+    if bundle:
+        plist["AssociatedBundleIdentifiers"] = [bundle]
+    return plist
+
+
 def guard_job_is_old():
-    """Whether launchd's job for the guard is one from before the wrapper: it starts the app's
-    Python itself, and so cannot do anything once the app is gone."""
+    """Whether launchd's job for the guard is one to write again: from before the wrapper (it
+    starts the app's Python itself, and so cannot do anything once the app is gone), or from
+    before it said which app it belongs to."""
     try:
         with open(GUARD_PLIST, "rb") as f:
-            return plistlib.load(f).get("ProgramArguments", [""])[0] != "/bin/sh"
+            job = plistlib.load(f)
     except (OSError, ValueError):
         return False
+    bundle = app_bundle_id()
+    return job.get("ProgramArguments", [""])[0] != "/bin/sh" \
+        or bool(bundle and bundle not in job.get("AssociatedBundleIdentifiers", []))
 
 
 def cmd_guard_install():
@@ -1847,16 +1882,7 @@ def guard_job_install():
     else:
         python = "/usr/bin/python3" if os.access("/usr/bin/python3", os.X_OK) else sys.executable
     write_guard_wrapper(python, script)
-    plist = {
-        "Label": GUARD_LABEL,
-        "ProgramArguments": ["/bin/sh", GUARD_WRAPPER],
-        "EnvironmentVariables": {"STEAMPLAY_HOME": HOME_DIR, "STEAM_ROOT": STEAM_ROOT, "STEAMPLAY_TOOLS_DIR": TOOLS_DIR},
-        "RunAtLoad": True,
-        "KeepAlive": True,
-        "ProcessType": "Background",
-        "StandardOutPath": os.path.join(os.path.dirname(GUARD_LOG), "guard.out"),
-        "StandardErrorPath": os.path.join(os.path.dirname(GUARD_LOG), "guard.out"),
-    }
+    plist = guard_job_plist()
     os.makedirs(os.path.dirname(GUARD_LOG), exist_ok=True)
     os.makedirs(os.path.dirname(GUARD_PLIST), exist_ok=True)
     with open(GUARD_PLIST, "wb") as f:

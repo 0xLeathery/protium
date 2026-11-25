@@ -363,6 +363,45 @@ class Docs(unittest.TestCase):
         self.assertEqual(sp.between("a\n<s>\nold\n<e>\nb", "<s>", "<e>", "new"), "a\n<s>\nnew\n<e>\nb")
 
 
+class GuardJob(unittest.TestCase):
+    """macOS names a background job by its program, and the guard's is /bin/sh: the job has to
+    say that it is Protium's."""
+
+    def app(self):
+        contents = os.path.join(TEMP, "Protium.app", "Contents")
+        os.makedirs(contents, exist_ok=True)
+        import plistlib
+        with open(os.path.join(contents, "Info.plist"), "wb") as f:
+            plistlib.dump({"CFBundleIdentifier": "com.example.protium"}, f)
+        patch = mock.patch.object(sp, "app_contents", lambda: contents)
+        patch.start()
+        self.addCleanup(patch.stop)
+
+    def test_from_the_app_the_job_names_the_app(self):
+        self.app()
+        job = sp.guard_job_plist()
+        self.assertEqual(job["AssociatedBundleIdentifiers"], ["com.example.protium"])
+        self.assertEqual(job["ProgramArguments"][0], "/bin/sh")
+
+    def test_from_a_checkout_it_names_none(self):
+        self.assertNotIn("AssociatedBundleIdentifiers", sp.guard_job_plist())
+
+    def test_a_job_that_does_not_name_the_app_is_written_again(self):
+        import plistlib
+        old = dict(sp.guard_job_plist())
+        patch = mock.patch.object(sp, "GUARD_PLIST", os.path.join(TEMP, "guard.plist"))
+        patch.start()
+        self.addCleanup(patch.stop)
+        with open(sp.GUARD_PLIST, "wb") as f:
+            plistlib.dump(old, f)
+        self.assertFalse(sp.guard_job_is_old())
+        self.app()
+        self.assertTrue(sp.guard_job_is_old())
+        with open(sp.GUARD_PLIST, "wb") as f:
+            plistlib.dump(sp.guard_job_plist(), f)
+        self.assertFalse(sp.guard_job_is_old())
+
+
 class FrameTimes(unittest.TestCase):
     LINE = "info:  DXGI: frame times: %d frames in %d s, median 16.5 ms, 95%% 17.0 ms, 99%% 33.5 ms, worst 412.0 ms, %d over 50 ms\n"
 

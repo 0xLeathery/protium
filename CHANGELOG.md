@@ -10,6 +10,12 @@ written. "Known problems" is a heading of our own, next to Keep a Changelog's.
 
 ## [Unreleased]
 
+### Fixed
+
+- macOS said that "sh" wanted to run in the background after you set up Steam, and listed it
+  under that name in Login Items. It is Protium's helper, which keeps Steam set up for Windows
+  games and stops Steam from deleting them if that setup is lost. It is now listed as Protium's.
+
 ## [0.4.0] - 2026-11-25
 
 ### Added
