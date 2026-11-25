@@ -10,11 +10,27 @@ written. "Known problems" is a heading of our own, next to Keep a Changelog's.
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-11-25
+
 ### Fixed
 
 - macOS said that "sh" wanted to run in the background after you set up Steam, and listed it
   under that name in Login Items. It is Protium's helper, which keeps Steam set up for Windows
   games and stops Steam from deleting them if that setup is lost. It is now listed as Protium's.
+- Protium could change a Steam setting that had a line break or a tab in it when it wrote Steam's
+  settings file. Such settings now stay as Steam wrote them.
+- Building Protium from source failed because its Wine source could not be downloaded. That
+  source is now public.
+
+### Changed
+
+- The log of a Direct3D 10 or 11 game (`steamplay-run.log` in the game's `compatdata` folder)
+  now says every half minute how long its frames took and how many were slow. Attach it when
+  you report stutter.
+- A game's video memory can be limited with `DXMT_VIDEO_MEMORY_BUDGET_MB` in its settings file
+  (`~/Library/Application Support/SteamPlay/env.<app id>`). This did nothing for most older
+  games before. It can help a game that slows down after you switch to another app on a Mac
+  that is short of memory.
 
 ## [0.4.0] - 2026-11-25
 
@@ -141,7 +157,8 @@ run natively on arm64 with Metal, without Rosetta and without a virtual machine.
 - `steamplay discover` ranks the games in your library by how likely they are to work, and says
   why.
 
-[Unreleased]: https://github.com/0xLeathery/protium/compare/v0.4.0...macos-port
+[Unreleased]: https://github.com/0xLeathery/protium/compare/v0.4.1...macos-port
+[0.4.1]: https://github.com/0xLeathery/protium/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/0xLeathery/protium/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/0xLeathery/protium/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/0xLeathery/protium/compare/v0.2.0...v0.3.0
