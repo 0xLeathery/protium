@@ -1,0 +1,34 @@
+dxgi: Report the video memory budget as the adapter's dedicated video memory.
+
+DXMT_VIDEO_MEMORY_BUDGET_MB (patch 0003) set the budget QueryVideoMemoryInfo reports and
+nothing else. A game that never asks for the budget, as most Direct3D 11 games do not, plans
+its video memory by DXGI_ADAPTER_DESC's DedicatedVideoMemory, which stayed at half of the GPU's
+working set: Call of Duty: WWII, told a budget of 5000 MB, still grew the Mac's graphics memory
+to 12 GB, and when another app came to the front macOS went to memory pressure "warning" and the
+game fell from 120 to 70 frames a second (2026-11-25). The adapter now reports the budget,
+whatever set it, as its dedicated video memory. Without the variable nothing changes: the two
+were the same number already.
+
+LOCAL TO THIS PORT, NOT FOR DXMT. Applied by macos/build-dxmt.sh to
+github.com/athei/dxmt at 01e59e9bde030f105937f249afaac92ada01b4d7, after 0001 to 0010.
+Written with an AI assistant (Claude). DXMT does not accept contributions made or
+co-authored by AI (its CONTRIBUTING.md), so this patch must not be sent to it as a pull
+request.
+---
+diff --git a/src/dxgi/dxgi_adapter.cpp b/src/dxgi/dxgi_adapter.cpp
+--- a/src/dxgi/dxgi_adapter.cpp
++++ b/src/dxgi/dxgi_adapter.cpp
+@@ -178,10 +178,9 @@
+ 
+     pDesc->SubSysId = 0;
+     pDesc->Revision = 0;
+-    if (device_.hasUnifiedMemory())
+-      pDesc->DedicatedVideoMemory = device_.recommendedMaxWorkingSetSize() / 2; // FIXME: use a more appropriate value
+-    else
+-      pDesc->DedicatedVideoMemory = device_.recommendedMaxWorkingSetSize();
++    // What a game that does not ask for the budget plans its video memory by (Direct3D 11 games
++    // read this once, as they start): the budget, so that DXMT_VIDEO_MEMORY_BUDGET_MB reaches them too
++    pDesc->DedicatedVideoMemory = videoMemoryBudget();
+     pDesc->DedicatedSystemMemory = 0;
+     pDesc->SharedSystemMemory = 0;
+     pDesc->AdapterLuid = luid_;
