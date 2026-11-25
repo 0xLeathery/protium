@@ -138,7 +138,7 @@ Protium can also be built on the Mac that runs it. These are the steps, in order
 
 - An Apple Silicon Mac. Only macOS 27 has been tried.
 - Xcode with its Metal toolchain, and Homebrew. Each build script names any Homebrew formula
-  it is missing.
+  it is missing. `sdl2-compat` is one of them: Wine reads game controllers through it.
 - A paid Apple Developer Program membership. Windows games are x86 code, and FEX can only run
   them when the Wine loader is signed with the cross-architecture entitlement, which gives
   memory below 4 GB and 4K pages (and hardware TSO, which makes FEX faster).
@@ -176,14 +176,16 @@ git clone --recurse-submodules https://github.com/0xLeathery/protium
 cd protium
 macos/build-vulkan.sh          # the Vulkan loader
 macos/build-gstreamer.sh       # GStreamer, for Media Foundation audio and video
-macos/build-wine.sh            # Wine, native arm64 (needs the two above)
+B=~/projects/proton-macos-build
+PE_MODE=msvc WINE_ARCHS=arm64ec,aarch64,i386 VULKAN_DIST=$B/vulkan-dist BUILD_DIR=$B/wine-arm64ec \
+    macos/build-wine.sh        # Wine, native arm64, with the x86 sides games need (needs the two above)
 macos/build-mesa.sh            # KosmicKrisp
 macos/build-fex.sh             # FEX, as Wine's ARM64EC and WoW64 emulator
 macos/build-llvm15.sh          # static LLVM 15, for DXMT's shader compiler
 macos/build-dxmt.sh            # Direct3D 10 and 11
 macos/build-vkd3d-proton.sh    # Direct3D 12
 macos/build-steam-bridge.sh    # lsteamclient and the rest of Proton's Steam bridge
-macos/bundle-wine.sh           # install everything into one bundle, with mtld3d, and sign the loader
+BUILD_DIR=$B/wine-arm64ec macos/bundle-wine.sh   # install everything into one bundle, with mtld3d, and sign the loader
 ```
 
 Each script documents its inputs, outputs and environment overrides at its head. Builds go to
