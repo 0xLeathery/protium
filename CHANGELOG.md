@@ -10,6 +10,11 @@ written. "Known problems" is a heading of our own, next to Keep a Changelog's.
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-11-25
+
+A test version for game controllers. Protium does not offer it as an update: download it from
+its page if you want to try a controller.
+
 ### Changed
 
 - Game controllers now come through SDL, as they do with Proton on Linux. A PlayStation or
@@ -172,7 +177,8 @@ run natively on arm64 with Metal, without Rosetta and without a virtual machine.
 - `steamplay discover` ranks the games in your library by how likely they are to work, and says
   why.
 
-[Unreleased]: https://github.com/0xLeathery/protium/compare/v0.4.1...macos-port
+[Unreleased]: https://github.com/0xLeathery/protium/compare/v0.4.2...macos-port
+[0.4.2]: https://github.com/0xLeathery/protium/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/0xLeathery/protium/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/0xLeathery/protium/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/0xLeathery/protium/compare/v0.3.0...v0.3.1
