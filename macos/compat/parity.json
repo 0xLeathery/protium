@@ -1,5 +1,5 @@
 {
- "about": "Where Protium stands on each thing Steam Play does on Linux. macos/PARITY.md's tables and the README's \"Missing so far\" list are written from this file by \"macos/steamplay docs\"; a unit test fails when they differ. A commit that changes what works changes its row here. status: works, partial, missing, untested or blocked. here: the evidence (a check, a game) or what is lacking. takes: what bringing it in takes, empty when nothing. capability: the feature of capabilities.json that must say the same. readme_missing: how the README names it while its status is missing or partial.",
+ "about": "Where Protium stands on each thing Steam Play does on Linux. macos/PARITY.md's tables and the README's \"Missing so far\" list are written from this file by \"macos/steamplay docs\"; a unit test fails when they differ. A commit that changes what works changes its row here. status: works, partial, missing, untested or blocked. here: the evidence (a check, a game) or what is lacking. takes: what bringing it in takes, empty when nothing. capability: the feature of capabilities.json that must say the same. readme_missing: how the README names it while its status is missing or partial. shown_by: what a game must use to show the row (run: any game; d3d9, d3d10, d3d11, d3d12, vulkan, x86_32). runs: written by \"macos/steamplay evidence --write\" from the games that ran well lately; do not edit it.",
  "reviewed": "2026-11-25",
  "sections": [
   {
@@ -17,7 +17,11 @@
      "linux": "Steam starts the compatibility tool",
      "status": "works",
      "here": "Steam runs `<tool>/run waitforexitandrun <game>` with Proton's environment, as on Linux (IRON NEST, Just Die Already, Kerbal Space Program, 2026-11-17).",
-     "takes": ""
+     "takes": "",
+     "shown_by": [
+      "run"
+     ],
+     "runs": "7 games ran well, the newest on 2026-11-24: Call of Duty: Modern Warfare Remastered (2017), Call of Duty: WWII, Call of Duty: World at War, IRON NEST: Heavy Turret Simulator, Just Die Already, Left 4 Dead, Red Dead Redemption 2"
     },
     {
      "feature": "Compatibility tool list, per-game tool choice; native builds win",
@@ -121,7 +125,11 @@
      "status": "works",
      "here": "through FEX (Just Die Already, GTFO; Left 4 Dead and Call of Duty: World at War, 32-bit). One known hang: the Godot editor (check-wave4 item 11, parked)",
      "takes": "Our fixes to FEX are in `macos/patches/fex`",
-     "capability": "x86_32"
+     "capability": "x86_32",
+     "shown_by": [
+      "run"
+     ],
+     "runs": "7 games ran well, the newest on 2026-11-24: Call of Duty: Modern Warfare Remastered (2017), Call of Duty: WWII, Call of Duty: World at War, IRON NEST: Heavy Turret Simulator, Just Die Already, Left 4 Dead, Red Dead Redemption 2"
     },
     {
      "feature": "Direct3D 10/11",
@@ -129,7 +137,12 @@
      "status": "works",
      "here": "DXMT (IRON NEST, Just Die Already, GTFO)",
      "takes": "",
-     "capability": "d3d11"
+     "capability": "d3d11",
+     "shown_by": [
+      "d3d10",
+      "d3d11"
+     ],
+     "runs": "4 games ran well, the newest on 2026-11-24: Call of Duty: Modern Warfare Remastered (2017), Call of Duty: WWII, IRON NEST: Heavy Turret Simulator, Just Die Already"
     },
     {
      "feature": "Direct3D 9",
@@ -137,7 +150,11 @@
      "status": "works",
      "here": "mtld3d (check-wave5 item 6, Left 4 Dead)",
      "takes": "",
-     "capability": "d3d9"
+     "capability": "d3d9",
+     "shown_by": [
+      "d3d9"
+     ],
+     "runs": "2 games ran well, the newest on 2026-11-24: Call of Duty: World at War, Left 4 Dead"
     },
     {
      "feature": "Direct3D 12",
@@ -145,7 +162,11 @@
      "status": "partial",
      "here": "vkd3d-proton on KosmicKrisp; IRON NEST runs, heavy titles are untested or slow to load, ray tracing untested",
      "takes": "Test a heavy title (The Last of Us Part II is installed)",
-     "capability": "d3d12"
+     "capability": "d3d12",
+     "shown_by": [
+      "d3d12"
+     ],
+     "runs": "1 game ran well, the newest on 2026-11-01: IRON NEST: Heavy Turret Simulator"
     },
     {
      "feature": "Direct3D 8 and older, DirectDraw",
@@ -160,7 +181,11 @@
      "status": "partial",
      "here": "Red Dead Redemption 2 reaches gameplay on its Vulkan renderer, with its frame rate limited by CPU time; no other Vulkan game tried",
      "takes": "Test a second game",
-     "capability": "vulkan"
+     "capability": "vulkan",
+     "shown_by": [
+      "vulkan"
+     ],
+     "runs": "1 game ran well, the newest on 2026-11-01: Red Dead Redemption 2"
     },
     {
      "feature": "OpenGL",

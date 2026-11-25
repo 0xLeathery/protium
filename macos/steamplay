@@ -28,6 +28,11 @@
     macos/steamplay docs [--check]    write the README's lists and PARITY.md's tables again from
                                       compat/games.json and compat/parity.json; with --check,
                                       only say whether they differ
+    macos/steamplay evidence [--write|--check]
+                                      what the games that were run say about PARITY.md's rows;
+                                      --write puts it into compat/parity.json and the documents,
+                                      --check fails when a row says works and no game that uses
+                                      it ran well lately (macos/make-release.sh asks this)
     macos/steamplay survey --away [--seconds N] [--games N] [--only <app id>...]
                                       start each untried installed game for a while (takes the screen)
     macos/steamplay uninstall [--dry-run]
@@ -97,6 +102,7 @@ import sys
 # bundle (its own Python's library) and break the seal macOS checks.
 sys.dont_write_bytecode = True
 
+import datetime
 import json
 import os
 import plistlib
@@ -2285,6 +2291,24 @@ def add_result(entry):
         f.write(json.dumps(entry, sort_keys=True) + "\n")
 
 
+# What DXMT says of a game's frames (macos/patches/dxmt/0010): the time from one Present to the
+# next, counted inside the game, which costs it nothing a recorder beside it would. It says so
+# again every half minute, each line for the whole run so far, and the last line is the run's.
+FRAMES_LINE = re.compile(r"DXGI: frame times: (\d+) frames in (\d+) s, median ([\d.]+) ms, 95% ([\d.]+) ms, "
+                         r"99% ([\d.]+) ms, worst ([\d.]+) ms, (\d+) over 50 ms")
+
+
+def frame_times(log):
+    """{"count", "seconds", "median", "p95", "p99", "worst", "slow"} from a run's log (times in
+    milliseconds, slow: frames that took over 50 ms), or None when the log has no such line."""
+    found = FRAMES_LINE.findall(log)
+    if not found:
+        return None
+    count, seconds, median, p95, p99, worst, slow = found[-1]
+    return {"count": int(count), "seconds": int(seconds), "median": float(median), "p95": float(p95),
+            "p99": float(p99), "worst": float(worst), "slow": int(slow)}
+
+
 def cmd_record(appid, start, logfile):
     """Called by steamplay-run.sh when a game's Wine session has ended: how long it ran and how it
     ended, from the log, as steamplay-try reads it."""
@@ -2303,9 +2327,13 @@ def cmd_record(appid, start, logfile):
         end = "ended"
     loaded = sorted({GRAPHICS_DLLS[m.lower()] for m in re.findall(r'\\\\([A-Za-z0-9_\-]+\.dll)" at ', log) if m.lower() in GRAPHICS_DLLS}
                     | ({"dotnet"} if re.search(r'\\\\mscoree\.dll" at ', log, re.I) else set()))
-    add_result({"app": appid, "time": time.strftime("%Y-%m-%dT%H:%M:%S"), "by": "run",
-                "seconds": max(0, int(time.time()) - start), "end": end, "loaded": loaded,
-                "protium": os.environ.get("PROTIUM_VERSION", "")})
+    entry = {"app": appid, "time": time.strftime("%Y-%m-%dT%H:%M:%S"), "by": "run",
+             "seconds": max(0, int(time.time()) - start), "end": end, "loaded": loaded,
+             "protium": os.environ.get("PROTIUM_VERSION") or protium_version()}
+    frames = frame_times(log)
+    if frames:
+        entry["frames"] = frames
+    add_result(entry)
     return 0
 
 
@@ -2532,6 +2560,8 @@ def parity_tables(parity):
         out += ["", "## " + section["title"], "", "| %s |" % " | ".join(columns), "|" + "---|" * len(columns)]
         for row in section["rows"]:
             here = "**%s**%s" % (row["status"], (": " + cell(row["here"])) if row.get("here") else "")
+            if row.get("runs"):
+                here += " Runs: %s." % cell(row["runs"])
             cells = [cell(row["feature"])] + ([cell(row.get("linux"))] if len(columns) == 4 else []) + [here, cell(row.get("takes")) or "—"]
             out.append("| %s |" % " | ".join(cells))
     return "\n".join(out)
@@ -2568,6 +2598,124 @@ def docs():
                 new = changed
         out[path] = (text, new)
     return out, problems
+
+
+# ---- what the games that were run say about PARITY.md's rows
+
+EVIDENCE_DAYS = 45      # a game's good run vouches for a feature this long
+
+
+def day(text):
+    """The date in "2026-11-24T19:49:44", "2026-11-24" or "2026-11" (its first day), or None."""
+    m = re.match(r"(\d{4})-(\d{2})(?:-(\d{2}))?", str(text or ""))
+    try:
+        return datetime.date(int(m.group(1)), int(m.group(2)), int(m.group(3) or 1)) if m else None
+    except ValueError:
+        return None
+
+
+def game_facts(games, runs):
+    """What is known of each game that was tried: [{"app", "name", "good", "date", "version",
+    "tags"}]. games: the entries of games.json, which a person vouched for; runs: results().
+    name is only there for a game of games.json: the others were played on this Mac and are
+    nobody's business. good is outcome()'s, or the verdict of games.json where this Mac has no
+    record. date and version are those of the newest run that went well, or of the verdict.
+    tags: what the game uses, as PARITY's rows name it in "shown_by": the graphics APIs of
+    games.json ("x86_32" for a 32-bit game); for a game not in it, the one API its runs
+    loaded, when it is one; and "run" for every game."""
+    listed = {g.get("app"): g for g in games}
+    facts = []
+    for app in sorted(set(listed) | set(runs), key=str):
+        entry, mine = listed.get(app), runs.get(app, [])
+        good, _ = outcome(mine)
+        if good is None and entry:
+            good = entry.get("verdict") in ("works", "plays-with-problems")
+        tags = {"run"}
+        if entry and entry.get("graphics"):
+            tags |= {key for key, text in API_TEXT if text in entry["graphics"]}
+            if "32-bit" in entry["graphics"]:
+                tags.add("x86_32")
+        else:
+            loaded = {a for r in mine for a in r.get("loaded", [])} - {"opengl", "dotnet"}
+            if len(loaded) == 1:
+                tags |= loaded
+        well = [r for r in mine if r.get("by") == "user" or r.get("seconds", 0) >= GOOD_RUN_SECONDS]
+        dates = [d for d in [day(r.get("time")) for r in well] + [day(entry.get("tested")) if entry else None] if d]
+        version = next((r["protium"] for r in reversed(well) if r.get("protium")), "")
+        facts.append({"app": app, "name": entry.get("name") if entry else None, "good": good,
+                      "date": max(dates) if dates else None, "version": version, "tags": tags})
+    return facts
+
+
+def evidence(parity, facts, today):
+    """For each row of parity.json that names what shows it ("shown_by"): (row, runs, problem,
+    proposal). runs: the sentence for the row's "runs", from the games that used the feature and
+    ran well in the last EVIDENCE_DAYS days ("" for none). problem: the row says works and no
+    such game is there. proposal: two or more are there and the row does not say works; it is
+    only said, because a status is a person's to change."""
+    out = []
+    for section in parity.get("sections", []):
+        for row in section.get("rows", []):
+            shown = row.get("shown_by")
+            if not shown:
+                continue
+            shown = {shown} if isinstance(shown, str) else set(shown)
+            mine = [f for f in facts if f["tags"] & shown]
+            good = sorted((f for f in mine if f["good"] and f["date"] and 0 <= (today - f["date"]).days <= EVIDENCE_DAYS),
+                          key=lambda f: (f["date"], f["name"] or ""), reverse=True)
+            runs = ""
+            if good:
+                names = sorted(f["name"] for f in good if f["name"])
+                others = len(good) - len(names)
+                who = ", ".join(names) + ((" and %d more" % others) if names and others else "")
+                version = good[0]["version"]
+                runs = "%d game%s ran well, the newest on %s%s%s" % (
+                    len(good), "" if len(good) == 1 else "s", good[0]["date"].isoformat(),
+                    (" with Protium " + version) if version else "", (": " + who) if who else "")
+            newest = max((f["date"] for f in mine if f["good"] and f["date"]), default=None)
+            problem = proposal = ""
+            if row.get("status") == "works" and not good:
+                problem = "%s: it says works, and no game that uses it ran well in the last %d days (%s)" % (
+                    row.get("feature"), EVIDENCE_DAYS, ("the newest on %s" % newest.isoformat()) if newest else "none on record")
+            elif row.get("status") != "works" and len(good) >= 2:
+                proposal = "%s: it says %s, and %s" % (row.get("feature"), row.get("status"), runs)
+            out.append((row, runs, problem, proposal))
+    return out
+
+
+def cmd_evidence(mode):
+    """What the games that were run say about PARITY.md's rows. Without an argument it lists it.
+    --write puts each row's sentence into parity.json ("runs") and writes the documents again.
+    --check, which macos/make-release.sh runs, ends with status 1 when a row says works and
+    nothing recent shows it: play a game that uses it, or change the row."""
+    parity = read_json(PARITY, {})
+    facts = game_facts(read_json(GAMES, {}).get("games", []), results())
+    found = evidence(parity, facts, datetime.date.today())
+    problems = [p for _, _, p, _ in found if p]
+    if mode == "--check":
+        for p in problems:
+            print("PROBLEM: " + p)
+        if not problems:
+            print("every row that says works has a game behind it that ran well in the last %d days" % EVIDENCE_DAYS)
+        return 1 if problems else 0
+    changed = 0
+    for row, runs, problem, proposal in found:
+        print("%-45s %-9s %s" % (row.get("feature", "?")[:45], row.get("status"), runs or "no game that ran well lately"))
+        if mode == "--write" and row.get("runs", "") != runs:
+            changed += 1
+            if runs:
+                row["runs"] = runs
+            else:
+                row.pop("runs", None)
+    for p in problems:
+        print("PROBLEM: " + p)
+    for p in (p for _, _, _, p in found if p):
+        print("COULD BE WORKS: %s. Change its status in %s if you agree." % (p, os.path.relpath(PARITY)))
+    if mode == "--write":
+        if changed:
+            write_file(PARITY, json.dumps(parity, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
+        cmd_docs(False)
+    return 0
 
 
 def write_games_table():
@@ -2924,6 +3072,8 @@ def main(argv):
         sys.exit(cmd_games())
     elif argv in (["docs"], ["docs", "--check"]):
         sys.exit(cmd_docs("--check" in argv))
+    elif argv in (["evidence"], ["evidence", "--write"], ["evidence", "--check"]):
+        sys.exit(cmd_evidence(argv[1] if len(argv) > 1 else None))
     elif len(argv) == 4 and argv[0] == "record" and argv[1].isdigit() and argv[2].isdigit():
         sys.exit(cmd_record(int(argv[1]), int(argv[2]), argv[3]))
     elif len(argv) >= 1 and argv[0] == "survey":

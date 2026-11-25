@@ -363,5 +363,94 @@ class Docs(unittest.TestCase):
         self.assertEqual(sp.between("a\n<s>\nold\n<e>\nb", "<s>", "<e>", "new"), "a\n<s>\nnew\n<e>\nb")
 
 
+class FrameTimes(unittest.TestCase):
+    LINE = "info:  DXGI: frame times: %d frames in %d s, median 16.5 ms, 95%% 17.0 ms, 99%% 33.5 ms, worst 412.0 ms, %d over 50 ms\n"
+
+    def test_the_last_line_of_the_log_is_the_runs(self):
+        log = "0024:trace:loaddll x\n" + self.LINE % (1800, 30, 2) + "other\n" + self.LINE % (3600, 60, 7)
+        self.assertEqual(sp.frame_times(log), {"count": 3600, "seconds": 60, "median": 16.5, "p95": 17.0,
+                                               "p99": 33.5, "worst": 412.0, "slow": 7})
+
+    def test_a_log_without_the_line_has_none(self):
+        self.assertIsNone(sp.frame_times("0024:trace:loaddll x\n"))
+
+
+import datetime
+
+TODAY = datetime.date(2026, 11, 25)
+
+
+def listed(app, graphics, verdict="works", tested="2026-11-20"):
+    return {"app": app, "name": "Game %d" % app, "graphics": graphics, "verdict": verdict, "tested": tested}
+
+
+def shown(status, *tags):
+    return parity(status=status, shown_by=list(tags))
+
+
+class Evidence(unittest.TestCase):
+    def test_day_reads_the_forms_the_files_have(self):
+        self.assertEqual(sp.day("2026-11-24T19:49:44"), datetime.date(2026, 11, 24))
+        self.assertEqual(sp.day("2026-11"), datetime.date(2026, 11, 1))
+        self.assertIsNone(sp.day("soon"))
+        self.assertIsNone(sp.day("2026-13-40"))
+
+    def test_a_listed_game_gets_its_tags_from_its_graphics(self):
+        fact, = sp.game_facts([listed(1, "Direct3D 9, 32-bit")], {})
+        self.assertEqual(fact["tags"], {"run", "d3d9", "x86_32"})
+        self.assertEqual((fact["good"], fact["date"], fact["name"]), (True, datetime.date(2026, 11, 20), "Game 1"))
+
+    def test_a_game_that_is_not_listed_has_no_name_and_one_api_or_none(self):
+        one = {"by": "run", "end": "ended", "seconds": 900, "loaded": ["d3d11", "opengl"], "time": "2026-11-24T10:00:00", "protium": "0.4.0"}
+        many = dict(one, loaded=["d3d9", "d3d11", "d3d12", "vulkan"])
+        facts = {f["app"]: f for f in sp.game_facts([], {5: [one], 6: [many]})}
+        self.assertIsNone(facts[5]["name"])
+        self.assertEqual(facts[5]["tags"], {"run", "d3d11"})
+        self.assertEqual(facts[6]["tags"], {"run"})      # a launcher loads everything: that shows nothing
+        self.assertEqual((facts[5]["date"], facts[5]["version"]), (datetime.date(2026, 11, 24), "0.4.0"))
+
+    def test_what_this_mac_recorded_counts_before_the_list(self):
+        crash = {"by": "run", "end": "crash", "seconds": 20, "loaded": ["d3d11"], "time": "2026-11-24T10:00:00"}
+        fact, = sp.game_facts([listed(1, "Direct3D 11")], {1: [crash]})
+        self.assertIs(fact["good"], False)
+
+    def test_a_row_that_says_works_needs_a_game_that_ran_well_lately(self):
+        facts = sp.game_facts([listed(1, "Direct3D 11")], {})
+        (row, runs, problem, proposal), = sp.evidence(shown("works", "d3d11"), facts, TODAY)
+        self.assertEqual((runs, problem, proposal), ("1 game ran well, the newest on 2026-11-20: Game 1", "", ""))
+        late = TODAY + datetime.timedelta(days=sp.EVIDENCE_DAYS)
+        (_, runs, problem, _), = sp.evidence(shown("works", "d3d11"), facts, late)
+        self.assertEqual(runs, "")
+        self.assertIn("the newest on 2026-11-20", problem)
+        (_, _, problem, _), = sp.evidence(shown("works", "vulkan"), facts, TODAY)
+        self.assertIn("none on record", problem)
+
+    def test_a_game_that_does_not_run_shows_nothing(self):
+        facts = sp.game_facts([listed(1, "Direct3D 11", verdict="broken")], {})
+        (_, runs, problem, _), = sp.evidence(shown("works", "d3d11"), facts, TODAY)
+        self.assertEqual(runs, "")
+        self.assertTrue(problem)
+
+    def test_two_games_propose_works_and_change_nothing(self):
+        facts = sp.game_facts([listed(1, "Vulkan"), listed(2, "Vulkan", verdict="plays-with-problems")], {})
+        data = shown("partial", "vulkan")
+        (row, runs, problem, proposal), = sp.evidence(data, facts, TODAY)
+        self.assertIn("it says partial, and 2 games ran well", proposal)
+        self.assertEqual((problem, row["status"]), ("", "partial"))
+        (_, _, _, proposal), = sp.evidence(shown("partial", "vulkan"), facts[:1], TODAY)
+        self.assertEqual(proposal, "")
+
+    def test_games_that_are_not_listed_are_counted_and_not_named(self):
+        run = {"by": "run", "end": "ended", "seconds": 900, "loaded": ["d3d11"], "time": "2026-11-24T10:00:00"}
+        facts = sp.game_facts([listed(1, "Direct3D 11")], {7: [run], 8: [run]})
+        (_, runs, _, _), = sp.evidence(shown("works", "d3d11"), facts, TODAY)
+        self.assertEqual(runs, "3 games ran well, the newest on 2026-11-24: Game 1 and 2 more")
+
+    def test_rows_without_shown_by_are_left_out_and_runs_are_written_into_the_table(self):
+        self.assertEqual(sp.evidence(parity(), [], TODAY), [])
+        self.assertEqual(sp.parity_tables(parity(runs="1 game ran well")).split("\n")[-1],
+                         "| A feature | as Linux does it | **works**: a game Runs: 1 game ran well. | — |")
+
+
 if __name__ == "__main__":
     unittest.main()

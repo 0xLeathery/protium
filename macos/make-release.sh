@@ -86,6 +86,16 @@ CHANGELOG=${CHANGELOG:-$PROTON_DIR/CHANGELOG.md}
 changes() { awk -v v="[$VERSION]" '/^## /{on = ($2 == v); next} /^\[[^]]*\]: /{on = 0} on' "$CHANGELOG"; }
 [ -n "$(changes | tr -d '[:space:]')" ] || die "CHANGELOG.md has no section \"## [$VERSION] - <date>\": move what is under [Unreleased] into one first"
 
+# A release does not go out saying that something works which no game has shown lately: the
+# rows of macos/compat/parity.json against the games that were run ("steamplay evidence").
+# EVIDENCE_CHECK=0 leaves this out, for a build that is not a release (check-update.sh's).
+if [ "${EVIDENCE_CHECK:-1}" != 0 ]; then
+    /usr/bin/python3 -B "$SCRIPT_DIR/steamplay" evidence --check \
+        || die "PARITY.md says more than the games show: play a game that uses the feature, or change its row in macos/compat/parity.json (macos/steamplay evidence lists them)"
+    /usr/bin/python3 -B "$SCRIPT_DIR/steamplay" docs --check \
+        || die "the README or PARITY.md is not what the data files say: run macos/steamplay docs"
+fi
+
 if [ -z "${SIGN_IDENTITY:-}" ]; then
     SIGN_IDENTITY=$(security find-identity -v -p codesigning | sed -n 's/^ *[0-9]*) \([0-9A-F]\{40\}\) "Developer ID Application:.*/\1/p' | head -1)
     [ -n "$SIGN_IDENTITY" ] || die "no Developer ID Application identity in the keychain"

@@ -21,7 +21,7 @@
 #
 # With a notarized build of a newer version that was never published ($TEST_DMG; made with
 #   VERSION=0.2.99 NOTARIZE=0 RELEASE_DIR=$BUILD_ROOT/evidence/update-build CHANGELOG=<one with a
-#   [0.2.99] section> macos/make-release.sh
+#   [0.2.99] section> EVIDENCE_CHECK=0 macos/make-release.sh
 # then the app notarized and stapled and the disk image made again), it also updates for real:
 # the new app takes the old one's place and the old one goes once the new one has started; and
 # when the new one never starts, the old one comes back.
