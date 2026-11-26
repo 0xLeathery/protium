@@ -18,6 +18,10 @@ written. "Known problems" is a heading of our own, next to Keep a Changelog's.
   which program they are about and the time of day.
 - A game's folder now keeps the logs of its last five runs, not only of the one before
   (`steamplay-run.prev.log` is still the newest of them).
+- A game's log now also says every half minute what each of its processes did: how much
+  processor time it used and how long it waited for a free core, its memory, its calls to Wine's
+  server and its waits, and, when the game's sound ran dry, for how long. This is what tells
+  why a game stuttered.
 
 ### Fixed
 

@@ -36,6 +36,10 @@
 #                   (WINEFSYNC=1), as Proton does on Linux.
 #   WINE_FSYNC_STATS  seconds between lines in the log that say how each process slept and
 #                   what it woke; WINE_FSYNC_PARANOID=1 reports a wake-up that did not arrive
+#   WINE_PROCESS_STATS  seconds between the "Process:" lines every Wine process of the game writes
+#                   to the log, of what its threads did (processor time, time waiting for a core,
+#                   memory, wineserver calls, waits, and FEX's counters when FEX keeps them), and
+#                   the "Audio:" lines of audio that ran dry (default 30; 0 turns them off)
 #   PROTON_DISABLE_HIDRAW  1 (the default here) has every game controller come through SDL with
 #                   the layout of an Xbox controller; 0 lets Wine take a PlayStation controller
 #                   as itself, for a game that knows it. PROTON_NO_SDL=1 turns SDL off: then
@@ -260,6 +264,9 @@ log_inode=$(stat -f %i "$logfile")
 export WINEDEBUG="${WINEDEBUG:-+loaddll,+msgbox}"
 # and where ntdll leaves the stack of a thread that ran out of it (wine-stack.<pid>.<tid>.bin)
 export WINE_STACK_DUMP_DIR="${WINE_STACK_DUMP_DIR:-$compat}"
+# every half minute, what each of the game's processes did, for the record of the run beside the
+# frame lines: about 0.1 ms of processor time a line, and some 10 ns a wineserver call or wait
+export WINE_PROCESS_STATS="${WINE_PROCESS_STATS:-30}"
 log "app $appid: $exe (log: $logfile)"
 # A game that hangs says nothing of where. Wine does say when a thread has waited a minute for a
 # lock that another one holds: at that, where every thread of the game's processes is gets
