@@ -413,6 +413,23 @@ class FrameTimes(unittest.TestCase):
     def test_a_log_without_the_line_has_none(self):
         self.assertIsNone(sp.frame_times("0024:trace:loaddll x\n"))
 
+    VULKAN = ("Vulkan: frame times (%s): %d frames in %d s, median 25.0 ms, 95%% 36.5 ms, 99%% 60.0 ms, "
+              "worst 900.0 ms, %d over 50 ms\n")
+
+    def test_a_vulkan_programs_frames_come_before_a_launchers_dxgi_ones(self):
+        # Red Dead Redemption 2: its launcher draws with Direct3D 11 at up to 90 fps, the game with Vulkan
+        log = (self.LINE % (2700, 30, 40) + self.VULKAN % ("RDR2.exe", 750, 30, 3) + "other\n"
+               + self.LINE % (5400, 60, 80) + self.VULKAN % ("RDR2.exe", 1500, 60, 5))
+        self.assertEqual(sp.frame_times(log), {"count": 1500, "seconds": 60, "median": 25.0, "p95": 36.5,
+                                               "p99": 60.0, "worst": 900.0, "slow": 5,
+                                               "api": "vulkan", "program": "RDR2.exe"})
+
+    def test_of_two_vulkan_programs_the_one_that_drew_most_frames_is_the_game(self):
+        log = (self.VULKAN % ("Game.exe", 1500, 60, 5) + self.VULKAN % ("Helper.exe", 40, 60, 0)
+               + self.VULKAN % ("Helper.exe", 45, 70, 0))
+        frames = sp.frame_times(log)
+        self.assertEqual((frames["program"], frames["count"]), ("Game.exe", 1500))
+
 
 import datetime
 

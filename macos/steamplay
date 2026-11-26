@@ -2322,17 +2322,33 @@ def add_result(entry):
 # again every half minute, each line for the whole run so far, and the last line is the run's.
 FRAMES_LINE = re.compile(r"DXGI: frame times: (\d+) frames in (\d+) s, median ([\d.]+) ms, 95% ([\d.]+) ms, "
                          r"99% ([\d.]+) ms, worst ([\d.]+) ms, (\d+) over 50 ms")
+# The same of a Vulkan program, by Wine's win32u, with the program's name: Direct3D 12 games through
+# vkd3d-proton and Vulkan games such as Red Dead Redemption 2, whose launcher draws with Direct3D 11
+# beside them, so that DXMT's lines there are the launcher's.
+VULKAN_FRAMES_LINE = re.compile(r"Vulkan: frame times \(([^)]*)\): (\d+) frames in (\d+) s, median ([\d.]+) ms, "
+                                r"95% ([\d.]+) ms, 99% ([\d.]+) ms, worst ([\d.]+) ms, (\d+) over 50 ms")
 
 
 def frame_times(log):
     """{"count", "seconds", "median", "p95", "p99", "worst", "slow"} from a run's log (times in
-    milliseconds, slow: frames that took over 50 ms), or None when the log has no such line."""
-    found = FRAMES_LINE.findall(log)
-    if not found:
-        return None
-    count, seconds, median, p95, p99, worst, slow = found[-1]
+    milliseconds, slow: frames that took over 50 ms), or None when the log has no such line. A
+    Vulkan program's lines come first (its last line; of several programs, the one with the most
+    frames, as a helper's few are not the game's), with "api" and "program" added; else DXMT's."""
+    last = {}
+    for program, *numbers in VULKAN_FRAMES_LINE.findall(log):
+        last[program] = numbers
+    if last:
+        program = max(last, key=lambda p: int(last[p][0]))
+        count, seconds, median, p95, p99, worst, slow = last[program]
+        extra = {"api": "vulkan", "program": program}
+    else:
+        found = FRAMES_LINE.findall(log)
+        if not found:
+            return None
+        count, seconds, median, p95, p99, worst, slow = found[-1]
+        extra = {}
     return {"count": int(count), "seconds": int(seconds), "median": float(median), "p95": float(p95),
-            "p99": float(p99), "worst": float(worst), "slow": int(slow)}
+            "p99": float(p99), "worst": float(worst), "slow": int(slow), **extra}
 
 
 def cmd_record(appid, start, logfile):

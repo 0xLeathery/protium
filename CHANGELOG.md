@@ -10,6 +10,12 @@ written. "Known problems" is a heading of our own, next to Keep a Changelog's.
 
 ## [Unreleased]
 
+### Changed
+
+- A Vulkan game's log now says every half minute how long its frames took, as a Direct3D 10
+  or 11 game's already did. The record of a run keeps the game's own frame times, not those
+  of a launcher drawing beside it, as Red Dead Redemption 2's does.
+
 ### Fixed
 
 - Vulkan games are no longer told that a screen can show HDR when macOS says it can't. On
