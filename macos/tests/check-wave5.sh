@@ -83,6 +83,10 @@
 #      core while 2 x ncpu threads spin, the 256 MB it holds, and a last line marked "exit"; the
 #      line costs at most 500 us; with FEX_PROFILESTATS=1 it has FEX's part; without the variable
 #      there is no line
+#  23  the audio line: audio_underrun_test.exe, x86_64, with WINE_PROCESS_STATS=5, lets a WASAPI
+#      stream run dry for a second after its 200 ms buffer, and winecoreaudio's "Audio:" lines say
+#      700 to 1100 ms of silence and at least 50 empty callbacks; a run that never lets it run dry
+#      has no line with a short or empty callback (silent buffers: nothing is heard)
 # The build comes first ("build", which takes long and can be left out with CHECK_ITEMS); the test
 # programs are compiled on every run.
 #
@@ -140,7 +144,7 @@ mkdir -p "$EVIDENCE_DIR"
 RESULTS=()
 FAILED=0
 TODO=0
-CHECK_ITEMS=${CHECK_ITEMS:-"build 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22"}
+CHECK_ITEMS=${CHECK_ITEMS:-"build 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23"}
 want() { case " $CHECK_ITEMS " in *" $1 "*) return 0 ;; esac; return 1; }
 pass() { RESULTS+=("PASS  item $1: $2"); echo "PASS  item $1: $2"; }
 fail() { RESULTS+=("FAIL  item $1: $2"); echo "FAIL  item $1: $2"; FAILED=1; }
@@ -230,14 +234,15 @@ if true; then
     cc x86_64 d3d12_window_test.exe d3d12_window_test.c -ld3d12 -ldxgi -ldxguid -luuid -luser32
     cc x86_64 steam_api_test.exe steam_api_test.c
     cc x86_64 session_end_test.exe session_end_test.c -lntdll
+    cc x86_64 audio_underrun_test.exe audio_underrun_test.c -lole32 -luuid -lksuser
     # one second of a single colour with a tone, as H.264/AAC and VP9/Opus
     "$FFMPEG_CLI" -loglevel error -y -f lavfi -i color=c=0x3366cc:s=320x240:r=30:d=1 -f lavfi -i sine=f=440:d=1 \
         -c:v libx264 -profile:v baseline -pix_fmt yuv420p -c:a aac -shortest "$T/h264_aac.mp4" >>"$T/build.log" 2>&1
     "$FFMPEG_CLI" -loglevel error -y -f lavfi -i color=c=0x3366cc:s=320x240:r=30:d=1 -f lavfi -i sine=f=440:d=1 \
         -c:v libvpx-vp9 -pix_fmt yuv420p -c:a libopus -shortest "$T/vp9_opus.webm" >>"$T/build.log" 2>&1
     n=$(ls "$T"/*.exe 2>/dev/null | wc -l | tr -d ' ')
-    [ "$n" -eq 34 ] && [ -s "$T/h264_aac.mp4" ] && [ -s "$T/vp9_opus.webm" ] \
-        && pass programs "34 test programs and 2 video files ($T)" || fail programs "$n of 34 test programs ($T/build.log)"
+    [ "$n" -eq 35 ] && [ -s "$T/h264_aac.mp4" ] && [ -s "$T/vp9_opus.webm" ] \
+        && pass programs "35 test programs and 2 video files ($T)" || fail programs "$n of 35 test programs ($T/build.log)"
 fi
 
 if [ ! -x "$WINE" ]; then
@@ -430,6 +435,24 @@ EOF
     [ "$off" = 0 ] || ok=no
     lines="$lines without WINE_PROCESS_STATS: $off lines"
     [ $ok = yes ] && pass 22 "process line:$lines ($EVIDENCE_DIR/item22-*)" || fail 22 "process line:$lines ($EVIDENCE_DIR/item22-*)"
+fi
+
+if want 23; then
+    ok=yes; lines=""
+    for mode in starve control; do
+        log=$EVIDENCE_DIR/item23-$mode
+        WINE_PROCESS_STATS=5 winrun "$log" "$T/audio_underrun_test.exe" $mode
+        line=$(grep -a '^audio underrun test:' "$log.out" | tr -d '\r')
+        sums=$(grep -a '^Audio: ' "$log.err" | perl -ne '$s += $1, $e += $2, $m += $3 if /short (\d+), empty (\d+), silence (\d+) ms/; END { printf "%d %d %d", $s, $e, $m }')
+        set -- $sums
+        if [ $mode = starve ]; then
+            [ -n "$line" ] && [ "$3" -ge 700 ] && [ "$3" -le 1100 ] && [ "$2" -ge 50 ] || ok=no
+        else
+            [ -n "$line" ] && [ "$1" = 0 ] && [ "$2" = 0 ] || ok=no
+        fi
+        lines="$lines $mode: short $1, empty $2, silence $3 ms in $(grep -a -c '^Audio: ' "$log.err") line(s);"
+    done
+    [ $ok = yes ] && pass 23 "audio line:$lines ($EVIDENCE_DIR/item23-*)" || fail 23 "audio line:$lines ($EVIDENCE_DIR/item23-*)"
 fi
 
 if want 3; then
