@@ -27,8 +27,9 @@
 #   GAME_EXE        the executable, relative to the install folder or as a full path, when the
 #                   largest .exe in its top folder is not the game (macos/steamplay-launch gives
 #                   the one Steam chose)
-#   STEAMPLAY_LOG   where Wine's output goes (default <prefix>/../steamplay-run.log; the run
-#                   before keeps its own as steamplay-run.prev.log)
+#   STEAMPLAY_LOG   where Wine's output goes (default <prefix>/../steamplay-run.log; the five
+#                   runs before keep theirs as steamplay-run.prev.log, the newest, to
+#                   steamplay-run.prev5.log)
 #   WINEDEBUG       Wine's debug channels (default +loaddll,+msgbox)
 #   PROTON_NO_FSYNC 1 to have every wait for, and change to, an event, semaphore or mutex go to
 #                   the wineserver again. By default they are kept in shared memory
@@ -235,8 +236,15 @@ for dll in GameOverlayRenderer.dll GameOverlayRenderer64.dll; do
 done
 
 logfile=${STEAMPLAY_LOG:-$compat/steamplay-run.log}
-# the run before this one keeps its log, since the next start is often how a crash gets looked at
-[ -f "$logfile" ] && mv -f "$logfile" "${logfile%.log}.prev.log"
+# the five runs before this one keep their logs, the newest as .prev.log and the oldest as
+# .prev5.log: the next start is often how a crash gets looked at, and telling whether a change
+# made a game run better takes more than one run to compare with
+prev_base=${logfile%.log}
+for i in 4 3 2; do
+    if [ -f "$prev_base.prev$i.log" ]; then mv -f "$prev_base.prev$i.log" "$prev_base.prev$((i + 1)).log"; fi
+done
+if [ -f "$prev_base.prev.log" ]; then mv -f "$prev_base.prev.log" "$prev_base.prev2.log"; fi
+if [ -f "$logfile" ]; then mv -f "$logfile" "$prev_base.prev.log"; fi
 # where each module is loaded, so that the PE addresses of a crash can be given their DLLs, and
 # what a message box says, which is often all a game tells of what it could not do
 export WINEDEBUG="${WINEDEBUG:-+loaddll,+msgbox}"
