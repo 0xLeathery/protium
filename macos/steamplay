@@ -2555,6 +2555,47 @@ def audio_summary(rows):
     return {"lines": len(lines), **{k: sum(r[k] for r in lines) for k in ("short", "empty", "silence_ms", "lock_busy")}}
 
 
+# macOS's own word on the sound: coreaudiod logs a HAL overload whenever an audio IO cycle missed
+# its deadline ("Overload possibly due to client timeout."), which a crackle is. It does not say
+# for which program (the name is '<private>'), so a run's count is of every program playing sound
+# while it ran; it is read from the system log after the run, as nothing need be running then.
+OVERLOAD = re.compile(r"Overload possibly due to ([^.]+)\.")
+
+
+def count_overloads(ndjson):
+    """{"total", "causes": {cause: n}, "half_minutes": [["HH:MM:SS", n], ...]} from `log show --style
+    ndjson` output (the half minutes on the clock's :00 and :30, as the frame and process lines)."""
+    causes, halves = {}, {}
+    for line in ndjson.splitlines():
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        found = OVERLOAD.search(event.get("eventMessage", "") or "")
+        if not found:
+            continue
+        causes[found[1]] = causes.get(found[1], 0) + 1
+        at = (event.get("timestamp") or "")[11:19]
+        if len(at) == 8:
+            half = at[:6] + ("00" if at[6:] < "30" else "30")
+            halves[half] = halves.get(half, 0) + 1
+    return {"total": sum(causes.values()), "causes": causes, "half_minutes": sorted([k, v] for k, v in halves.items())}
+
+
+def hal_overloads(start, end):
+    """count_overloads() of the system log between two times (seconds since 1970), or None when the
+    log cannot be read in a minute."""
+    stamp = lambda t: time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(t))
+    try:
+        out = subprocess.run(["/usr/sbin/taskpolicy", "-b", "/usr/bin/log", "show", "--start", stamp(start), "--end", stamp(end),
+                              "--style", "ndjson", "--predicate",
+                              'process == "coreaudiod" AND eventMessage CONTAINS "Overload possibly due to"'],
+                             capture_output=True, text=True, timeout=60).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return count_overloads(out)
+
+
 def run_settings(env):
     """What a run started with, from the environment steamplay-run.sh gave "record": the lines of
     the game's env.<app id> (STEAMPLAY_GAME_ENV, its text; not the comments), whether macOS's
@@ -2619,6 +2660,9 @@ def cmd_record(appid, start, logfile):
         entry["process"] = process
     if audio:
         entry["audio"] = audio
+    overloads = hal_overloads(start, time.time()) if os.environ.get("STEAMPLAY_NO_SYSTEM_LOG") != "1" else None
+    if overloads and overloads["total"]:
+        entry["audio_overloads"] = overloads
     rows = sorted(rows + more, key=lambda r: r["log_line"])
     kept = write_rows(appid, start, rows)
     if kept:

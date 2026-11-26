@@ -23,7 +23,8 @@ TEMP = tempfile.mkdtemp(prefix="steamplay-test-")
 # the script reads these once, as it is loaded
 os.environ.update({"STEAMPLAY_HOME": os.path.join(TEMP, "home"), "STEAM_ROOT": os.path.join(TEMP, "steam"),
                    "STEAMPLAY_GUARD_LOG": os.path.join(TEMP, "logs", "guard.log"),
-                   "STEAMPLAY_TOOLS_DIR": os.path.join(TEMP, "tools"), "STEAMPLAY_FAKE_STEAM": "1"})
+                   "STEAMPLAY_TOOLS_DIR": os.path.join(TEMP, "tools"), "STEAMPLAY_FAKE_STEAM": "1",
+                   "STEAMPLAY_NO_SYSTEM_LOG": "1"})
 _loader = importlib.machinery.SourceFileLoader("steamplay", os.path.join(HERE, "..", "steamplay"))
 _spec = importlib.util.spec_from_loader("steamplay", _loader)
 sp = importlib.util.module_from_spec(_spec)
@@ -601,6 +602,17 @@ class ProcessLines(unittest.TestCase):
         rows = sp.process_rows(self.AUDIO + self.AUDIO.replace("16:18:35", "16:19:05"))
         self.assertEqual(sp.audio_summary(rows), {"lines": 2, "short": 2, "empty": 152, "silence_ms": 1626, "lock_busy": 0})
         self.assertIsNone(sp.audio_summary(sp.process_rows(self.GAME)))
+
+    def test_macos_overloads_are_counted_by_cause_and_half_minute(self):
+        events = [{"timestamp": "2026-11-26 09:25:06.%06d+1000" % i, "eventMessage":
+                   "        HALS_OverloadMessage.cpp:213   HALS_OverloadMessage: Overload possibly due to client timeout."}
+                  for i in range(3)]
+        events.append({"timestamp": "2026-11-26 09:25:31.000000+1000", "eventMessage":
+                       "HALS_OverloadMessage: Overload possibly due to io cycle budget."})
+        events.append({"timestamp": "2026-11-26 09:25:32.000000+1000", "eventMessage": "Audio IO Overload thread: 4a84cb"})
+        text = "\n".join(json.dumps(e) for e in events) + "\nnot json\n"
+        self.assertEqual(sp.count_overloads(text), {"total": 4, "causes": {"client timeout": 3, "io cycle budget": 1},
+                                                    "half_minutes": [["09:25:00", 3], ["09:25:30", 1]]})
 
     def test_record_keeps_them_with_the_frames(self):
         log = os.path.join(TEMP, "record-process.log")
