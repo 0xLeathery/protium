@@ -554,6 +554,69 @@ class RecorderRows(unittest.TestCase):
         self.assertEqual(sp.run_settings({}), {"env": [], "hud": False, "winedebug": "", "retina": ""})
 
 
+class ProcessLines(unittest.TestCase):
+    """Wine's process line and winecoreaudio's audio line, as check-wave5 items 22 and 23 saw them."""
+    GAME = ("Process: the last 5 s (process_stats_test_x86_64.exe, pid 50348, 16:15:15): cpu 15.81 s, P cores 72%, "
+            "waiting for a core 19.39 s, ipc 5.65, threads 27, switches 15218, faults 1722, syscalls 3896, mach calls 844; "
+            "memory: 15 MB, compressed 0 MB, graphics 0 MB, page-ins 0, read 0 MB, pressure 1, thermal 0; wineserver: "
+            "calls 148 0.269 s (select 24 0.122 s, init_thread 24 0.062 s, new_thread 24 0.046 s), waits 0 0.00 s, its cpu "
+            "0.01 s; waits: fsync 100 2.09 s, by address 70 1.12 s, sleeps 25 0.50 s, yields 0 0.000 s; FEX: threads 25, jit "
+            "0.00 s, lock 0.00 s, blocks 14, smc 0, l1 misses 54, disk-cache misses 14; recorder 25 us\n")
+    HELPER = ("Process: the last 5 s (services.exe, pid 50289, 16:15:15): cpu 0.03 s, P cores 100%, waiting for a core 0.00 s, "
+              "ipc 1.87, threads 11, switches 3377, faults 4164, syscalls 18455, mach calls 583; memory: 4 MB, compressed 0 MB, "
+              "graphics 0 MB, page-ins 1, read 0 MB, pressure 2, thermal 1; wineserver: calls 3098 0.031 s (get_key_value 894 "
+              "0.007 s, select 441 0.004 s, create_file 93 0.004 s), waits 0 0.00 s, its cpu 0.20 s; waits: fsync 100 0.62 s, "
+              "by address 72 0.24 s, sleeps 0 0.00 s, yields 0 0.000 s; recorder 62 us\n")
+    AUDIO = ("Audio: the last 5 s (audio_underrun_test.exe, pid 51349, 16:18:35): callbacks 469, short 1, empty 76, "
+             "silence 813 ms, lock busy 0\n")
+
+    def test_a_process_line_is_read_whole(self):
+        game, helper = sp.process_rows("x\n" + self.GAME + self.HELPER)
+        self.assertEqual((game["program"], game["pid"], game["at"], game["seconds"], game["log_line"]),
+                         ("process_stats_test_x86_64.exe", 50348, "16:15:15", 5, 2))
+        self.assertEqual((game["cpu"], game["p_cores"], game["waiting"], game["threads"], game["memory_mb"]), (15.81, 72, 19.39, 27, 15))
+        self.assertEqual(game["server_top"][0], ["select", 24, 0.122])
+        self.assertEqual((game["server_calls"], game["server_cpu"]), (148, 0.01))
+        self.assertEqual(game["waits"], {"fsync": [100, 2.09], "address": [70, 1.12], "sleeps": [25, 0.5], "yields": [0, 0.0]})
+        self.assertEqual((game["fex"]["blocks"], game["recorder_us"]), (14, 25))
+        self.assertNotIn("fex", helper)
+        self.assertEqual((helper["pressure"], helper["thermal"]), (2, 1))
+
+    def test_an_exit_line_is_marked(self):
+        row, = sp.process_rows(self.GAME.replace("16:15:15)", "16:15:15, exit)"))
+        self.assertTrue(row["exit"])
+
+    def test_the_summary_is_of_the_game_and_its_helpers(self):
+        rows = sp.process_rows(self.GAME + self.HELPER)
+        s = sp.process_summary(rows, "process_stats_test_x86_64.exe")
+        self.assertEqual((s["program"], s["lines"], s["cores"], s["waiting_per_s"], s["p_cores"]),
+                         ("process_stats_test_x86_64.exe", 1, 3.162, 3.878, 72))
+        self.assertEqual((s["helpers_cores_most"], s["server_cores_most"], s["pressure_most"], s["thermal_most"], s["fex_jit_s"]),
+                         (0.006, 0.04, 2, 1, 0.0))
+        # without the frames' program, the one that used the most processor time
+        self.assertEqual(sp.process_summary(rows)["program"], "process_stats_test_x86_64.exe")
+        self.assertIsNone(sp.process_summary([]))
+
+    def test_audio_lines_add_up(self):
+        rows = sp.process_rows(self.AUDIO + self.AUDIO.replace("16:18:35", "16:19:05"))
+        self.assertEqual(sp.audio_summary(rows), {"lines": 2, "short": 2, "empty": 152, "silence_ms": 1626, "lock_busy": 0})
+        self.assertIsNone(sp.audio_summary(sp.process_rows(self.GAME)))
+
+    def test_record_keeps_them_with_the_frames(self):
+        log = os.path.join(TEMP, "record-process.log")
+        with open(log, "w") as f:
+            f.write(RecorderRows.OLD_DXGI + self.GAME + self.HELPER + self.AUDIO)
+        with mock.patch.dict(os.environ, {"PROTIUM_VERSION": "0.0.0-test"}):
+            sp.cmd_record(454545, 1795665000, log)
+        with open(sp.RESULTS) as f:
+            entry = json.loads(f.read().splitlines()[-1])
+        self.assertEqual(entry["process"]["program"], "process_stats_test_x86_64.exe")
+        self.assertEqual(entry["audio"]["silence_ms"], 813)
+        with open(os.path.join(sp.HOME_DIR, entry["rows"])) as f:
+            kept = [json.loads(line) for line in f]
+        self.assertEqual([r.get("source", r.get("api")) for r in kept], ["dxgi", "process", "process", "audio"])
+
+
 import datetime
 import time
 

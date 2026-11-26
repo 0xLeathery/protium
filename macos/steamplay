@@ -2438,6 +2438,123 @@ def write_rows(appid, start, rows):
     return os.path.join("runs", str(appid), name)
 
 
+# The process line (Wine's ntdll, WINE_PROCESS_STATS, which steamplay-run.sh sets to 30) and the
+# audio line (winecoreaudio): every half minute, at the same moments as the frame lines, what each
+# Wine process of the game did, and how much of its sound ran dry.
+PROCESS_HEAD = re.compile(r"^Process: the last (\d+) s \((.+?), pid (\d+), (\d\d:\d\d:\d\d)(, exit)?\): (.*)$", re.M)
+AUDIO_LINE = re.compile(r"^Audio: the last (\d+) s \((.+?), pid (\d+), (\d\d:\d\d:\d\d)\): callbacks (\d+), short (\d+), "
+                        r"empty (\d+), silence (\d+) ms, lock busy (\d+)", re.M)
+PROCESS_FIELDS = (("cpu", r"cpu (\d+(?:[.,]\d+)?) s"), ("p_cores", r"P cores (\d+(?:[.,]\d+)?)%"), ("waiting", r"waiting for a core (\d+(?:[.,]\d+)?) s"),
+                  ("ipc", r"ipc (\d+(?:[.,]\d+)?)"), ("threads", r"threads (\d+)"), ("switches", r"switches (-?\d+)"),
+                  ("faults", r"faults (-?\d+)"), ("syscalls", r"syscalls (-?\d+)"), ("mach_calls", r"mach calls (-?\d+)"),
+                  ("memory_mb", r"memory: (\d+) MB"), ("compressed_mb", r"compressed (\d+) MB"),
+                  ("graphics_mb", r"graphics (\d+) MB"), ("pageins", r"page-ins (\d+)"), ("read_mb", r"read (\d+) MB"),
+                  ("pressure", r"pressure (-?\d+)"), ("thermal", r"thermal (-?\d+)"),
+                  ("server_calls", r"wineserver: calls (\d+)"), ("server_s", r"wineserver: calls \d+ (\d+(?:[.,]\d+)?) s"),
+                  ("server_waits", r"\), waits (\d+)"), ("server_wait_s", r"\), waits \d+ (\d+(?:[.,]\d+)?) s"),
+                  ("server_cpu", r"its cpu (\d+(?:[.,]\d+)?) s"), ("recorder_us", r"recorder (\d+) us"))
+PROCESS_WAITS = re.compile(r"waits: fsync (\d+) (\d+(?:[.,]\d+)?) s, by address (\d+) (\d+(?:[.,]\d+)?) s, sleeps (\d+) (\d+(?:[.,]\d+)?) s, "
+                           r"yields (\d+) (\d+(?:[.,]\d+)?) s")
+PROCESS_FEX = re.compile(r"FEX: threads (\d+), jit (\d+(?:[.,]\d+)?) s, lock (\d+(?:[.,]\d+)?) s, blocks (\d+), smc (\d+), l1 misses (\d+), "
+                         r"disk-cache misses (\d+)")
+PROCESS_TOP = re.compile(r"wineserver: calls \d+ \d+(?:[.,]\d+)? s \(([^)]*)\)")
+
+
+def process_rows(log):
+    """The process and audio lines of a run's log, one row each: {"source": "process"|"audio",
+    "program", "pid", "at", "seconds", "log_line", ...}; a process row has the line's numbers by the
+    names of PROCESS_FIELDS, "exit" for a process's last line, "server_top": [[type, calls, s], ...],
+    "waits": {"fsync"|"address"|"sleeps"|"yields": [count, seconds]} and, when FEX kept its counters,
+    "fex": {...}; fields a line lacks are left out."""
+    rows = []
+    line, counted = 1, 0
+    for m in PROCESS_HEAD.finditer(log):
+        seconds, program, pid, at, exiting, body = m.groups()
+        line += log.count("\n", counted, m.start())
+        counted = m.start()
+        row = {"source": "process", "program": program, "pid": int(pid), "at": at, "seconds": int(seconds),
+               "log_line": line}
+        if exiting:
+            row["exit"] = True
+        for name, pattern in PROCESS_FIELDS:
+            found = re.search(pattern, body)
+            if found:
+                row[name] = _number(found[1])
+        top = PROCESS_TOP.search(body)
+        if top:
+            row["server_top"] = [[t, int(n), _number(s)] for t, n, s in re.findall(r"(\w+) (\d+) (\d+(?:[.,]\d+)?) s", top[1])]
+        waits = PROCESS_WAITS.search(body)
+        if waits:
+            v = waits.groups()
+            row["waits"] = {k: [int(v[2 * i]), _number(v[2 * i + 1])] for i, k in enumerate(("fsync", "address", "sleeps", "yields"))}
+        fex = PROCESS_FEX.search(body)
+        if fex:
+            row["fex"] = dict(zip(("threads", "jit_s", "lock_s", "blocks", "smc", "l1_misses", "disk_misses"),
+                                  (_number(v) for v in fex.groups())))
+        rows.append(row)
+    line, counted = 1, 0
+    for m in AUDIO_LINE.finditer(log):
+        seconds, program, pid, at, *numbers = m.groups()
+        line += log.count("\n", counted, m.start())
+        counted = m.start()
+        rows.append(dict({"source": "audio", "program": program, "pid": int(pid), "at": at, "seconds": int(seconds),
+                          "log_line": line},
+                         **dict(zip(("callbacks", "short", "empty", "silence_ms", "lock_busy"), map(int, numbers)))))
+    return rows
+
+
+def _median(values):
+    values = sorted(values)
+    return values[len(values) // 2] if values else None
+
+
+def process_summary(rows, game=None):
+    """What the process lines say of a run, for its line in results.jsonl: of the game's program
+    (the frames' program when known, else the one that used the most processor time), the median
+    of the cores it kept busy and of its time waiting for a core a second, the share it ran on
+    performance cores, its wineserver calls a second, the wineserver's and the other processes'
+    cores at their most, its memory at its most, the worst memory pressure and thermal state, FEX's
+    time translating, and the recorder's own time at its most; None without process lines."""
+    lines = [r for r in rows if r.get("source") == "process" and r.get("seconds")]
+    if not lines:
+        return None
+    if not game or not any(r["program"] == game for r in lines):
+        used = {}
+        for r in lines:
+            used[r["program"]] = used.get(r["program"], 0) + r.get("cpu", 0)
+        game = max(used, key=used.get)
+    own = [r for r in lines if r["program"] == game]
+    others = {}
+    for r in lines:
+        if r["program"] != game:
+            others[r["at"]] = others.get(r["at"], 0) + r.get("cpu", 0) / r["seconds"]
+    out = {"program": game, "lines": len(own),
+           "cores": _median([r.get("cpu", 0) / r["seconds"] for r in own]),
+           "waiting_per_s": _median([r.get("waiting", 0) / r["seconds"] for r in own]),
+           "waiting_per_s_worst": max(r.get("waiting", 0) / r["seconds"] for r in own),
+           "p_cores": _median([r["p_cores"] for r in own if "p_cores" in r]),
+           "server_calls_per_s": _median([r.get("server_calls", 0) / r["seconds"] for r in own]),
+           "server_cores_most": max(r.get("server_cpu", 0) / r["seconds"] for r in lines),
+           "helpers_cores_most": max(others.values()) if others else 0,
+           "memory_mb_most": max(r.get("memory_mb", 0) for r in own),
+           "pressure_most": max(r.get("pressure", 0) for r in lines),
+           "thermal_most": max(r.get("thermal", 0) for r in lines),
+           "recorder_us_most": max(r.get("recorder_us", 0) for r in lines)}
+    if any("fex" in r for r in own):
+        out["fex_jit_s"] = round(sum(r["fex"]["jit_s"] for r in own if "fex" in r), 2)
+    for k in ("cores", "waiting_per_s", "waiting_per_s_worst", "server_calls_per_s", "server_cores_most", "helpers_cores_most"):
+        out[k] = round(out[k], 3)
+    return out
+
+
+def audio_summary(rows):
+    """The audio lines of a run added up, or None when its sound never ran dry."""
+    lines = [r for r in rows if r.get("source") == "audio"]
+    if not lines:
+        return None
+    return {"lines": len(lines), **{k: sum(r[k] for r in lines) for k in ("short", "empty", "silence_ms", "lock_busy")}}
+
+
 def run_settings(env):
     """What a run started with, from the environment steamplay-run.sh gave "record": the lines of
     the game's env.<app id> (STEAMPLAY_GAME_ENV, its text; not the comments), whether macOS's
@@ -2496,6 +2613,13 @@ def cmd_record(appid, start, logfile):
     frames = frame_times(log, rows)
     if frames:
         entry["frames"] = frames
+    more = process_rows(log)
+    process, audio = process_summary(more, frames and frames.get("program")), audio_summary(more)
+    if process:
+        entry["process"] = process
+    if audio:
+        entry["audio"] = audio
+    rows = sorted(rows + more, key=lambda r: r["log_line"])
     kept = write_rows(appid, start, rows)
     if kept:
         entry["rows"] = kept
