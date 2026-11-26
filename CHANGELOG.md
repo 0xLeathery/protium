@@ -14,7 +14,8 @@ written. "Known problems" is a heading of our own, next to Keep a Changelog's.
 
 - A Vulkan game's log now says every half minute how long its frames took, as a Direct3D 10
   or 11 game's already did. The record of a run keeps the game's own frame times, not those
-  of a launcher drawing beside it, as Red Dead Redemption 2's does.
+  of a launcher drawing beside it, as Red Dead Redemption 2's does. These lines now also say
+  which program they are about and the time of day.
 - A game's folder now keeps the logs of its last five runs, not only of the one before
   (`steamplay-run.prev.log` is still the newest of them).
 

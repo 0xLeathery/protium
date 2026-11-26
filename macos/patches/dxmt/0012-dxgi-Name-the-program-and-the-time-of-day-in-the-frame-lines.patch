@@ -1,0 +1,123 @@
+dxgi: Name the program and the time of day in the frame lines.
+
+The three half-minute lines of patch 0010 said neither which program they were of nor when.
+A launcher's swap chain can draw beside the game's (Red Dead Redemption 2's does, with
+Direct3D 11, while the game draws with Vulkan), so its lines were read as the game's; and they
+could be put beside other logs, or a player's account of a session, only by counting lines.
+Each now says both, as win32u's Vulkan lines do:
+
+  DXGI: frame times (s2_sp64_ship.exe, 14:03:27): 89341 frames in 1440 s, median 15.0 ms, ...
+  DXGI: the last 30 s (s2_sp64_ship.exe, 14:03:27): 1650 frames, 3 over 50 ms: at 3.4 s (52 ms), ...
+  DXGI: a frame of the last 30 s (s2_sp64_ship.exe, 14:03:27): 4.6 command buffers, ...
+
+The program is the executable's file name, read once; the time is local time, read once for
+the three lines. "macos/steamplay record" reads these and 0010's lines alike.
+
+LOCAL TO THIS PORT, NOT FOR DXMT. Applied by macos/build-dxmt.sh to
+github.com/athei/dxmt at 01e59e9bde030f105937f249afaac92ada01b4d7, after 0001 to 0011.
+Written with an AI assistant (Claude). DXMT does not accept contributions made or
+co-authored by AI (its CONTRIBUTING.md), so this patch must not be sent to it as a pull
+request.
+---
+diff --git a/src/d3d11/d3d11_swapchain.cpp b/src/d3d11/d3d11_swapchain.cpp
+--- a/src/d3d11/d3d11_swapchain.cpp
++++ b/src/d3d11/d3d11_swapchain.cpp
+@@ -28,7 +28,9 @@
+ #include <cfloat>
+ #include <chrono>
+ #include <cstdio>
++#include <ctime>
+ #include <format>
++#include <string>
+ 
+ /**
+ Ref: https://learn.microsoft.com/en-us/windows/win32/api/dxgi1_3/nf-dxgi1_3-idxgiswapchain2-setmaximumframelatency
+@@ -294,7 +296,7 @@
+   };
+ 
+   ~MTLD3D11SwapChain() {
+-    SayFrameTimes();
++    SayFrameTimes(Head());
+     // First, so that Alt+Enter no longer reaches this swap chain
+     Com<IMTLDXGIFactoryPrivate> factory_private;
+     if (SUCCEEDED(factory_->QueryInterface(IID_PPV_ARGS(&factory_private))))
+@@ -1414,9 +1416,10 @@
+     frame_last_ = now;
+     if (now - frame_said_ >= std::chrono::seconds(30)) {
+       frame_said_ = now;
+-      SayFrameTimes();
+-      SayWindow();
+-      SayWaits();
++      const std::string head = Head();
++      SayFrameTimes(head);
++      SayWindow(head);
++      SayWaits(head);
+       window_frames_ = 0;
+       window_slow_count_ = 0;
+     }
+@@ -1433,14 +1436,27 @@
+     return frame_worst_ms_;
+   }
+ 
+-  void SayFrameTimes() const {
++  // " (<program>, HH:MM:SS)" after the lines' name: which program they are of, as a launcher's swap
++  // chain can draw beside the game's, and when they were written, so that they can be put beside
++  // other logs; read once for the three lines of a half minute
++  static std::string Head() {
++    static const std::string program = env::getExeName();
++    std::time_t now = std::time(nullptr);
++    std::tm *local = std::localtime(&now);
++    char clock_text[16];
++    if (local && std::strftime(clock_text, sizeof(clock_text), "%H:%M:%S", local))
++      return " (" + program + ", " + clock_text + ")";
++    return " (" + program + ")";
++  }
++
++  void SayFrameTimes(const std::string &head) const {
+     if (!frame_count_)
+       return;
+-    char text[200];
++    char text[512];
+     snprintf(text, sizeof(text),
+-             "DXGI: frame times: %llu frames in %llu s, median %.1f ms, 95%% %.1f ms, 99%% %.1f ms, "
++             "DXGI: frame times%s: %llu frames in %llu s, median %.1f ms, 95%% %.1f ms, 99%% %.1f ms, "
+              "worst %.1f ms, %llu over 50 ms",
+-             (unsigned long long)frame_count_, (unsigned long long)(frame_total_ms_ / 1000.0), FrameTimeAt(0.50),
++             head.c_str(), (unsigned long long)frame_count_, (unsigned long long)(frame_total_ms_ / 1000.0), FrameTimeAt(0.50),
+              FrameTimeAt(0.95), FrameTimeAt(0.99), frame_worst_ms_, (unsigned long long)frame_slow_);
+     Logger::info(text);
+   }
+@@ -1466,7 +1482,7 @@
+     waits_.encode_ns += ns(frame.encode_prepare_interval + frame.encode_flush_interval);
+   }
+ 
+-  void SayWaits() const {
++  void SayWaits(const std::string &head) const {
+     double frames = double(waits_.frames.exchange(0));
+     double buffers = double(waits_.command_buffers.exchange(0)), syncs = double(waits_.syncs.exchange(0));
+     double sync_ms = waits_.sync_ns.exchange(0) / 1e6, stalls = double(waits_.stalls.exchange(0));
+@@ -1474,18 +1490,18 @@
+     double commit_ms = waits_.commit_ns.exchange(0) / 1e6, encode_ms = waits_.encode_ns.exchange(0) / 1e6;
+     if (frames < 1)
+       return;
+-    char text[400];
++    char text[720];
+     snprintf(text, sizeof(text),
+-             "DXGI: a frame of the last 30 s: %.1f command buffers, %.2f waits for the GPU (%.2f ms), %.2f query "
++             "DXGI: a frame of the last 30 s%s: %.1f command buffers, %.2f waits for the GPU (%.2f ms), %.2f query "
+              "flushes, %.2f ms for an earlier frame, %.2f ms for a drawable, commit %.2f ms, encoding %.2f ms",
+-             buffers / frames, syncs / frames, sync_ms / frames, stalls / frames, latency_ms / frames,
++             head.c_str(), buffers / frames, syncs / frames, sync_ms / frames, stalls / frames, latency_ms / frames,
+              drawable_ms / frames, commit_ms / frames, encode_ms / frames);
+     Logger::info(text);
+   }
+ 
+-  void SayWindow() const {
+-    char text[800];
+-    int used = snprintf(text, sizeof(text), "DXGI: the last 30 s: %llu frames, %llu over 50 ms",
++  void SayWindow(const std::string &head) const {
++    char text[1100];
++    int used = snprintf(text, sizeof(text), "DXGI: the last 30 s%s: %llu frames, %llu over 50 ms", head.c_str(),
+                         (unsigned long long)window_frames_, (unsigned long long)window_slow_count_);
+     for (size_t i = 0; i < std::min(window_slow_count_, kSlowFrames) && used < int(sizeof(text)) - 32; i++)
+       used += snprintf(text + used, sizeof(text) - used, "%s%.1f s (%.0f ms)", i ? ", " : ": at ",
