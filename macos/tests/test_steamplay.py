@@ -486,6 +486,16 @@ class RecorderRows(unittest.TestCase):
         row, = sp.recorder_rows(log)
         self.assertEqual((row["run"]["median"], row["window"]["slow_at"][0]), (16.5, [3.4, 52]))
 
+    def test_a_half_minute_without_its_frame_times_line_does_not_join_the_row_before(self):
+        # a swap chain goes (its closing line), and a new one has counted no frame when its first
+        # half minute is said: DXMT then writes the window line alone
+        log = ("info:  DXGI: frame times (G.exe, 10:00:05): 1220 frames in 17 s, median 13.5 ms, 95% 21.5 ms, "
+               "99% 33.0 ms, worst 52.0 ms, 1 over 50 ms\n"
+               "info:  DXGI: the last 30 s (G.exe, 10:00:40): 0 frames, 0 over 50 ms\n")
+        rows = sp.recorder_rows(log)
+        self.assertEqual([sorted(r) for r in rows], [["api", "at", "log_line", "program", "run"],
+                                                     ["api", "at", "log_line", "program", "window"]])
+
     def test_a_closing_line_is_a_row_of_its_own(self):
         log = self.OLD_DXGI + self.OLD_DXGI.splitlines(True)[0].replace("54000", "54100")
         rows = sp.recorder_rows(log)

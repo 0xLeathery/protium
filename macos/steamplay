@@ -2374,7 +2374,10 @@ def recorder_rows(log):
         values = dict(zip(spec[1], (_number(v) for v in fields.groups())))
         line += log.count("\n", counted, m.start())
         counted = m.start()
-        key = (api, program)
+        # the three lines of a half minute carry the same time, read once for them: by it a
+        # half minute written without its "frame times" line (none when no frame was counted
+        # yet) does not join the row of a swap chain that went before
+        key = (api, program, at)
         row = open_rows.get(key)
         if kind == "frame times" or row is None or (kind == "the last 30 s" and "window" in row):
             row = {"api": api.lower(), "program": program, "at": at, "log_line": line}
