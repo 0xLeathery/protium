@@ -2448,13 +2448,35 @@ def run_settings(env):
             "winedebug": env.get("WINEDEBUG", ""), "retina": env.get("WINE_MAC_RETINA", "")}
 
 
+def own_log(logfile, inode):
+    """The path of the run's own log, the file steamplay-run.sh made for it (STEAMPLAY_LOG_INODE): a
+    start of the game before this run had quite ended moves it aside to .prev.log and on, and the
+    name then holds the new run's. logfile itself when no inode is given; None when the file is gone."""
+    if not inode:
+        return logfile
+    folder, name = os.path.split(logfile)
+    base = name[:-4] if name.endswith(".log") else name
+    try:
+        moved = sorted(n for n in os.listdir(folder or ".") if n.startswith(base + ".prev") and n.endswith(".log"))
+    except OSError:
+        moved = []
+    for path in [logfile] + [os.path.join(folder, n) for n in moved]:
+        try:
+            if os.stat(path).st_ino == int(inode):
+                return path
+        except (OSError, ValueError):
+            pass
+    return None
+
+
 def cmd_record(appid, start, logfile):
     """Called by steamplay-run.sh when a game's Wine session has ended: how long it ran and how it
     ended, from the log, as steamplay-try reads it."""
+    path = own_log(logfile, os.environ.get("STEAMPLAY_LOG_INODE"))
     try:
-        with open(logfile, "rb") as f:
+        with open(path, "rb") as f:
             log = f.read().decode("utf-8", errors="replace")
-    except OSError:
+    except (OSError, TypeError):
         log = ""
     if "wine: abort() in native code" in log:
         end = "abort"

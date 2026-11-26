@@ -525,6 +525,27 @@ class RecorderRows(unittest.TestCase):
         self.assertNotIn("20260101-000000.jsonl", names)
         self.assertIn(name, names)
 
+    def test_a_run_reads_its_own_log_after_a_later_start_moved_it_aside(self):
+        # the Rockstar launcher was still closing when the game was started again: that start moved
+        # this run's log to .prev.log, and the name held the new run's, which had no frames yet
+        folder = tempfile.mkdtemp(dir=TEMP)
+        log = os.path.join(folder, "steamplay-run.log")
+        with open(log, "w") as f:
+            f.write(self.OLD_DXGI)
+        inode = os.stat(log).st_ino
+        os.rename(log, os.path.join(folder, "steamplay-run.prev.log"))
+        with open(log, "w") as f:
+            f.write("fsync: up and running.\n")
+        self.assertEqual(sp.own_log(log, str(inode)), os.path.join(folder, "steamplay-run.prev.log"))
+        self.assertEqual(sp.own_log(log, None), log)
+        with mock.patch.dict(os.environ, {"PROTIUM_VERSION": "0.0.0-test", "STEAMPLAY_LOG_INODE": str(inode)}):
+            sp.cmd_record(434343, 1795665000, log)
+        with open(sp.RESULTS) as f:
+            entry = json.loads(f.read().splitlines()[-1])
+        self.assertEqual(entry["frames"]["count"], 54000)
+        os.remove(os.path.join(folder, "steamplay-run.prev.log"))      # gone: no frames, not the new run's
+        self.assertIsNone(sp.own_log(log, str(inode)))
+
     def test_a_run_records_what_it_started_with(self):
         env = {"STEAMPLAY_GAME_ENV": "# 2026-11-24: a note\nFEX_HARDWARE_TSO_OFF=none\n\n  FEX_SMCCHECKS=none  \n",
                "MTL_HUD_ENABLED": "1", "WINEDEBUG": "+loaddll,+msgbox", "WINE_MAC_RETINA": "auto"}

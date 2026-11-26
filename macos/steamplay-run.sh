@@ -249,6 +249,12 @@ for i in 4 3 2; do
 done
 if [ -f "$prev_base.prev.log" ]; then mv -f "$prev_base.prev.log" "$prev_base.prev2.log"; fi
 if [ -f "$logfile" ]; then mv -f "$logfile" "$prev_base.prev.log"; fi
+# This session's log is made now, so that the watcher and the record below know it by its file and
+# not by its name: when the game is started again before this session has quite ended (the Rockstar
+# launcher takes a minute and more to close after its game), that start moves this log aside, and
+# by name they would read the new one. Wine's output, opened with > below, truncates this same file.
+: >"$logfile"
+log_inode=$(stat -f %i "$logfile")
 # where each module is loaded, so that the PE addresses of a crash can be given their DLLs, and
 # what a message box says, which is often all a game tells of what it could not do
 export WINEDEBUG="${WINEDEBUG:-+loaddll,+msgbox}"
@@ -268,13 +274,22 @@ hang=${logfile%.log}.hang
 rm -f "$hang".*.txt
 (
     game_dir_win="Z:${game_dir//\//\\}\\"
+    # this session's log, wherever a later start of the game has moved it
+    own_log() {
+        local f
+        for f in "$logfile" "$prev_base".prev*.log; do
+            [ "$(stat -f %i "$f" 2>/dev/null)" = "$log_inode" ] && { echo "$f"; return 0; }
+        done
+        return 1
+    }
     seen=0
     while sleep 2 && kill -0 $$ 2>/dev/null; do
-        size=$(stat -f %z "$logfile" 2>/dev/null) || continue
+        log_now=$(own_log) || continue
+        size=$(stat -f %z "$log_now" 2>/dev/null) || continue
         [ "$size" -ge "$seen" ] || seen=0
         from=$((seen > 4096 ? (seen - 4096) / 65536 : 0))
         seen=$size
-        grep -qa 'RtlpWaitForCriticalSection.*wait timed out' < <(dd if="$logfile" bs=65536 skip=$from 2>/dev/null) || continue
+        grep -qa 'RtlpWaitForCriticalSection.*wait timed out' < <(dd if="$log_now" bs=65536 skip=$from 2>/dev/null) || continue
         for pid in $(ps -axo pid=,command= | grep -F -- "$game_dir_win" | grep -v ' grep ' | awk '{print $1}'); do
             /usr/bin/sample "$pid" 3 -file "$hang.$pid.txt" &
         done
@@ -290,7 +305,7 @@ started=$(date +%s)
 ("$PROTIUM_PYTHON" "$SCRIPT_DIR/steamplay" version --notify) </dev/null >/dev/null 2>&1 &
 (
     while kill -0 $$ 2>/dev/null; do sleep 2; done
-    STEAMPLAY_GAME_ENV=$game_env_text "$PROTIUM_PYTHON" "$SCRIPT_DIR/steamplay" record "$appid" "$started" "$logfile"
+    STEAMPLAY_GAME_ENV=$game_env_text STEAMPLAY_LOG_INODE=$log_inode "$PROTIUM_PYTHON" "$SCRIPT_DIR/steamplay" record "$appid" "$started" "$logfile"
 ) </dev/null >/dev/null 2>&1 &
 cd "$(dirname "$exe")"
 # steam.exe starts the game by its full Windows path (Wine's Z: drive is the host's /). It is
