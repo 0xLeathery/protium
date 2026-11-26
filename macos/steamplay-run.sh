@@ -140,7 +140,11 @@ fi
 export GIO_MODULE_DIR=${GIO_MODULE_DIR:-$WINE_INSTALL/lib/external/gio/modules}
 # One game's own settings, from env.<app id> next to that file (see the head of this file)
 game_env="${STEAMPLAY_HOME:-$HOME/Library/Application Support/SteamPlay}/env.$appid"
+# its text goes with the record of the run (not exported, so the game never sees it): telling
+# whether a change made a game run better needs to know what the run started with
+game_env_text=
 if [ -f "$game_env" ]; then
+    game_env_text=$(cat "$game_env")
     set -a
     . "$game_env"
     set +a
@@ -286,7 +290,7 @@ started=$(date +%s)
 ("$PROTIUM_PYTHON" "$SCRIPT_DIR/steamplay" version --notify) </dev/null >/dev/null 2>&1 &
 (
     while kill -0 $$ 2>/dev/null; do sleep 2; done
-    "$PROTIUM_PYTHON" "$SCRIPT_DIR/steamplay" record "$appid" "$started" "$logfile"
+    STEAMPLAY_GAME_ENV=$game_env_text "$PROTIUM_PYTHON" "$SCRIPT_DIR/steamplay" record "$appid" "$started" "$logfile"
 ) </dev/null >/dev/null 2>&1 &
 cd "$(dirname "$exe")"
 # steam.exe starts the game by its full Windows path (Wine's Z: drive is the host's /). It is

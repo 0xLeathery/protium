@@ -515,6 +515,13 @@ class RecorderRows(unittest.TestCase):
         self.assertNotIn("20260101-000000.jsonl", names)
         self.assertIn(name, names)
 
+    def test_a_run_records_what_it_started_with(self):
+        env = {"STEAMPLAY_GAME_ENV": "# 2026-11-24: a note\nFEX_HARDWARE_TSO_OFF=none\n\n  FEX_SMCCHECKS=none  \n",
+               "MTL_HUD_ENABLED": "1", "WINEDEBUG": "+loaddll,+msgbox", "WINE_MAC_RETINA": "auto"}
+        self.assertEqual(sp.run_settings(env), {"env": ["FEX_HARDWARE_TSO_OFF=none", "FEX_SMCCHECKS=none"],
+                                                "hud": True, "winedebug": "+loaddll,+msgbox", "retina": "auto"})
+        self.assertEqual(sp.run_settings({}), {"env": [], "hud": False, "winedebug": "", "retina": ""})
+
 
 import datetime
 import time

@@ -2435,6 +2435,16 @@ def write_rows(appid, start, rows):
     return os.path.join("runs", str(appid), name)
 
 
+def run_settings(env):
+    """What a run started with, from the environment steamplay-run.sh gave "record": the lines of
+    the game's env.<app id> (STEAMPLAY_GAME_ENV, its text; not the comments), whether macOS's
+    Metal HUD drew over the game (its overlay is in every frame time), Wine's debug channels and
+    the Retina setting, which sets how many pixels the game draws."""
+    lines = [s.strip() for s in env.get("STEAMPLAY_GAME_ENV", "").splitlines()]
+    return {"env": [s for s in lines if s and not s.startswith("#")], "hud": env.get("MTL_HUD_ENABLED") == "1",
+            "winedebug": env.get("WINEDEBUG", ""), "retina": env.get("WINE_MAC_RETINA", "")}
+
+
 def cmd_record(appid, start, logfile):
     """Called by steamplay-run.sh when a game's Wine session has ended: how long it ran and how it
     ended, from the log, as steamplay-try reads it."""
@@ -2455,7 +2465,8 @@ def cmd_record(appid, start, logfile):
                     | ({"dotnet"} if re.search(r'\\\\mscoree\.dll" at ', log, re.I) else set()))
     entry = {"app": appid, "time": time.strftime("%Y-%m-%dT%H:%M:%S"), "by": "run",
              "seconds": max(0, int(time.time()) - start), "end": end, "loaded": loaded,
-             "protium": os.environ.get("PROTIUM_VERSION") or protium_version()}
+             "protium": os.environ.get("PROTIUM_VERSION") or protium_version(),
+             "settings": run_settings(os.environ)}
     rows = recorder_rows(log)
     frames = frame_times(log, rows)
     if frames:
