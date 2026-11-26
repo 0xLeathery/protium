@@ -76,6 +76,13 @@
 #      a display can be driven in, as many for B8G8R8X8 and R10G10B10_XR_BIAS_A2, which Metal
 #      cannot present, as for R8G8B8A8 (DXMT listed none for them before
 #      macos/patches/dxmt/0004)
+#  22  the process line: process_stats_test.exe, x86_64 and i386, with WINE_PROCESS_STATS=5, does
+#      work of known amounts, and its own "Process:" lines add up to it: at least its 26000
+#      wineserver calls (registry reads), its 40000 yields, its 52 sleeps for 9 s, its 100 timed
+#      fsync waits and its 50 waits by address (Wine's own locks add to both), time waiting for a
+#      core while 2 x ncpu threads spin, the 256 MB it holds, and a last line marked "exit"; the
+#      line costs at most 500 us; with FEX_PROFILESTATS=1 it has FEX's part; without the variable
+#      there is no line
 # The build comes first ("build", which takes long and can be left out with CHECK_ITEMS); the test
 # programs are compiled on every run.
 #
@@ -133,7 +140,7 @@ mkdir -p "$EVIDENCE_DIR"
 RESULTS=()
 FAILED=0
 TODO=0
-CHECK_ITEMS=${CHECK_ITEMS:-"build 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21"}
+CHECK_ITEMS=${CHECK_ITEMS:-"build 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22"}
 want() { case " $CHECK_ITEMS " in *" $1 "*) return 0 ;; esac; return 1; }
 pass() { RESULTS+=("PASS  item $1: $2"); echo "PASS  item $1: $2"; }
 fail() { RESULTS+=("FAIL  item $1: $2"); echo "FAIL  item $1: $2"; FAILED=1; }
@@ -207,6 +214,7 @@ if true; then
         cc $a thread_context_test_$a.exe thread_context_test.c
         cc $a sync_test_$a.exe sync_test.c -luser32 -lntdll
         cc $a thread_info_test_$a.exe thread_info_test.c
+        cc $a process_stats_test_$a.exe process_stats_test.c -ladvapi32 -lsynchronization
     done
     cc x86_64 vprot_run_test_x86_64.exe vprot_run_test.c
     cc x86_64 vram_budget_test.exe vram_budget_test.c -ldxgi -ldxguid -luuid
@@ -228,8 +236,8 @@ if true; then
     "$FFMPEG_CLI" -loglevel error -y -f lavfi -i color=c=0x3366cc:s=320x240:r=30:d=1 -f lavfi -i sine=f=440:d=1 \
         -c:v libvpx-vp9 -pix_fmt yuv420p -c:a libopus -shortest "$T/vp9_opus.webm" >>"$T/build.log" 2>&1
     n=$(ls "$T"/*.exe 2>/dev/null | wc -l | tr -d ' ')
-    [ "$n" -eq 32 ] && [ -s "$T/h264_aac.mp4" ] && [ -s "$T/vp9_opus.webm" ] \
-        && pass programs "32 test programs and 2 video files ($T)" || fail programs "$n of 32 test programs ($T/build.log)"
+    [ "$n" -eq 34 ] && [ -s "$T/h264_aac.mp4" ] && [ -s "$T/vp9_opus.webm" ] \
+        && pass programs "34 test programs and 2 video files ($T)" || fail programs "$n of 34 test programs ($T/build.log)"
 fi
 
 if [ ! -x "$WINE" ]; then
@@ -374,6 +382,54 @@ if want 21; then
     else
         fail 21 "display_modes_test: '${line:-$(tail -1 "$EVIDENCE_DIR/item21.out")}' ($EVIDENCE_DIR/item21.out)"
     fi
+fi
+
+if want 22; then
+    # with fsync, as games run (item 15's way): the timed waits go to fsync, not to the server
+    ok=yes; lines=""
+    WINEPREFIX=$PREFIX "$SERVER" -k >/dev/null 2>&1
+    WINEFSYNC=1 WINEPREFIX=$PREFIX run_timeout 30 "$SERVER" -p10 >"$EVIDENCE_DIR/item22-server.err" 2>&1
+    for run in x86_64 i686 x86_64-fex; do
+        a=${run%-fex}; log=$EVIDENCE_DIR/item22-$run
+        WINEFSYNC=1 WINE_PROCESS_STATS=5 FEX_PROFILESTATS=$([ $run = x86_64-fex ] && echo 1 || echo 0) WINEPREFIX=$PREFIX \
+            run_timeout "$RUN_TIMEOUT" "$WINE" "$T/process_stats_test_$a.exe" 6 >"$log.out" 2>"$log.err" </dev/null
+        verdict=$(/usr/bin/python3 -I - "$log.err" "process_stats_test_$a.exe" $([ $run = x86_64-fex ] && echo fex) <<'EOF'
+import re, sys
+log, exe, fex = sys.argv[1], sys.argv[2], len(sys.argv) > 3
+lines = [l for l in open(log, errors="replace") if l.startswith("Process: ") and "(%s," % exe in l]
+s = {k: 0.0 for k in ("calls", "yields", "sleeps", "sleep_s", "fsync", "fsync_s", "address", "address_s", "waiting")}
+memory = recorder = 0; fex_blocks = -1
+for l in lines:
+    s["calls"] += int(re.search(r"wineserver: calls (\d+)", l)[1])
+    s["waiting"] += float(re.search(r"waiting for a core ([\d.]+) s", l)[1])
+    w = re.search(r"waits: fsync (\d+) ([\d.]+) s, by address (\d+) ([\d.]+) s, sleeps (\d+) ([\d.]+) s, yields (\d+)", l)
+    for k, i in (("fsync", 1), ("fsync_s", 2), ("address", 3), ("address_s", 4), ("sleeps", 5), ("sleep_s", 6), ("yields", 7)):
+        s[k] += float(w[i])
+    memory = max(memory, int(re.search(r"memory: (\d+) MB", l)[1]))
+    recorder = max(recorder, int(re.search(r"recorder (\d+) us", l)[1]))
+    f = re.search(r"; FEX: threads \d+, jit [\d.]+ s, lock [\d.]+ s, blocks (\d+)", l)
+    if f: fex_blocks = max(fex_blocks, 0) + int(f[1])
+want = [("26000 calls", s["calls"] >= 26000), ("40000 yields", 40000 <= s["yields"] <= 41000),
+        ("52 sleeps for 9 s", s["sleeps"] >= 52 and s["sleep_s"] >= 8.5), ("100 fsync waits for 2 s", s["fsync"] >= 100 and s["fsync_s"] >= 2.0),
+        ("50 waits by address for 1 s", s["address"] >= 50 and s["address_s"] >= 1.0), ("waiting for a core", s["waiting"] >= 4.0),
+        ("256 MB", memory >= 256), ("an exit line", any(", exit)" in l for l in lines)), ("<= 500 us a line", 0 < recorder <= 500)]
+if fex: want.append(("FEX's part", fex_blocks > 0))
+missing = [w for w, good in want if not good]
+print("%s %d lines, %d calls, %d yields, %d sleeps %.1f s, fsync %d %.1f s, by address %d %.1f s, waiting %.1f s, %d MB, %d us%s%s" % (
+    "no" if missing else "ok", len(lines), s["calls"], s["yields"], s["sleeps"], s["sleep_s"], s["fsync"], s["fsync_s"], s["address"],
+    s["address_s"], s["waiting"], memory, recorder, ", FEX blocks %d" % fex_blocks if fex else "", "; missing: " + ", ".join(missing) if missing else ""))
+EOF
+)
+        [ "${verdict%% *}" = ok ] || ok=no
+        lines="$lines $run: ${verdict#* };"
+    done
+    WINEFSYNC=1 WINEPREFIX=$PREFIX run_timeout "$RUN_TIMEOUT" "$WINE" "$T/process_stats_test_x86_64.exe" 0 \
+        >"$EVIDENCE_DIR/item22-off.out" 2>"$EVIDENCE_DIR/item22-off.err" </dev/null
+    WINEPREFIX=$PREFIX "$SERVER" -k >/dev/null 2>&1
+    off=$(grep -a -c '^Process: ' "$EVIDENCE_DIR/item22-off.err")
+    [ "$off" = 0 ] || ok=no
+    lines="$lines without WINE_PROCESS_STATS: $off lines"
+    [ $ok = yes ] && pass 22 "process line:$lines ($EVIDENCE_DIR/item22-*)" || fail 22 "process line:$lines ($EVIDENCE_DIR/item22-*)"
 fi
 
 if want 3; then
