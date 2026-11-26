@@ -26,7 +26,9 @@ dlls/uiautomationcore/uia_client.c
 dlls/win32u/font.c
 dlls/win32u/message.c
 dlls/win32u/opengl.c
+dlls/win32u/sysparams.c
 dlls/win32u/vulkan.c
+dlls/win32u/win32u_private.h
 dlls/winebus.sys/bus_iohid.c
 dlls/winebus.sys/bus_sdl.c
 dlls/winebus.sys/unix_private.h
