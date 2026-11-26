@@ -24,6 +24,7 @@ dlls/ntdll/unix/virtual.c
 dlls/ntdll/unwind.c
 dlls/uiautomationcore/uia_client.c
 dlls/win32u/font.c
+dlls/win32u/input.c
 dlls/win32u/message.c
 dlls/win32u/opengl.c
 dlls/win32u/sysparams.c

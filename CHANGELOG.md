@@ -21,6 +21,8 @@ written. "Known problems" is a heading of our own, next to Keep a Changelog's.
 - Vulkan games are no longer told that a screen can show HDR when macOS says it can't. On
   such a screen Red Dead Redemption 2 switched its HDR picture on, which macOS has to squeeze
   into normal range.
+- Red Dead Redemption 2's log no longer fills with one line about keyboard layouts, written
+  110 times a second, which made up nearly all of it.
 
 ## [0.4.2] - 2026-11-25
 
