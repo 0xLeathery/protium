@@ -246,13 +246,23 @@ log "app $appid: $exe (log: $logfile)"
 # A game that hangs says nothing of where. Wine does say when a thread has waited a minute for a
 # lock that another one holds: at that, where every thread of the game's processes is gets
 # saved next to the log (macOS's sample), once per run. The watcher goes when this process,
-# which becomes Wine's, does.
+# which becomes Wine's, does. It reads only what the log gained since its last look, from the
+# 64 KB block that holds the last 4 KB it saw, for a line written in two parts: a game's log can
+# grow to tens of MB, and reading all of it every two seconds came to 38 GB in an hour of Red
+# Dead Redemption 2. dd, because macOS's tail -c +N takes 20 times longer for the same bytes;
+# not a pipe, because with pipefail dd's broken pipe when grep finds the line would count as no
+# match.
 hang=${logfile%.log}.hang
 rm -f "$hang".*.txt
 (
     game_dir_win="Z:${game_dir//\//\\}\\"
+    seen=0
     while sleep 2 && kill -0 $$ 2>/dev/null; do
-        grep -qa 'RtlpWaitForCriticalSection.*wait timed out' "$logfile" 2>/dev/null || continue
+        size=$(stat -f %z "$logfile" 2>/dev/null) || continue
+        [ "$size" -ge "$seen" ] || seen=0
+        from=$((seen > 4096 ? (seen - 4096) / 65536 : 0))
+        seen=$size
+        grep -qa 'RtlpWaitForCriticalSection.*wait timed out' < <(dd if="$logfile" bs=65536 skip=$from 2>/dev/null) || continue
         for pid in $(ps -axo pid=,command= | grep -F -- "$game_dir_win" | grep -v ' grep ' | awk '{print $1}'); do
             /usr/bin/sample "$pid" 3 -file "$hang.$pid.txt" &
         done
