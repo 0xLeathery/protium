@@ -11,7 +11,9 @@ Each now says both, as win32u's Vulkan lines do:
   DXGI: a frame of the last 30 s (s2_sp64_ship.exe, 14:03:27): 4.6 command buffers, ...
 
 The program is the executable's file name, read once; the time is local time, read once for
-the three lines. "macos/steamplay record" reads these and 0010's lines alike.
+the three lines. The name is cut at 160 bytes, and the longest line stays under 1000 bytes:
+Wine's debug output raises an exception for a line of 1020 bytes or more instead of cutting
+it. "macos/steamplay record" reads these and 0010's lines alike.
 
 LOCAL TO THIS PORT, NOT FOR DXMT. Applied by macos/build-dxmt.sh to
 github.com/athei/dxmt at 01e59e9bde030f105937f249afaac92ada01b4d7, after 0001 to 0011.
@@ -55,16 +57,27 @@ diff --git a/src/d3d11/d3d11_swapchain.cpp b/src/d3d11/d3d11_swapchain.cpp
        window_frames_ = 0;
        window_slow_count_ = 0;
      }
-@@ -1433,14 +1436,27 @@
+@@ -1433,14 +1436,38 @@
      return frame_worst_ms_;
    }
  
 -  void SayFrameTimes() const {
 +  // " (<program>, HH:MM:SS)" after the lines' name: which program they are of, as a launcher's swap
 +  // chain can draw beside the game's, and when they were written, so that they can be put beside
-+  // other logs; read once for the three lines of a half minute
++  // other logs; read once for the three lines of a half minute. The name is cut at 160 bytes, at
++  // the start of a UTF-8 character, so that no line reaches Wine's limit of 1020 bytes, past which
++  // its debug output raises an exception instead of cutting the line.
 +  static std::string Head() {
-+    static const std::string program = env::getExeName();
++    static const std::string program = [] {
++      std::string name = env::getExeName();
++      if (name.size() > 160) {
++        size_t cut = 160;
++        while (cut && (static_cast<unsigned char>(name[cut]) & 0xC0) == 0x80)
++          cut--;
++        name.resize(cut);
++      }
++      return name;
++    }();
 +    std::time_t now = std::time(nullptr);
 +    std::tm *local = std::localtime(&now);
 +    char clock_text[16];
@@ -87,7 +100,7 @@ diff --git a/src/d3d11/d3d11_swapchain.cpp b/src/d3d11/d3d11_swapchain.cpp
               FrameTimeAt(0.95), FrameTimeAt(0.99), frame_worst_ms_, (unsigned long long)frame_slow_);
      Logger::info(text);
    }
-@@ -1466,7 +1482,7 @@
+@@ -1466,7 +1493,7 @@
      waits_.encode_ns += ns(frame.encode_prepare_interval + frame.encode_flush_interval);
    }
  
@@ -96,7 +109,7 @@ diff --git a/src/d3d11/d3d11_swapchain.cpp b/src/d3d11/d3d11_swapchain.cpp
      double frames = double(waits_.frames.exchange(0));
      double buffers = double(waits_.command_buffers.exchange(0)), syncs = double(waits_.syncs.exchange(0));
      double sync_ms = waits_.sync_ns.exchange(0) / 1e6, stalls = double(waits_.stalls.exchange(0));
-@@ -1474,18 +1490,18 @@
+@@ -1474,18 +1501,18 @@
      double commit_ms = waits_.commit_ns.exchange(0) / 1e6, encode_ms = waits_.encode_ns.exchange(0) / 1e6;
      if (frames < 1)
        return;
@@ -116,7 +129,7 @@ diff --git a/src/d3d11/d3d11_swapchain.cpp b/src/d3d11/d3d11_swapchain.cpp
 -    char text[800];
 -    int used = snprintf(text, sizeof(text), "DXGI: the last 30 s: %llu frames, %llu over 50 ms",
 +  void SayWindow(const std::string &head) const {
-+    char text[1100];
++    char text[1000]; /* with "info:  " and the newline, under Wine's 1020 bytes a line */
 +    int used = snprintf(text, sizeof(text), "DXGI: the last 30 s%s: %llu frames, %llu over 50 ms", head.c_str(),
                          (unsigned long long)window_frames_, (unsigned long long)window_slow_count_);
      for (size_t i = 0; i < std::min(window_slow_count_, kSlowFrames) && used < int(sizeof(text)) - 32; i++)
