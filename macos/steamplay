@@ -2001,7 +2001,9 @@ def cmd_hires(state):
 #                                          update" (so no request ever names a game), and, for an
 #                                          installed game, its files: the graphics API, engine,
 #                                          .NET, anti-cheat and embedded browser
-#   what happened when it ran              results.jsonl, a line per run and per verdict given
+#   what happened when it ran              results.jsonl, a line per run and per verdict given;
+#                                          runs/<app id>/<start>.jsonl, the frame recorder's half
+#                                          minutes of each run
 #   what happened to games built alike     results of the games with the same engine and API
 
 DATA_DIR = os.path.join(HOME_DIR, "data")
@@ -2317,38 +2319,120 @@ def add_result(entry):
         f.write(json.dumps(entry, sort_keys=True) + "\n")
 
 
-# What DXMT says of a game's frames (macos/patches/dxmt/0010): the time from one Present to the
-# next, counted inside the game, which costs it nothing a recorder beside it would. It says so
-# again every half minute, each line for the whole run so far, and the last line is the run's.
-FRAMES_LINE = re.compile(r"DXGI: frame times: (\d+) frames in (\d+) s, median ([\d.]+) ms, 95% ([\d.]+) ms, "
-                         r"99% ([\d.]+) ms, worst ([\d.]+) ms, (\d+) over 50 ms")
-# The same of a Vulkan program, by Wine's win32u, with the program's name: Direct3D 12 games through
-# vkd3d-proton and Vulkan games such as Red Dead Redemption 2, whose launcher draws with Direct3D 11
-# beside them, so that DXMT's lines there are the launcher's.
-VULKAN_FRAMES_LINE = re.compile(r"Vulkan: frame times \(([^)]*)\): (\d+) frames in (\d+) s, median ([\d.]+) ms, "
-                                r"95% ([\d.]+) ms, 99% ([\d.]+) ms, worst ([\d.]+) ms, (\d+) over 50 ms")
+# The frame recorder: the time from one present to the next, counted inside the game, which costs
+# it nothing a recorder beside it would. Every half minute, for each program, DXMT writes three
+# DXGI lines for Direct3D 10 and 11 (macos/patches/dxmt/0010, 0012), and Wine's win32u three
+# Vulkan lines for Vulkan and Direct3D 12 games (as Red Dead Redemption 2, whose launcher draws
+# with Direct3D 11 beside it, so that the DXGI lines there are the launcher's):
+#   <api>: frame times (<program>, HH:MM:SS): the run so far
+#   <api>: the last 30 s (<program>, HH:MM:SS): that half minute, and when its slow frames came
+#   <api>: a frame of the last 30 s (<program>, HH:MM:SS): where a frame of it spent its time
+# 0.4.1's DXGI lines have no "(...)" and the Vulkan lines of 26 Nov name the program only. New
+# fields only ever come at the end of a line. A game's setlocale can give DXMT's C runtime a
+# decimal comma, so numbers may have one.
+RECORDER_LINE = re.compile(r"^(?:info:  )?(DXGI|Vulkan): (frame times|the last 30 s|a frame of the last 30 s)"
+                           r"(?: \((.+?)(?:, (\d\d:\d\d:\d\d))?\))?: (.*)$", re.M)
+_N = r"([\d.,]+)"
+RECORDER_FIELDS = {
+    "frame times": (re.compile(r"(\d+) frames in (\d+) s, median %s ms, 95%% %s ms, 99%% %s ms, worst %s ms, "
+                               r"(\d+) over 50 ms" % (_N, _N, _N, _N)),
+                    ("count", "seconds", "median", "p95", "p99", "worst", "slow")),
+    "the last 30 s": (re.compile(r"(\d+) frames, (\d+) over 50 ms"), ("frames", "slow")),
+    ("DXGI", "a frame of the last 30 s"): (
+        re.compile(r"%s command buffers, %s waits for the GPU \(%s ms\), %s query flushes, %s ms for an earlier frame, "
+                   r"%s ms for a drawable, commit %s ms, encoding %s ms" % ((_N,) * 8)),
+        ("command_buffers", "gpu_waits", "gpu_wait_ms", "query_flushes", "earlier_frame_ms", "drawable_ms",
+         "commit_ms", "encoding_ms")),
+    ("Vulkan", "a frame of the last 30 s"): (
+        re.compile(r"%s submits of %s command buffers, %s ms in the driver's submit, %s acquires %s ms, "
+                   r"present %s ms \(the driver's %s ms\)" % ((_N,) * 7)),
+        ("submits", "buffers", "submit_ms", "acquires", "acquire_ms", "present_ms", "driver_present_ms")),
+}
+SLOW_FRAME = re.compile(r"%s s \(%s ms\)" % (_N, _N))
+RUNS_KEPT = 100     # rows files kept for each game
 
 
-def frame_times(log):
-    """{"count", "seconds", "median", "p95", "p99", "worst", "slow"} from a run's log (times in
-    milliseconds, slow: frames that took over 50 ms), or None when the log has no such line. A
-    Vulkan program's lines come first (its last line; of several programs, the one with the most
-    frames, as a helper's few are not the game's), with "api" and "program" added; else DXMT's."""
-    last = {}
-    for program, *numbers in VULKAN_FRAMES_LINE.findall(log):
-        last[program] = numbers
-    if last:
-        program = max(last, key=lambda p: int(last[p][0]))
-        count, seconds, median, p95, p99, worst, slow = last[program]
-        extra = {"api": "vulkan", "program": program}
-    else:
-        found = FRAMES_LINE.findall(log)
-        if not found:
-            return None
-        count, seconds, median, p95, p99, worst, slow = found[-1]
-        extra = {}
-    return {"count": int(count), "seconds": int(seconds), "median": float(median), "p95": float(p95),
-            "p99": float(p99), "worst": float(worst), "slow": int(slow), **extra}
+def _number(text):
+    text = text.replace(",", ".")
+    return float(text) if "." in text else int(text)
+
+
+def recorder_rows(log):
+    """The frame recorder's lines of a run's log, as one row for each program and half minute:
+    {"api": "dxgi"|"vulkan", "program", "at" (HH:MM:SS, or None in older logs), "log_line",
+    "run": {count, seconds, median, p95, p99, worst, slow}, "window": {frames, slow, slow_at:
+    [[seconds into the half minute, ms], ...]}, "waits" (DXGI) or "calls" (Vulkan): {...}}. A row
+    lacks what was not written; a swap chain that goes says its "run" alone."""
+    rows, open_rows = [], {}
+    line, counted = 1, 0
+    for m in RECORDER_LINE.finditer(log):
+        api, kind, program, at, rest = m.groups()
+        spec = RECORDER_FIELDS.get(kind) or RECORDER_FIELDS[(api, kind)]
+        fields = spec[0].match(rest)
+        if not fields:
+            continue
+        values = dict(zip(spec[1], (_number(v) for v in fields.groups())))
+        line += log.count("\n", counted, m.start())
+        counted = m.start()
+        key = (api, program)
+        row = open_rows.get(key)
+        if kind == "frame times" or row is None or (kind == "the last 30 s" and "window" in row):
+            row = {"api": api.lower(), "program": program, "at": at, "log_line": line}
+            rows.append(row)
+            open_rows[key] = row
+        if at and not row["at"]:
+            row["at"] = at
+        if kind == "frame times":
+            row["run"] = values
+        elif kind == "the last 30 s":
+            values["slow_at"] = [[_number(s), _number(ms)] for s, ms in SLOW_FRAME.findall(rest[fields.end():])]
+            row["window"] = values
+        else:
+            row["waits" if api == "DXGI" else "calls"] = values
+    return rows
+
+
+def frame_times(log, rows=None):
+    """{"count", "seconds", "median", "p95", "p99", "worst", "slow", "api"[, "program"]} of a run (times
+    in milliseconds, slow: frames that took over 50 ms), or None when its log has none. Each program's
+    count is that of its biggest swap chain, not of whichever spoke last (a swap chain made in the
+    last seconds starts from nothing). A Vulkan program comes first, the one that drew the most frames
+    (a helper's few are not the game's); else the DXGI program that drew the most."""
+    best = {}
+    for row in recorder_rows(log) if rows is None else rows:
+        if "run" in row:
+            key = (row["api"], row["program"])
+            if key not in best or row["run"]["count"] >= best[key]["run"]["count"]:
+                best[key] = row
+    pool = [r for k, r in best.items() if k[0] == "vulkan"] or list(best.values())
+    if not pool:
+        return None
+    row = max(pool, key=lambda r: r["run"]["count"])
+    out = dict(row["run"], api=row["api"])
+    for k in ("median", "p95", "p99", "worst"):
+        out[k] = float(out[k])
+    if row["program"]:
+        out["program"] = row["program"]
+    return out
+
+
+def write_rows(appid, start, rows):
+    """Keeps a run's recorder rows in runs/<app id>/<start as YYYYmmdd-HHMMSS>.jsonl, the newest
+    RUNS_KEPT of each game; returns that path from HOME_DIR, or None."""
+    if not rows:
+        return None
+    folder = os.path.join(HOME_DIR, "runs", str(appid))
+    name = time.strftime("%Y%m%d-%H%M%S", time.localtime(start)) + ".jsonl"
+    try:
+        os.makedirs(folder, exist_ok=True)
+        with open(os.path.join(folder, name), "w") as f:
+            for row in rows:
+                f.write(json.dumps(row, sort_keys=True) + "\n")
+        for old in sorted(n for n in os.listdir(folder) if n.endswith(".jsonl"))[:-RUNS_KEPT]:
+            os.remove(os.path.join(folder, old))
+    except OSError:
+        return None
+    return os.path.join("runs", str(appid), name)
 
 
 def cmd_record(appid, start, logfile):
@@ -2372,9 +2456,13 @@ def cmd_record(appid, start, logfile):
     entry = {"app": appid, "time": time.strftime("%Y-%m-%dT%H:%M:%S"), "by": "run",
              "seconds": max(0, int(time.time()) - start), "end": end, "loaded": loaded,
              "protium": os.environ.get("PROTIUM_VERSION") or protium_version()}
-    frames = frame_times(log)
+    rows = recorder_rows(log)
+    frames = frame_times(log, rows)
     if frames:
         entry["frames"] = frames
+    kept = write_rows(appid, start, rows)
+    if kept:
+        entry["rows"] = kept
     add_result(entry)
     return 0
 

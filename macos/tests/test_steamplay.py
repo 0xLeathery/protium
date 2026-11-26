@@ -408,7 +408,12 @@ class FrameTimes(unittest.TestCase):
     def test_the_last_line_of_the_log_is_the_runs(self):
         log = "0024:trace:loaddll x\n" + self.LINE % (1800, 30, 2) + "other\n" + self.LINE % (3600, 60, 7)
         self.assertEqual(sp.frame_times(log), {"count": 3600, "seconds": 60, "median": 16.5, "p95": 17.0,
-                                               "p99": 33.5, "worst": 412.0, "slow": 7})
+                                               "p99": 33.5, "worst": 412.0, "slow": 7, "api": "dxgi"})
+
+    def test_a_swap_chain_made_at_the_end_does_not_stand_for_the_run(self):
+        # Red Dead Redemption 2's last DXGI line was a new swap chain's 137 frames in 2 s
+        log = self.LINE % (215000, 3400, 70) + self.LINE % (137, 2, 0)
+        self.assertEqual(sp.frame_times(log)["count"], 215000)
 
     def test_a_log_without_the_line_has_none(self):
         self.assertIsNone(sp.frame_times("0024:trace:loaddll x\n"))
@@ -431,7 +436,88 @@ class FrameTimes(unittest.TestCase):
         self.assertEqual((frames["program"], frames["count"]), ("Game.exe", 1500))
 
 
+class RecorderRows(unittest.TestCase):
+    """The frame recorder's lines, in the three forms they have had."""
+    OLD_DXGI = ("info:  DXGI: frame times: 54000 frames in 900 s, median 16.5 ms, 95% 17.0 ms, 99% 33.5 ms, "
+                "worst 412.0 ms, 31 over 50 ms\n"
+                "info:  DXGI: the last 30 s: 1650 frames, 3 over 50 ms: at 3.4 s (52 ms), 13.9 s (61 ms), 24.4 s (55 ms)\n"
+                "info:  DXGI: a frame of the last 30 s: 4.6 command buffers, 0.00 waits for the GPU (0.00 ms), "
+                "2.00 query flushes, 7.63 ms for an earlier frame, 0.05 ms for a drawable, commit 0.00 ms, encoding 7.85 ms\n")
+    VULKAN = ("Vulkan: frame times (%s): 3370 frames in 60 s, median 16.5 ms, 95%% 31.0 ms, 99%% 34.0 ms, "
+              "worst 801.7 ms, 15 over 50 ms\n"
+              "Vulkan: the last 30 s (%s): 1804 frames, 0 over 50 ms\n"
+              "Vulkan: a frame of the last 30 s (%s): 2.0 submits of 2.8 command buffers, 0.11 ms in the driver's "
+              "submit, 1.0 acquires 0.13 ms, present 0.15 ms (the driver's 0.13 ms)\n")
+
+    def test_an_old_dxgi_half_minute_is_one_row(self):
+        row, = sp.recorder_rows("0024:trace:loaddll x\n" + self.OLD_DXGI)
+        self.assertEqual((row["api"], row["program"], row["at"], row["log_line"]), ("dxgi", None, None, 2))
+        self.assertEqual(row["run"]["count"], 54000)
+        self.assertEqual(row["window"], {"frames": 1650, "slow": 3, "slow_at": [[3.4, 52], [13.9, 61], [24.4, 55]]})
+        self.assertEqual(row["waits"]["query_flushes"], 2.0)
+        self.assertEqual(row["waits"]["encoding_ms"], 7.85)
+
+    def test_two_programs_lines_are_kept_apart_and_timed(self):
+        named = self.VULKAN % (("RDR2.exe, 10:39:12",) * 3)
+        launcher = self.OLD_DXGI.replace("DXGI: frame times:", "DXGI: frame times (Launcher.exe, 10:39:10):") \
+            .replace("DXGI: the last 30 s:", "DXGI: the last 30 s (Launcher.exe, 10:39:10):") \
+            .replace("DXGI: a frame of the last 30 s:", "DXGI: a frame of the last 30 s (Launcher.exe, 10:39:10):")
+        # the two programs' lines can come between each other's
+        lines = launcher.splitlines(True)
+        log = lines[0] + named.splitlines(True)[0] + lines[1] + "".join(named.splitlines(True)[1:]) + lines[2]
+        rows = sp.recorder_rows(log)
+        self.assertEqual([(r["api"], r["program"], r["at"]) for r in rows],
+                         [("dxgi", "Launcher.exe", "10:39:10"), ("vulkan", "RDR2.exe", "10:39:12")])
+        self.assertEqual(rows[0]["waits"]["command_buffers"], 4.6)
+        self.assertEqual(rows[1]["window"], {"frames": 1804, "slow": 0, "slow_at": []})
+        self.assertEqual(rows[1]["calls"]["driver_present_ms"], 0.13)
+        self.assertEqual(sp.frame_times(log, rows)["program"], "RDR2.exe")
+
+    def test_the_lines_of_26_november_name_the_program_only(self):
+        row, = sp.recorder_rows(self.VULKAN % (("RDR2.exe",) * 3))
+        self.assertEqual((row["program"], row["at"], row["calls"]["submits"]), ("RDR2.exe", None, 2.0))
+
+    def test_a_program_name_may_hold_brackets(self):
+        row, = sp.recorder_rows(self.VULKAN % (("Game (x64).exe, 09:00:00",) * 3))
+        self.assertEqual((row["program"], row["at"]), ("Game (x64).exe", "09:00:00"))
+
+    def test_a_decimal_comma_is_read(self):
+        log = self.OLD_DXGI.replace("16.5", "16,5").replace("3.4 s", "3,4 s")
+        row, = sp.recorder_rows(log)
+        self.assertEqual((row["run"]["median"], row["window"]["slow_at"][0]), (16.5, [3.4, 52]))
+
+    def test_a_closing_line_is_a_row_of_its_own(self):
+        log = self.OLD_DXGI + self.OLD_DXGI.splitlines(True)[0].replace("54000", "54100")
+        rows = sp.recorder_rows(log)
+        self.assertEqual([sorted(r) for r in rows][1], ["api", "at", "log_line", "program", "run"])
+
+    def test_record_keeps_the_rows_with_the_run(self):
+        log = os.path.join(TEMP, "record-rows.log")
+        with open(log, "w") as f:
+            f.write("0024:trace:loaddll x\n" + self.OLD_DXGI + self.VULKAN % (("Game.exe, 10:00:30",) * 3))
+        folder = os.path.join(sp.HOME_DIR, "runs", "424242")
+        os.makedirs(folder, exist_ok=True)
+        for i in range(sp.RUNS_KEPT):                    # a game that already has a full folder
+            open(os.path.join(folder, "20260101-%06d.jsonl" % i), "w").close()
+        start = 1795665000
+        with mock.patch.dict(os.environ, {"PROTIUM_VERSION": "0.0.0-test"}):
+            sp.cmd_record(424242, start, log)
+        with open(sp.RESULTS) as f:
+            entry = json.loads(f.read().splitlines()[-1])
+        name = time.strftime("%Y%m%d-%H%M%S", time.localtime(start)) + ".jsonl"
+        self.assertEqual(entry["rows"], os.path.join("runs", "424242", name))
+        self.assertEqual((entry["frames"]["api"], entry["frames"]["program"]), ("vulkan", "Game.exe"))
+        with open(os.path.join(sp.HOME_DIR, entry["rows"])) as f:
+            kept = [json.loads(line) for line in f]
+        self.assertEqual([r["api"] for r in kept], ["dxgi", "vulkan"])
+        names = sorted(os.listdir(folder))
+        self.assertEqual(len(names), sp.RUNS_KEPT)
+        self.assertNotIn("20260101-000000.jsonl", names)
+        self.assertIn(name, names)
+
+
 import datetime
+import time
 
 TODAY = datetime.date(2026, 11, 25)
 

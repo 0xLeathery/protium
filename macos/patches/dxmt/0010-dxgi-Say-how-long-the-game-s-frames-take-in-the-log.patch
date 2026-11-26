@@ -21,7 +21,8 @@ encoding took:
 
   DXGI: a frame of the last 30 s: 3.0 command buffers, 1.20 waits for the GPU (4.10 ms), ...
 
-"macos/steamplay record" keeps the last line of the first kind with the run. The time a window is hidden
+"macos/steamplay record" keeps every line with the run, in runs/<app id>/<start>.jsonl, and the
+run's totals in results.jsonl. The time a window is hidden
 (Present says it is occluded) is no frame's. Direct3D 10 and 11 only: Direct3D 9, 12 and Vulkan
 do not come through here.
 
