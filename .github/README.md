@@ -4,8 +4,10 @@
 
 Steam Play for Apple Silicon Macs, built natively. Protium is Valve's Proton 11 with its Wine
 compiled as an arm64 macOS program, FEX inside Wine for the game's x86 code, and Direct3D drawn on
-Metal. Nothing runs under Rosetta and there is no virtual machine: Mac Steam installs the Windows
-build of a game and starts it through Protium, the way Steam on Linux starts Proton.
+Metal. Protium runs nothing under Rosetta and there is no virtual machine: Mac Steam installs the
+Windows build of a game and starts it through Protium, the way Steam on Linux starts Proton. A game
+that has a 64-bit Mac build of its own runs that build instead, unchanged; an Intel one runs under
+Rosetta, as it always has.
 
 The name: protium is hydrogen-1, the lightest form of the lightest element, one proton and one
 electron. It is Proton with nothing added that it does not need: no Rosetta, no virtual machine.
@@ -43,7 +45,7 @@ off, and then no request is made.
 Steam Play itself works on Mac Steam:
 - installing the Windows build of a game;
 - Play from the game's own library entry;
-- a per-game choice between the Mac build and Protium;
+- a per-game choice between the Mac build and Protium (`steamplay prefer <app id> proton`);
 - the Steamworks API (sign-in, ownership, stats, achievements);
 - Steam Cloud.
 
