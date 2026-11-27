@@ -686,6 +686,84 @@ class RunScriptLog(unittest.TestCase):
         self.assertRegex(log, r'the game was not started: a step failed \(status 1, line \d+: mkdir -p "\$prefix"\)')
 
 
+class DiagnoseGames(unittest.TestCase):
+    """What Diagnostics says of the last games, from Steam's gameprocess_log as Steam writes it
+    (lines from this Mac's, 26 Nov) and Protium's records."""
+    TOOL = "'/usr/local/share/steam/compatibilitytools.d/%s/.'/run waitforexitandrun  '%s'"
+    LINES = [
+        # a run that ended: the tool's process (Steam's child) with 0, the game's own with -1
+        '[2026-11-26 15:42:02] AppID 476600 adding PID 39702 as a tracked process "%s"'
+        % (TOOL % ("proton-macos", "/Games/steamapps/common/Call of Duty WWII/s2_sp64_ship.exe")),
+        "[2026-11-26 15:42:12] AppID 476600 adding PID 39814 as a tracked process",
+        "[2026-11-26 15:48:06] AppID 476600 no longer tracking PID 39814, exit code -1",
+        "[2026-11-26 15:48:06] AppID 476600 no longer tracking PID 39702, exit code 0",
+        "[2026-11-26 15:48:06] Remove 476600 from running list",
+        # one Steam stopped following while its tool's process still ran (a launcher left behind)
+        '[2026-11-26 14:53:17] AppID 1174180 adding PID 17225 as a tracked process "%s"'
+        % (TOOL % ("proton-macos", "/Games/steamapps/common/Red Dead Redemption 2/PlayRDR2.exe")),
+        "[2026-11-26 14:56:17] AppID 1174180 adding PID 18187 as a tracked process",
+        "[2026-11-26 14:57:29] AppID 1174180 no longer tracking PID 18187, exit code -1",
+        "[2026-11-26 14:57:29] Game 1174180 going away; no longer tracking PID 17225",
+        "[2026-11-26 14:57:29] Remove 1174180 from running list",
+        # one Steam's quit ended, with launch options, and Protium's record lost
+        '[2026-11-26 15:23:42] AppID 379720 adding PID 31892 as a tracked process "%s +r_renderAPI 1"'
+        % (TOOL % ("proton-macos", "/Games/steamapps/common/DOOM/DOOMx64.exe")),
+        "[2026-11-26 15:24:20] AppID 379720 adding PID 32431 as a tracked process",
+        "[2026-11-26 15:27:24] AppID 379720 no longer tracking PID 31892, exit code -1",
+        "[2026-11-26 15:27:24] Game 379720 going away; no longer tracking PID 32431",
+        # the game's own Mac version, and one Steam started without a tool
+        '[2026-11-26 16:00:00] AppID 203160 adding PID 50000 as a tracked process "%s"'
+        % (TOOL % ("macos-native", "/Games/steamapps/common/Tomb Raider/Tomb Raider.app")),
+        '[2026-11-26 16:10:00] AppID 570 adding PID 50100 as a tracked process ""/Games/steamapps/common/dota 2 beta/game/dota.sh""',
+        "[2026-11-26 16:20:00] SSGL: InternalUpdateClientGame indicates change to games list",
+    ]
+    CACHE = {476600: {"name": "Call of Duty: WWII"}, 1174180: {"name": "Red Dead Redemption 2"}, 379720: {"name": "DOOM"},
+             203160: {"name": "Tomb Raider"}, 570: {"name": "Dota 2"}}
+    RECORDS = {476600: [{"app": 476600, "by": "run", "end": "ended", "seconds": 364, "time": "2026-11-26T15:48:07"}],
+               1174180: [{"app": 1174180, "by": "run", "end": "ended", "seconds": 81, "time": "2026-11-26T14:58:54"},   # a later run's
+                         {"app": 1174180, "by": "run", "end": "ended", "seconds": 347, "time": "2026-11-26T14:59:04"}]}
+
+    def test_each_run_says_what_ran_how_it_ended_and_its_record(self):
+        runs = sp.steam_game_runs(self.LINES)
+        self.assertEqual([r["app"] for r in runs], [476600, 1174180, 379720, 203160, 570])
+        cod, rdr2, doom, tomb, dota = sp.recent_games(self.CACHE, self.RECORDS, runs).splitlines()
+        self.assertIn("Protium ran its Windows version, s2_sp64_ship.exe; ended 15:48:06, exit code 0; "
+                      "Protium's record: ended after 364 s", cod)
+        self.assertIn("Steam stopped following it at 14:57:29 while it still ran; Protium's record: ended after 347 s", rdr2)
+        self.assertIn("DOOMx64.exe, with the options +r_renderAPI 1; ended 15:27:24, exit code not known; no record from Protium", doom)
+        self.assertIn("its own Mac version ran (Tomb Raider.app), unchanged; Steam has no end of it; Protium keeps no record of it", tomb)
+        self.assertIn("Steam started it itself, without Protium: dota.sh", dota)
+
+    def test_the_logs_of_the_last_games(self):
+        library = tempfile.mkdtemp(dir=TEMP)
+        compat = os.path.join(library, "steamapps", "compatdata", "379720")
+        os.makedirs(compat)
+        with open(os.path.join(compat, "steamplay-run.log"), "w") as f:
+            f.write(":: 2026-11-26 15:23:42: Protium 0.4.2, app 379720\n" + "0134:fixme:bcrypt:BCryptDuplicateHash ignoring object buffer\n"
+                    + "0138:fixme:bcrypt:BCryptDuplicateHash ignoring object buffer\n" * 500 + "the last line\n")
+        open(os.path.join(compat, "steamplay-run.prev.log"), "w").close()
+        lines = [l.replace("/Games", library) for l in self.LINES]
+        text = sp.recent_game_logs(self.CACHE, sp.steam_game_runs(lines))
+        self.assertIn("-- 379720 DOOM, started 2026-11-26 15:23:42: %s/steamplay-run.log" % compat, text)
+        self.assertIn("fixme:bcrypt:BCryptDuplicateHash ignoring object buffer\n    (and 500 more like it)\nthe last line\n", text)
+        self.assertIn("next to it: steamplay-run.prev.log", text)
+        self.assertIn("-- 476600 Call of Duty: WWII", text)     # the log it cannot read is named, with why
+        self.assertIn("(it cannot be read: No such file or directory)", text)
+
+    def test_long_logs_keep_their_start_and_their_end(self):
+        path = os.path.join(tempfile.mkdtemp(dir=TEMP), "big.log")
+        with open(path, "w") as f:
+            f.write("".join("line %d\n" % i for i in range(5000)))
+        text = sp.log_excerpt(path, head=3, tail=2)
+        self.assertEqual(text, "line 0\nline 1\nline 2\n[...]\nline 4998\nline 4999\n")
+        self.assertTrue(sp.compact_lines(["x" * 400])[0].endswith(" [...]"))
+
+    def test_the_home_folder_is_left_out_in_every_form(self):
+        text = sp.scrub_private('/Users/someone/Library L"Z:\\\\Users\\\\someone\\\\Library" Z:\\Users\\someone\\x 76561197960287930',
+                                home="/Users/someone")
+        self.assertEqual(text, '~/Library L"Z:~\\\\Library" Z:~\\x <id>')
+
+
 class RecordAfter(unittest.TestCase):
     """"record --after": a run is recorded once its process has ended, also when its whole process
     group was killed, as Steam does when it quits."""

@@ -3471,6 +3471,222 @@ def main(argv):
         sys.exit(__doc__)
 
 
+# What Steam's own log says of the games it started (logs/gameprocess_log.txt): the first
+# process it tracks for a game is the one it started, with its command line (the compatibility
+# tool's, the game's executable and its launch options); a game's own processes come after.
+GAME_TRACKED = re.compile(r'^\[(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)\] AppID (\d+) adding PID (\d+) as a tracked process(?: "(.*)")?$')
+GAME_PID_GONE = re.compile(r'^\[(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)\] AppID (\d+) no longer tracking PID (\d+), exit code (-?\d+)')
+GAME_LET_GO = re.compile(r'^\[(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)\] Game (\d+) going away; no longer tracking PID (\d+)')
+GAME_GONE = re.compile(r'^\[(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)\] Remove (\d+) from running list')
+
+
+def steam_game_runs(lines):
+    """The games Steam started, from its gameprocess_log's lines, oldest first: [{"app", "start",
+    "command", "pid" (of the process it started), "exits": {pid: exit code}, "end" (when Steam
+    took it off its list of running games, or let go of it; None while it runs), "let_go" (True
+    when Steam stopped following the process it started while that still ran: it does so when
+    the game's own process has ended, and when Steam quits)}]. Steam gives -1 for an exit code it
+    does not know."""
+    runs, running = [], {}
+    for line in lines:
+        m = GAME_TRACKED.match(line)
+        if m and m[4] is not None:
+            run = {"app": int(m[2]), "start": m[1], "command": m[4], "pid": int(m[3]), "exits": {}, "end": None, "let_go": False}
+            runs.append(run)
+            running[run["app"]] = run
+            continue
+        if m:
+            continue
+        m = GAME_PID_GONE.match(line)
+        if m and int(m[2]) in running:
+            running[int(m[2])]["exits"][int(m[3])] = int(m[4])
+            running[int(m[2])]["end"] = m[1]
+            continue
+        m = GAME_LET_GO.match(line)
+        if m and int(m[2]) in running:
+            run = running[int(m[2])]
+            run["end"] = m[1]
+            run["let_go"] = run["let_go"] or int(m[3]) == run["pid"]
+            continue
+        m = GAME_GONE.match(line)
+        if m:
+            run = running.pop(int(m[2]), None)
+            if run:
+                run["end"] = m[1]
+    return runs
+
+
+def parse_time(text):
+    """A record's local time, "2026-11-26T15:49:00", or the earliest time there is."""
+    try:
+        return datetime.datetime.strptime(text, "%Y-%m-%dT%H:%M:%S")
+    except (TypeError, ValueError):
+        return datetime.datetime.min
+
+
+def run_tool(command):
+    """(the compatibility tool, [executable, arguments...]) of a command line as Steam started a
+    game; the tool is None when Steam started the game itself."""
+    try:
+        words = shlex.split(command)
+    except ValueError:
+        words = command.split()
+    if words and "/compatibilitytools.d/" in words[0]:
+        tool = words[0].split("/compatibilitytools.d/", 1)[1].split("/")[0]
+        return tool, words[2:] if len(words) > 1 and words[1] in ("waitforexitandrun", "run") else words[1:]
+    return None, words
+
+
+def compact_lines(lines, width=300):
+    """Lines as a person can read them in a report: a line repeated (Wine's thread number at its
+    start apart) is given once and counted, and a long one is cut."""
+    out, last, count = [], None, 0
+    for line in lines:
+        key = re.sub(r"^[0-9a-f]{4,8}:", "", line)
+        if key == last:
+            count += 1
+            continue
+        if count:
+            out.append("    (and %d more like it)" % count)
+        out.append(line if len(line) <= width else line[:width] + " [...]")
+        last, count = key, 0
+    if count:
+        out.append("    (and %d more like it)" % count)
+    return out
+
+
+def log_excerpt(path, head=12, tail=60):
+    """The start and the end of a log, compacted: its first lines say what was started and how,
+    its last what happened last. Reads at most its first 64 KB and last 512 KB."""
+    size = os.path.getsize(path)
+    with open(path, "rb") as f:
+        first = f.read(65536).decode("utf-8", "replace").splitlines()
+        f.seek(max(0, size - (512 << 10)))
+        last = f.read().decode("utf-8", "replace").splitlines()
+    if size > (512 << 10):
+        last = last[1:]         # a cut line
+    start = compact_lines(first)[:head]
+    end = compact_lines(last)[-tail:]
+    if size <= 65536 and len(compact_lines(first)) <= head + tail:
+        return "\n".join(compact_lines(first)) + "\n"
+    return "\n".join(start + ["[...]"] + end) + "\n"
+
+
+def recent_games(cache, records, runs, count=8):
+    """The last games Steam started, in words: when, which build ran (the Windows one through
+    Protium, the game's Mac one, or one Steam started itself), with which options, how it ended,
+    and whether Protium has a record of the run."""
+    def name(app):
+        return cache.get(app, {}).get("name", "?") if cache else "?"
+
+    out = []
+    for run in runs[-count:]:
+        tool, words = run_tool(run["command"])
+        program = os.path.basename(words[0]) if words else "?"
+        options = " ".join(words[1:])
+        if tool == PROTON:
+            how = "Protium ran its Windows version, %s" % program
+        elif tool == NATIVE:
+            how = "its own Mac version ran (%s), unchanged" % program
+        elif tool:
+            how = "another compatibility tool, %s, ran %s" % (tool, program)
+        else:
+            how = "Steam started it itself, without Protium: %s" % program
+        if options:
+            how += ", with the options %s" % options
+        code = run["exits"].get(run["pid"])
+        if run["end"] is None:
+            ended = "Steam has no end of it"
+        elif run["let_go"]:
+            ended = "Steam stopped following it at %s while it still ran" % run["end"][11:]
+        else:
+            ended = "ended %s, exit code %s" % (run["end"][11:], "not known" if code in (None, -1) else code)
+        # Protium's record of the same run: the one that started then (its end, less its length)
+        start = datetime.datetime.strptime(run["start"], "%Y-%m-%d %H:%M:%S")
+        kept = [r for r in records.get(run["app"], []) if r.get("by") == "run"
+                and abs((parse_time(r.get("time")) - datetime.timedelta(seconds=r.get("seconds", 0)) - start).total_seconds()) <= 90]
+        if tool == PROTON:
+            record = "Protium's record: %s after %d s" % (kept[0].get("end"), kept[0].get("seconds", 0)) if kept \
+                else "no record from Protium"
+        else:
+            record = "Protium keeps no record of it"
+        out.append("%s  %d %s: %s; %s; %s" % (run["start"], run["app"], name(run["app"]), how, ended, record))
+    return "\n".join(out) + "\n" if out else "(Steam's log has no game start)\n"
+
+
+def recent_game_logs(cache, runs, count=3):
+    """The log of the last run of each of the last few games Protium ran, cut to its start and its
+    end, with what else that run left next to it."""
+    out, seen = [], set()
+    for run in reversed(runs):
+        tool, words = run_tool(run["command"])
+        if tool != PROTON or not words or run["app"] in seen or "/steamapps/common/" not in words[0]:
+            continue
+        seen.add(run["app"])
+        library = words[0].split("/steamapps/common/")[0]
+        compat = os.path.join(library, "steamapps", "compatdata", str(run["app"]))
+        log = os.path.join(compat, "steamplay-run.log")
+        title = "-- %d %s, started %s: %s" % (run["app"], cache.get(run["app"], {}).get("name", "?") if cache else "?",
+                                              run["start"], log)
+        try:
+            st = os.stat(log)
+            title += ", %d bytes, last written %s" % (st.st_size, time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(st.st_mtime)))
+            body = log_excerpt(log)
+        except OSError as e:
+            body = "(it cannot be read: %s)\n" % e.strerror
+        others = sorted(n for n in os.listdir(compat) if n.startswith("steamplay-run.") and n != "steamplay-run.log") \
+            if os.path.isdir(compat) else []
+        out.append(title + "\n" + body + ("next to it: %s\n" % ", ".join(others) if others else ""))
+        # the Direct3D 9 layer keeps a log of its own next to the game's executable
+        d3d9 = os.path.join(os.path.dirname(words[0]), "mtld3d-logs")
+        if os.path.isdir(d3d9):
+            newest = max((os.path.join(d3d9, n) for n in os.listdir(d3d9)), key=os.path.getmtime, default=None)
+            if newest:
+                out.append("-- its Direct3D 9 log, %s\n%s" % (newest, log_excerpt(newest, head=5, tail=30)))
+        if len(seen) == count:
+            break
+    return "\n".join(out) if out else "(Protium has run no game that Steam's log still has)\n"
+
+
+def recent_records(cache, records, count=8):
+    """Protium's records of the last runs, one line each."""
+    runs = sorted((r for rs in records.values() for r in rs if r.get("by") == "run"), key=lambda r: r.get("time", ""))
+    out = []
+    for r in runs[-count:]:
+        frames = r.get("frames") or {}
+        line = "%s  %d %s: %s after %d s, Protium %s" % (r.get("time", "?"), r.get("app", 0), cache.get(r.get("app"), {}).get("name", "?")
+                                                       if cache else "?", r.get("end", "?"), r.get("seconds", 0), r.get("protium") or "?")
+        if r.get("loaded"):
+            line += ", " + "+".join(r["loaded"])
+        if frames.get("frames"):
+            line += ", %d frames" % frames["frames"]
+        out.append(line)
+    return "\n".join(out) + "\n" if out else "(none)\n"
+
+
+def crash_reports(days=7):
+    """The names of the crash reports macOS kept in the last days that may be a game's."""
+    folder = os.path.expanduser("~/Library/Logs/DiagnosticReports")
+    out = []
+    for name in sorted(os.listdir(folder)):
+        path = os.path.join(folder, name)
+        if re.search(r"(?i)wine|steam|\.exe|fex|preloader", name) and os.path.isfile(path) \
+                and time.time() - os.path.getmtime(path) < days * 86400:
+            out.append(name)
+    return "\n".join(out) + "\n" if out else "(none in the last %d days)\n" % days
+
+
+def scrub_private(text, home=None):
+    """Text without the home folder's path, which is written as ~ (also as a Windows program
+    sees it, with backslashes, single or doubled as in Wine's log), or Steam's account numbers
+    (<id>)."""
+    home = home or os.path.expanduser("~")
+    for form in (home, home.replace("/", "\\\\"), home.replace("/", "\\")):
+        text = text.replace(form, "~")
+    text = re.sub(r"(userdata/)\d+", r"\1<id>", text)
+    return re.sub(r"\b7656119\d{10}\b", "<id>", text)
+
+
 def cmd_diagnose():
     """Writes what somebody needs to see to find out why Protium or Steam does not work on this
     Mac into one text file on the Desktop (STEAMPLAY_DIAGNOSE_DIR names another folder), for the
@@ -3481,11 +3697,7 @@ def cmd_diagnose():
     import io
     home = os.path.expanduser("~")
 
-    def scrub(text):
-        text = text.replace(home, "~")
-        text = re.sub(r"(userdata/)\d+", r"\1<id>", text)
-        return re.sub(r"\b7656119\d{10}\b", "<id>", text)
-
+    scrub = scrub_private
     def tail(path, lines):
         with open(path, encoding="utf-8", errors="replace") as f:
             return "".join(f.readlines()[-lines:]) or "(empty)\n"
@@ -3537,17 +3749,36 @@ def cmd_diagnose():
                 if re.match(r"\s*(Resolution|UI Looks like|Main Display|Display Type|Mirror):", l)]
         return "\n".join(kept + ["full resolution in games: %s" % hires_setting()]) + "\n"
 
+    def steam_runs():
+        lines = []
+        for name in ("gameprocess_log.previous.txt", "gameprocess_log.txt"):
+            try:
+                with open(os.path.join(STEAM_ROOT, "logs", name), encoding="utf-8", errors="replace") as f:
+                    lines += f.read().splitlines()
+            except OSError:
+                pass
+        return steam_game_runs(lines)
+
+    try:
+        cache = app_cache()
+    except Exception:
+        cache = {}
+    records = results()
     logs = os.path.dirname(GUARD_LOG)
     parts = [("Protium and this Mac", facts),
              ("Screens", screens),
              ("Steam and Protium's parts in it", steam),
              ("steamplay status", status),
+             ("The games Steam started last, from its own log", lambda: recent_games(cache, records, steam_runs())),
+             ("Protium's records of the last runs", lambda: recent_records(cache, records)),
+             ("Crash reports macOS kept in the last seven days that may be a game's (names only)", crash_reports),
              ("The guard's log, last 200 lines", lambda: tail(GUARD_LOG, 200)),
              ("The guard's own output, last 50 lines", lambda: tail(os.path.join(logs, "guard.out"), 50)),
              ("Faults Protium did not expect, last 100 lines", lambda: tail(ERROR_LOG, 100)),
              ("Steam's latest start, from its compatibility log", last_start),
              ("Steam's bootstrap log, last 50 lines", lambda: tail(os.path.join(STEAM_ROOT, "logs", "bootstrap_log.txt"), 50)),
-             ("Steam's crash dumps of the last seven days (names only)", dumps)]
+             ("Steam's crash dumps of the last seven days (names only)", dumps),
+             ("The logs of the last games Protium ran, their start and their end", lambda: recent_game_logs(cache, steam_runs()))]
     text = ("Protium diagnostics, %s\nThis file includes the names of your installed games. Your home folder is written as ~ "
             "and Steam account numbers as <id>. Please read it before you share it.\n"
             % time.strftime("%Y-%m-%d %H:%M:%S"))

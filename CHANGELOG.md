@@ -22,6 +22,10 @@ written. "Known problems" is a heading of our own, next to Keep a Changelog's.
   processor time it used and how long it waited for a free core, its memory, its calls to Wine's
   server and its waits, and, when the game's sound ran dry, for how long. This is what tells
   why a game stuttered.
+- Diagnostics now also covers the games you started last: whether Steam ran a game's own Mac
+  version or its Windows version through Protium, with which launch options, how each run
+  ended, and the start and end of each game's log. One file from the Diagnostics button is
+  now enough for a report about a game.
 
 ### Fixed
 
