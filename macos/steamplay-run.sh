@@ -118,7 +118,10 @@ start_log() {
     # would read the new one. Wine's output goes on at the end of this same file.
     : >"$logfile"
     log_inode=$(stat -f %i "$logfile")
-    if [ ! -t 2 ]; then exec >>"$logfile" 2>&1; fi
+    # held open on descriptor 3, so that wineboot and Wine write to this run's log even when a
+    # second start has moved it aside meanwhile (a first start's install steps can take minutes)
+    exec 3>>"$logfile"
+    if [ ! -t 2 ]; then exec >&3 2>&3; fi
     # which Protium, and on which Mac: what a report of a game that does not start needs first
     local version memory
     version=$(cat "$SCRIPT_DIR/VERSION" 2>/dev/null) || version="$(cat "$SCRIPT_DIR/app/VERSION" 2>/dev/null || echo '?') from a checkout"
@@ -222,7 +225,7 @@ unset VK_DRIVER_FILES VK_ICD_FILENAMES VK_ADD_DRIVER_FILES PROTON_DISABLE_LSTEAM
 
 if [ ! -f "$prefix/system.reg" ]; then
     log "creating the prefix in $prefix"
-    "$WINE_INSTALL/bin/wine" wineboot -u >>"$logfile" 2>&1 || die "wineboot failed in $prefix (what it said is above)"
+    "$WINE_INSTALL/bin/wine" wineboot -u >&3 2>&3 3>&- || die "wineboot failed in $prefix (what it said is above)"
 fi
 # Proton's wine.inf registers its fonts by file name (arial.ttf, tahoma.ttf, ...), and Proton's
 # script links the files into the prefix's Fonts folder. DirectWrite lists what it finds there
@@ -320,7 +323,8 @@ rm -f "$hang".*.txt
         done
         return 1
     }
-    seen=0
+    # from here on: a "wait timed out" of wineboot or an install step above is not the game's
+    seen=$(stat -f %z "$logfile" 2>/dev/null) || seen=0
     while sleep 2 && kill -0 $$ 2>/dev/null; do
         log_now=$(own_log) || continue
         size=$(stat -f %z "$log_now" 2>/dev/null) || continue
@@ -351,4 +355,4 @@ cd "$(dirname "$exe")"
 # it and wait for it, and steam.exe, which ends when no other program is left, waits for
 # start.exe in turn. Nothing of the session then ever ends, and Steam goes on showing the game
 # as running after it was quit.
-exec "$WINE_INSTALL/bin/wine" 'c:\windows\system32\steam.exe' "Z:${exe//\//\\}" "$@" >>"$logfile" 2>&1 </dev/null
+exec "$WINE_INSTALL/bin/wine" 'c:\windows\system32\steam.exe' "Z:${exe//\//\\}" "$@" >&3 2>&3 3>&- </dev/null

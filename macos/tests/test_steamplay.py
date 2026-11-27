@@ -661,6 +661,8 @@ class RunScriptLog(unittest.TestCase):
                    WIN_STEAM_DLLS=os.path.join(self.dir, "dlls"), PATH=os.path.join(self.dir, "bin") + ":/usr/bin:/bin:/usr/sbin")
         r = subprocess.run(["/bin/bash", self.SCRIPT, "123"], env=env, stdin=subprocess.DEVNULL,
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if not os.path.exists(self.log):
+            return r.returncode, None
         with open(self.log) as f:
             return r.returncode, f.read()
 
@@ -677,6 +679,18 @@ class RunScriptLog(unittest.TestCase):
         self.start(wine="nowine")
         with open(os.path.join(self.compat, "steamplay-run.prev.log")) as f:
             self.assertEqual(f.read(), "the run before\n")
+
+    def test_wine_writes_to_this_runs_log_when_a_second_start_moved_it(self):
+        for dll in ("steamclient.dll", "steamclient64.dll", "GameOverlayRenderer.dll", "GameOverlayRenderer64.dll"):
+            open(os.path.join(self.dir, "dlls", dll), "w").close()
+        moved = os.path.join(self.compat, "moved.log")
+        with open(os.path.join(self.dir, "wine/bin/wine"), "w") as f:     # wineboot: another start rotates the log
+            f.write('#!/bin/sh\nif [ "$1" = wineboot ]; then mv "%s" "%s"; echo wineboot; else echo GAME; fi\n' % (self.log, moved))
+        status, _ = self.start()
+        with open(moved) as f:
+            log = f.read()
+        self.assertEqual(status, 0)
+        self.assertRegex(log, r"wineboot\n(.|\n)*:: app 123: .*game\.exe \(log: .*\)\nGAME\n$")
 
     def test_a_step_that_fails_says_which(self):
         os.makedirs(self.compat)
@@ -762,6 +776,26 @@ class DiagnoseGames(unittest.TestCase):
         text = sp.scrub_private('/Users/someone/Library L"Z:\\\\Users\\\\someone\\\\Library" Z:\\Users\\someone\\x 76561197960287930',
                                 home="/Users/someone")
         self.assertEqual(text, '~/Library L"Z:~\\\\Library" Z:~\\x <id>')
+
+
+class RecordEnd(unittest.TestCase):
+    """How a run ended is the game's: a crash of an install step before it started is not."""
+
+    def end(self, text):
+        log = os.path.join(tempfile.mkdtemp(dir=TEMP), "steamplay-run.log")
+        with open(log, "w") as f:
+            f.write(text)
+        with mock.patch.dict(os.environ, {"PROTIUM_VERSION": "0.0.0-test"}):
+            sp.cmd_record(454548, 1795665000, log)
+        with open(sp.RESULTS) as f:
+            return json.loads(f.read().splitlines()[-1])["end"]
+
+    def test_only_what_follows_the_games_start_counts(self):
+        installer = "wine: Unhandled page fault on read access to 0000000000000000 at address 0x1 (thread 0024), starting debugger...\n"
+        start = ":: app 454548: /Games/game.exe -windowed (log: /Games/steamplay-run.log)\n"
+        self.assertEqual(self.end(installer + start + "fsync: up and running.\n"), "ended")
+        self.assertEqual(self.end(start + installer), "crash")
+        self.assertEqual(self.end(installer), "crash")      # a log of before 27 Nov has no such line
 
 
 class RecordAfter(unittest.TestCase):

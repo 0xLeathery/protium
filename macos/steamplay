@@ -2636,11 +2636,15 @@ def cmd_record(appid, start, logfile):
             log = f.read().decode("utf-8", errors="replace")
     except (OSError, TypeError):
         log = ""
-    if "wine: abort() in native code" in log:
+    # how it ended is the game's: what wineboot and the install steps said before it started
+    # (steamplay-run.sh's ":: app N: <exe> (log: ...)" line comes just before Wine's) is not
+    starts = [m.end() for m in re.finditer(r"^:: app \d+: .*\(log: .*\)$", log, re.M)]
+    game = log[starts[-1]:] if starts else log
+    if "wine: abort() in native code" in game:
         end = "abort"
-    elif any(s in log for s in ("wine: Unhandled", "Exception frame is not in stack limits", "virtual_setup_exception stack overflow")):
+    elif any(s in game for s in ("wine: Unhandled", "Exception frame is not in stack limits", "virtual_setup_exception stack overflow")):
         end = "crash"
-    elif re.search(r"RtlpWaitForCriticalSection.*wait timed out", log):
+    elif re.search(r"RtlpWaitForCriticalSection.*wait timed out", game):
         end = "hang"
     else:
         end = "ended"
@@ -3603,8 +3607,9 @@ def recent_games(cache, records, runs, count=8):
             ended = "ended %s, exit code %s" % (run["end"][11:], "not known" if code in (None, -1) else code)
         # Protium's record of the same run: the one that started then (its end, less its length)
         start = datetime.datetime.strptime(run["start"], "%Y-%m-%d %H:%M:%S")
-        kept = [r for r in records.get(run["app"], []) if r.get("by") == "run"
-                and abs((parse_time(r.get("time")) - datetime.timedelta(seconds=r.get("seconds", 0)) - start).total_seconds()) <= 90]
+        def apart(r):
+            return abs((parse_time(r.get("time")) - datetime.timedelta(seconds=r.get("seconds", 0)) - start).total_seconds())
+        kept = sorted((r for r in records.get(run["app"], []) if r.get("by") == "run" and apart(r) <= 90), key=apart)
         if tool == PROTON:
             record = "Protium's record: %s after %d s" % (kept[0].get("end"), kept[0].get("seconds", 0)) if kept \
                 else "no record from Protium"
@@ -3640,9 +3645,12 @@ def recent_game_logs(cache, runs, count=3):
         # the Direct3D 9 layer keeps a log of its own next to the game's executable
         d3d9 = os.path.join(os.path.dirname(words[0]), "mtld3d-logs")
         if os.path.isdir(d3d9):
-            newest = max((os.path.join(d3d9, n) for n in os.listdir(d3d9)), key=os.path.getmtime, default=None)
+            newest = max((os.path.join(d3d9, n) for n in os.listdir(d3d9) if os.path.isfile(os.path.join(d3d9, n))),
+                         key=os.path.getmtime, default=None)
             if newest:
-                out.append("-- its Direct3D 9 log, %s\n%s" % (newest, log_excerpt(newest, head=5, tail=30)))
+                out.append("-- its Direct3D 9 log, %s, last written %s\n%s" % (
+                    newest, time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(os.path.getmtime(newest))),
+                    log_excerpt(newest, head=5, tail=30)))
         if len(seen) == count:
             break
     return "\n".join(out) if out else "(Protium has run no game that Steam's log still has)\n"
