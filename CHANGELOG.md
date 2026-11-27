@@ -30,6 +30,10 @@ written. "Known problems" is a heading of our own, next to Keep a Changelog's.
   into normal range.
 - Red Dead Redemption 2's log no longer fills with one line about keyboard layouts, written
   110 times a second, which made up nearly all of it.
+- A game that stopped before it started, for example while Protium set up its first start, left
+  no log, or the log of the run before under its own name. A game's log now begins with
+  Protium's version, the Mac and the macOS version, then what Protium did before the game
+  started, and, when it stopped, why.
 
 ## [0.4.2] - 2026-11-25
 

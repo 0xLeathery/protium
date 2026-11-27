@@ -27,9 +27,9 @@
 #   GAME_EXE        the executable, relative to the install folder or as a full path, when the
 #                   largest .exe in its top folder is not the game (macos/steamplay-launch gives
 #                   the one Steam chose)
-#   STEAMPLAY_LOG   where Wine's output goes (default <prefix>/../steamplay-run.log; the five
-#                   runs before keep theirs as steamplay-run.prev.log, the newest, to
-#                   steamplay-run.prev5.log)
+#   STEAMPLAY_LOG   this run's log: what this script and Wine say (default
+#                   <prefix>/../steamplay-run.log; the five runs before keep theirs as
+#                   steamplay-run.prev.log, the newest, to steamplay-run.prev5.log)
 #   WINEDEBUG       Wine's debug channels (default +loaddll,+msgbox)
 #   PROTON_NO_FSYNC 1 to have every wait for, and change to, an event, semaphore or mutex go to
 #                   the wineserver again. By default they are kept in shared memory
@@ -68,7 +68,7 @@
 # Steam's STEAM_COMPAT_CONFIG is read for nativevulkanloader. When a thread of the game waits a
 # minute for a lock, samples of the game's processes are left as steamplay-run.hang.<pid>.txt.
 
-set -euo pipefail
+set -Eeuo pipefail
 
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 # inside Protium.app this script is Contents/Resources/steamplay/steamplay-run.sh, next to the
@@ -87,12 +87,55 @@ export PYTHONDONTWRITEBYTECODE=1
 STEAM_ROOT=${STEAM_ROOT:-$HOME/Library/Application Support/Steam}
 WIN_STEAM_DLLS=${WIN_STEAM_DLLS:-$HOME/Library/Application Support/SteamPlay/steamclient-windows}
 
-die() { echo "steamplay-run.sh: error: $*" >&2; exit 1; }
+die() { echo "steamplay-run.sh: error: $*" >&2; trap - EXIT; exit 1; }
 log() { echo ":: $*" >&2; }
+# A step that fails before the game starts says which, in the log: set -e would otherwise end
+# this script without a word (die says its own)
+failed=
+trap 'failed="line $LINENO: $BASH_COMMAND"' ERR
+trap 'status=$?; [ $status -eq 0 ] || echo "steamplay-run.sh: error: the game was not started: a step failed (status $status${failed:+, $failed})" >&2' EXIT
+
+# This run's log, in the game's compatibility data folder, which Steam names: the five runs before
+# keep theirs, the newest as .prev.log and the oldest as .prev5.log (the next start is often how a
+# crash gets looked at, and telling whether a change made a game run better takes more than one
+# run to compare with). It is made before anything here can fail, and from then on what this
+# script says goes into it too: Steam starts the script with its output going nowhere, so an
+# error before the game started was lost, a game that "crashed at once" left no log, or the run
+# before's under this run's name. Started from a terminal, the script still talks to it.
+logfile=
+start_log() {
+    logfile=${STEAMPLAY_LOG:-$1/steamplay-run.log}
+    mkdir -p "$(dirname "$logfile")"
+    prev_base=${logfile%.log}
+    for i in 4 3 2; do
+        if [ -f "$prev_base.prev$i.log" ]; then mv -f "$prev_base.prev$i.log" "$prev_base.prev$((i + 1)).log"; fi
+    done
+    if [ -f "$prev_base.prev.log" ]; then mv -f "$prev_base.prev.log" "$prev_base.prev2.log"; fi
+    if [ -f "$logfile" ]; then mv -f "$logfile" "$prev_base.prev.log"; fi
+    # The watcher and the record below know this session's log by its file, not by its name: when
+    # the game is started again before this session has quite ended (the Rockstar launcher takes a
+    # minute and more to close after its game), that start moves this log aside, and by name they
+    # would read the new one. Wine's output goes on at the end of this same file.
+    : >"$logfile"
+    log_inode=$(stat -f %i "$logfile")
+    if [ ! -t 2 ]; then exec >>"$logfile" 2>&1; fi
+    # which Protium, and on which Mac: what a report of a game that does not start needs first
+    local version memory
+    version=$(cat "$SCRIPT_DIR/VERSION" 2>/dev/null) || version="$(cat "$SCRIPT_DIR/app/VERSION" 2>/dev/null || echo '?') from a checkout"
+    memory=$(sysctl -n hw.memsize 2>/dev/null) || memory=0
+    [[ $memory =~ ^[0-9]+$ ]] || memory=0
+    log "$(date '+%Y-%m-%d %H:%M:%S'): Protium $version, app $appid, on $(sysctl -n machdep.cpu.brand_string 2>/dev/null || echo '?')" \
+        "($(sysctl -n hw.model 2>/dev/null || echo '?'), $((memory >> 30)) GB), macOS $(sw_vers -productVersion 2>/dev/null || echo '?')" \
+        "($(sw_vers -buildVersion 2>/dev/null || echo '?'))"
+}
 
 [ $# -ge 1 ] || die "usage: steamplay-run.sh <app id> [game arguments...]"
 appid=$1; shift
 [[ $appid =~ ^[0-9]+$ ]] || die "'$appid' is not an app id"
+# Steam names the folder before anything else is known; by hand, it is found with the game below
+if [ -n "${STEAM_COMPAT_DATA_PATH:-}${STEAMPLAY_LOG:-}" ]; then
+    start_log "${STEAM_COMPAT_DATA_PATH:-}"
+fi
 [ -x "$WINE_INSTALL/bin/wine" ] || die "no Wine in $WINE_INSTALL"
 CLIENT_DIR="$STEAM_ROOT/Steam.AppBundle/Steam/Contents/MacOS"
 [ -f "$CLIENT_DIR/steamclient.dylib" ] || die "no steamclient.dylib in $CLIENT_DIR"
@@ -115,11 +158,15 @@ else
     exe=$(find "$game_dir" -maxdepth 1 -iname '*.exe' ! -iname 'UnityCrashHandler*' ! -iname '*setup*' \
           ! -iname 'unins*' -exec stat -f '%z %N' {} + | sort -rn | head -1 | cut -d' ' -f2-)
 fi
-[ -f "$exe" ] || die "no game executable in $game_dir (set GAME_EXE)"
+if [ ! -f "$exe" ]; then
+    if [ -n "${GAME_EXE:-}" ]; then die "the game's executable is missing: $exe"; fi
+    die "no game executable in $game_dir (set GAME_EXE)"
+fi
 
 # Steam Play names the game's compatibility data folder itself; it is the same one
 compat=${STEAM_COMPAT_DATA_PATH:-"$library/steamapps/compatdata/$appid"}
 prefix="$compat/pfx"
+[ -n "$logfile" ] || start_log "$compat"
 mkdir -p "$prefix"
 export WINEPREFIX="$prefix"
 export STEAM_COMPAT_DATA_PATH="$compat"
@@ -175,7 +222,7 @@ unset VK_DRIVER_FILES VK_ICD_FILENAMES VK_ADD_DRIVER_FILES PROTON_DISABLE_LSTEAM
 
 if [ ! -f "$prefix/system.reg" ]; then
     log "creating the prefix in $prefix"
-    "$WINE_INSTALL/bin/wine" wineboot -u >/dev/null 2>&1 || die "wineboot failed in $prefix"
+    "$WINE_INSTALL/bin/wine" wineboot -u >>"$logfile" 2>&1 || die "wineboot failed in $prefix (what it said is above)"
 fi
 # Proton's wine.inf registers its fonts by file name (arial.ttf, tahoma.ttf, ...), and Proton's
 # script links the files into the prefix's Fonts folder. DirectWrite lists what it finds there
@@ -243,22 +290,6 @@ for dll in GameOverlayRenderer.dll GameOverlayRenderer64.dll; do
     fi
 done
 
-logfile=${STEAMPLAY_LOG:-$compat/steamplay-run.log}
-# the five runs before this one keep their logs, the newest as .prev.log and the oldest as
-# .prev5.log: the next start is often how a crash gets looked at, and telling whether a change
-# made a game run better takes more than one run to compare with
-prev_base=${logfile%.log}
-for i in 4 3 2; do
-    if [ -f "$prev_base.prev$i.log" ]; then mv -f "$prev_base.prev$i.log" "$prev_base.prev$((i + 1)).log"; fi
-done
-if [ -f "$prev_base.prev.log" ]; then mv -f "$prev_base.prev.log" "$prev_base.prev2.log"; fi
-if [ -f "$logfile" ]; then mv -f "$logfile" "$prev_base.prev.log"; fi
-# This session's log is made now, so that the watcher and the record below know it by its file and
-# not by its name: when the game is started again before this session has quite ended (the Rockstar
-# launcher takes a minute and more to close after its game), that start moves this log aside, and
-# by name they would read the new one. Wine's output, opened with > below, truncates this same file.
-: >"$logfile"
-log_inode=$(stat -f %i "$logfile")
 # where each module is loaded, so that the PE addresses of a crash can be given their DLLs, and
 # what a message box says, which is often all a game tells of what it could not do
 export WINEDEBUG="${WINEDEBUG:-+loaddll,+msgbox}"
@@ -267,7 +298,7 @@ export WINE_STACK_DUMP_DIR="${WINE_STACK_DUMP_DIR:-$compat}"
 # every half minute, what each of the game's processes did, for the record of the run beside the
 # frame lines: about 0.1 ms of processor time a line, and some 10 ns a wineserver call or wait
 export WINE_PROCESS_STATS="${WINE_PROCESS_STATS:-30}"
-log "app $appid: $exe (log: $logfile)"
+log "app $appid: $exe$([ $# -eq 0 ] || printf ' %q' "$@") (log: $logfile)"
 # A game that hangs says nothing of where. Wine does say when a thread has waited a minute for a
 # lock that another one holds: at that, where every thread of the game's processes is gets
 # saved next to the log (macOS's sample), once per run. The watcher goes when this process,
@@ -320,4 +351,4 @@ cd "$(dirname "$exe")"
 # it and wait for it, and steam.exe, which ends when no other program is left, waits for
 # start.exe in turn. Nothing of the session then ever ends, and Steam goes on showing the game
 # as running after it was quit.
-exec "$WINE_INSTALL/bin/wine" 'c:\windows\system32\steam.exe' "Z:${exe//\//\\}" "$@" >"$logfile" 2>&1 </dev/null
+exec "$WINE_INSTALL/bin/wine" 'c:\windows\system32\steam.exe' "Z:${exe//\//\\}" "$@" >>"$logfile" 2>&1 </dev/null

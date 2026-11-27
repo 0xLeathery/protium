@@ -21,10 +21,12 @@ die() { echo "steamplay-launch: error: $*" >&2; exit 1; }
 
 [ $# -ge 1 ] || die 'usage: steamplay-launch <game.exe> [arguments...]'
 exe=$1; shift
-[ -f "$exe" ] || die "no executable $exe"
 
+# Started by Steam, a missing executable is for steamplay-run.sh to tell: it says so in the game's
+# log, and what this script says goes nowhere (Steam gives it no output to write to)
 appid=${SteamAppId:-}
 if [ -z "$appid" ]; then
+    [ -f "$exe" ] || die "no executable $exe"
     library=${exe%%/steamapps/common/*}
     rest=${exe#*/steamapps/common/}
     [ "$library" != "$exe" ] || die "$exe is not in a Steam library, and SteamAppId is not set"

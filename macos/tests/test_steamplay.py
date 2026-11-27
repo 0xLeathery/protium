@@ -629,6 +629,63 @@ class ProcessLines(unittest.TestCase):
         self.assertEqual([r.get("source", r.get("api")) for r in kept], ["dxgi", "process", "process", "audio"])
 
 
+class RunScriptLog(unittest.TestCase):
+    """steamplay-run.sh, as Steam starts it (its output going nowhere): what it says before the
+    game starts, and why it stopped, goes into the game's log. Run with a fake Wine, a fake Steam
+    folder and a pgrep that finds Steam, so that nothing of Steam's or Wine's runs."""
+    SCRIPT = os.path.join(HERE, "..", "steamplay-run.sh")
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp(dir=TEMP)
+        d = self.dir
+        for sub in ("wine/bin", "nowine", "bin", "steam/Steam.AppBundle/Steam/Contents/MacOS", "steam/steamapps",
+                    "lib/steamapps/common/Game", "home", "dlls"):
+            os.makedirs(os.path.join(d, sub))
+        for path, text in (("wine/bin/wine", "#!/bin/sh\nexit 0\n"), ("bin/pgrep", "#!/bin/sh\nexit 0\n")):
+            with open(os.path.join(d, path), "w") as f:
+                f.write(text)
+            os.chmod(os.path.join(d, path), 0o755)
+        open(os.path.join(d, "steam/Steam.AppBundle/Steam/Contents/MacOS/steamclient.dylib"), "w").close()
+        open(os.path.join(d, "lib/steamapps/common/Game/game.exe"), "w").close()
+        with open(os.path.join(d, "steam/steamapps/libraryfolders.vdf"), "w") as f:
+            f.write('"libraryfolders"\n{\n\t"0"\n\t{\n\t\t"path"\t\t"%s"\n\t}\n}\n' % os.path.join(d, "lib"))
+        with open(os.path.join(d, "lib/steamapps/appmanifest_123.acf"), "w") as f:
+            f.write('"AppState"\n{\n\t"appid"\t\t"123"\n\t"installdir"\t\t"Game"\n}\n')
+        self.compat = os.path.join(d, "lib/steamapps/compatdata/123")
+        self.log = os.path.join(self.compat, "steamplay-run.log")
+
+    def start(self, wine="wine"):
+        import subprocess
+        env = dict(os.environ, STEAM_COMPAT_DATA_PATH=self.compat, WINE_INSTALL=os.path.join(self.dir, wine),
+                   STEAM_ROOT=os.path.join(self.dir, "steam"), STEAMPLAY_HOME=os.path.join(self.dir, "home"),
+                   WIN_STEAM_DLLS=os.path.join(self.dir, "dlls"), PATH=os.path.join(self.dir, "bin") + ":/usr/bin:/bin:/usr/sbin")
+        r = subprocess.run(["/bin/bash", self.SCRIPT, "123"], env=env, stdin=subprocess.DEVNULL,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        with open(self.log) as f:
+            return r.returncode, f.read()
+
+    def test_an_error_before_the_game_goes_into_its_log(self):
+        status, log = self.start(wine="nowine")
+        self.assertEqual(status, 1)
+        self.assertRegex(log.splitlines()[0], r"^:: \d{4}-\d\d-\d\d \d\d:\d\d:\d\d: Protium .*, app 123, on .*, macOS ")
+        self.assertIn("steamplay-run.sh: error: no Wine in", log)
+
+    def test_the_run_before_keeps_its_log(self):
+        os.makedirs(self.compat)
+        with open(self.log, "w") as f:
+            f.write("the run before\n")
+        self.start(wine="nowine")
+        with open(os.path.join(self.compat, "steamplay-run.prev.log")) as f:
+            self.assertEqual(f.read(), "the run before\n")
+
+    def test_a_step_that_fails_says_which(self):
+        os.makedirs(self.compat)
+        open(os.path.join(self.compat, "pfx"), "w").close()     # mkdir -p of the prefix fails
+        status, log = self.start()
+        self.assertEqual(status, 1)
+        self.assertRegex(log, r'the game was not started: a step failed \(status 1, line \d+: mkdir -p "\$prefix"\)')
+
+
 import datetime
 import time
 
