@@ -2671,6 +2671,42 @@ def cmd_record(appid, start, logfile):
     return 0
 
 
+def wait_for_exit(pid):
+    """Returns once process pid has ended, at once when it has already. kqueue tells it the moment
+    it happens, for any process of this user's, and is not fooled by a later process that gets
+    the same number."""
+    import select
+    kq = select.kqueue()
+    try:
+        try:
+            kq.control([select.kevent(pid, select.KQ_FILTER_PROC, select.KQ_EV_ADD | select.KQ_EV_ONESHOT,
+                                      select.KQ_NOTE_EXIT)], 0)
+        except OSError:         # ESRCH: it has ended
+            return
+        while not kq.control(None, 1):
+            pass
+    finally:
+        kq.close()
+
+
+def cmd_record_after(pid, appid, start, logfile):
+    """"record", once process pid has ended, from a process of its own; this returns at once.
+    steamplay-run.sh starts it just before its own process becomes Wine's. When Steam ends a game
+    (Stop, or Steam quitting) and when it tidies up after one, it ends the game's process group,
+    and the waiter that used to be in it went with it, record and all: the waiting process
+    leaves the group and the session, and is no child of the game's (its parent ends now)."""
+    if os.fork():
+        return 0
+    try:
+        os.setsid()
+        wait_for_exit(pid)
+        run(["record", str(appid), str(start), logfile])
+    except SystemExit:
+        pass
+    finally:
+        os._exit(0)
+
+
 def cmd_result(appid, verdict, note):
     cache = app_cache()
     if appid not in cache:
@@ -3408,6 +3444,8 @@ def main(argv):
         sys.exit(cmd_docs("--check" in argv))
     elif argv in (["evidence"], ["evidence", "--write"], ["evidence", "--check"]):
         sys.exit(cmd_evidence(argv[1] if len(argv) > 1 else None))
+    elif len(argv) == 6 and argv[:2] == ["record", "--after"] and all(a.isdigit() for a in argv[2:5]):
+        sys.exit(cmd_record_after(int(argv[2]), int(argv[3]), int(argv[4]), argv[5]))
     elif len(argv) == 4 and argv[0] == "record" and argv[1].isdigit() and argv[2].isdigit():
         sys.exit(cmd_record(int(argv[1]), int(argv[2]), argv[3]))
     elif len(argv) >= 1 and argv[0] == "survey":

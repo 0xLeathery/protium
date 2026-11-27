@@ -34,6 +34,9 @@ written. "Known problems" is a heading of our own, next to Keep a Changelog's.
   no log, or the log of the run before under its own name. A game's log now begins with
   Protium's version, the Mac and the macOS version, then what Protium did before the game
   started, and, when it stopped, why.
+- Protium keeps a record of every run of a game: how long it ran, how it ended and how fast it
+  drew. A run that Steam ended, for example because Steam was quit while the game ran, left no
+  record. Now it does.
 
 ## [0.4.2] - 2026-11-25
 

@@ -336,15 +336,15 @@ rm -f "$hang".*.txt
     done
 ) </dev/null >/dev/null 2>&1 &
 # When the session has ended, how long it ran and how it ended goes into SteamPlay's results,
-# which "macos/steamplay discover" judges games by. Like the watcher above, this waits for this
-# process, which becomes Wine's.
+# which "macos/steamplay discover" judges games by. "record --after" waits for this process, which
+# becomes Wine's, from a process of its own, out of the game's process group: Steam ends that
+# group when it ends a game (Stop, or Steam quitting) and when it tidies up after one, and a
+# waiter in it went with it, so that such a run had no record.
 started=$(date +%s)
 # One notice when a newer Protium is out, once per version; the game does not wait for it
 ("$PROTIUM_PYTHON" "$SCRIPT_DIR/steamplay" version --notify) </dev/null >/dev/null 2>&1 &
-(
-    while kill -0 $$ 2>/dev/null; do sleep 2; done
-    STEAMPLAY_GAME_ENV=$game_env_text STEAMPLAY_LOG_INODE=$log_inode "$PROTIUM_PYTHON" "$SCRIPT_DIR/steamplay" record "$appid" "$started" "$logfile"
-) </dev/null >/dev/null 2>&1 &
+STEAMPLAY_GAME_ENV=$game_env_text STEAMPLAY_LOG_INODE=$log_inode "$PROTIUM_PYTHON" "$SCRIPT_DIR/steamplay" \
+    record --after $$ "$appid" "$started" "$logfile" </dev/null >/dev/null 2>&1 &
 cd "$(dirname "$exe")"
 # steam.exe starts the game by its full Windows path (Wine's Z: drive is the host's /). It is
 # named by its own full path too, as Proton does: by its bare name Wine has start.exe look for

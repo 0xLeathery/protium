@@ -686,6 +686,48 @@ class RunScriptLog(unittest.TestCase):
         self.assertRegex(log, r'the game was not started: a step failed \(status 1, line \d+: mkdir -p "\$prefix"\)')
 
 
+class RecordAfter(unittest.TestCase):
+    """"record --after": a run is recorded once its process has ended, also when its whole process
+    group was killed, as Steam does when it quits."""
+
+    def test_a_run_whose_group_was_killed_is_recorded(self):
+        import signal
+        import subprocess
+        import time
+        home = tempfile.mkdtemp(dir=TEMP)
+        log = os.path.join(home, "steamplay-run.log")
+        with open(log, "w") as f:
+            f.write("fsync: up and running.\n")
+        # as steamplay-run.sh does it: the waiter in the background, then the shell becomes the game
+        script = '"$0" "$1" record --after $$ 454546 %d "%s" </dev/null >/dev/null 2>&1 & exec /bin/sleep 30' % (int(time.time()), log)
+        env = dict(os.environ, STEAMPLAY_HOME=home, STEAMPLAY_NO_SYSTEM_LOG="1", PROTIUM_VERSION="0.0.0-test")
+        game = subprocess.Popen(["/bin/bash", "-c", script, sys.executable, os.path.join(HERE, "..", "steamplay")],
+                                env=env, start_new_session=True)
+        time.sleep(1.0)
+        os.killpg(game.pid, signal.SIGKILL)
+        game.wait()
+        results = os.path.join(home, "results.jsonl")
+        for _ in range(100):
+            if os.path.exists(results) and os.path.getsize(results):
+                break
+            time.sleep(0.1)
+        with open(results) as f:
+            entry = json.loads(f.read().splitlines()[-1])
+        self.assertEqual((entry["app"], entry["by"], entry["end"]), (454546, "run", "ended"))
+
+    def test_the_wait_ends_when_the_process_does(self):
+        import subprocess
+        import time
+        p = subprocess.Popen(["/bin/sleep", "0.3"])
+        t0 = time.time()
+        sp.wait_for_exit(p.pid)
+        self.assertGreater(time.time() - t0, 0.2)
+        p.wait()
+        t0 = time.time()
+        sp.wait_for_exit(p.pid)     # gone already
+        self.assertLess(time.time() - t0, 0.1)
+
+
 import datetime
 import time
 
