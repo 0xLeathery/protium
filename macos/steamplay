@@ -2385,6 +2385,8 @@ def add_result(entry):
 #   DXGI: the GPU in the last N s (<program>, HH:MM:SS): how busy the GPU was
 # and for a frame of over 50 ms, as it is noticed:
 #   DXGI: slow frame (<program>, HH:MM:SS.s): what it waited for
+#   Vulkan: slow frame (<program>, HH:MM:SS.s): what the program's threads spent in the driver
+#   during it (win32u)
 RECORDER_LINE = re.compile(r"^(?:info:  )?(DXGI|Vulkan): (frame times|the last 30 s|a frame of the last 30 s|"
                            r"compiles of the last \d+ s|the GPU in the last \d+ s|slow frame)"
                            r"(?: \((.+?)(?:, (\d\d:\d\d:\d\d(?:\.\d)?))?\))?: (.*)$", re.M)
@@ -2422,6 +2424,10 @@ RECORDER_MORE = {
                    r"%s ms for a drawable\), GPU %s ms))?" % ((_N,) * 9)),
         ("ms", "earlier_frame_ms", "gpu_waits", "gpu_wait_ms", "query_flushes", "commit_ms", "rest_ms", "new_pipelines",
          "shaders_compiled", "frames_before", "encoding_ms", "pipeline_wait_ms", "pipeline_waits", "drawable_ms", "gpu_ms")),
+    ("Vulkan", "slow_frame"): (
+        re.compile(r"%s ms: (\d+) submits? of (\d+) command buffers?, %s ms in the driver's submit, (\d+) acquires? %s ms, "
+                   r"present %s ms \(the driver's %s ms\)" % ((_N,) * 5)),
+        ("ms", "submits", "buffers", "submit_ms", "acquires", "acquire_ms", "present_ms", "driver_present_ms")),
 }
 SLOW_FRAME = re.compile(r"%s s \(%s ms\)" % (_N, _N))
 RUNS_KEPT = 100     # rows files kept for each game
@@ -2443,16 +2449,20 @@ def recorder_rows(log):
     is a row of its own, {"api", "program", "at" (HH:MM:SS.s), "log_line", "slow_frame": {ms,
     earlier_frame_ms, gpu_waits, gpu_wait_ms, query_flushes, commit_ms, rest_ms, new_pipelines,
     shaders_compiled[, frames_before[, encoding_ms, pipeline_wait_ms, pipeline_waits, drawable_ms,
-    gpu_ms]]}}."""
+    gpu_ms]]}}, or for a Vulkan program {ms, submits, buffers, submit_ms, acquires, acquire_ms,
+    present_ms, driver_present_ms}."""
     rows, open_rows = [], {}
     line, counted = 1, 0
     for m in RECORDER_LINE.finditer(log):
         api, kind, program, at, rest = m.groups()
         more = "compiles" if kind.startswith("compiles") else "gpu" if kind.startswith("the GPU") else \
             "slow_frame" if kind == "slow frame" else None
-        if more and api != "DXGI":
-            continue
-        spec = RECORDER_MORE[more] if more else RECORDER_FIELDS.get(kind) or RECORDER_FIELDS[(api, kind)]
+        if more:
+            spec = RECORDER_MORE.get((api, more)) or (RECORDER_MORE[more] if api == "DXGI" else None)
+            if not spec:
+                continue
+        else:
+            spec = RECORDER_FIELDS.get(kind) or RECORDER_FIELDS[(api, kind)]
         fields = spec[0].match(rest)
         if not fields:
             continue

@@ -474,6 +474,20 @@ class FrameCauses(unittest.TestCase):
         # a frame near the start has no frame before it that is known to be done
         self.assertNotIn("frames_before", query)
 
+    def test_a_slow_vulkan_frame_has_what_was_spent_in_the_driver(self):
+        log = ("Vulkan: slow frame (vk_pacing_test.exe, 15:18:54.3): 152.1 ms: 1 submit of 1 command buffer, 0.06 ms in "
+               "the driver's submit, 1 acquire 0.56 ms, present 0.17 ms (the driver's 0.13 ms)\n"
+               "Vulkan: slow frame (RDR2.exe, 15:18:55.0): 84.0 ms: 2 submits of 117 command buffers, 6.10 ms in the "
+               "driver's submit, 2 acquires 0.05 ms, present 0.80 ms (the driver's 0.71 ms)\n"
+               # no such lines from a Vulkan program: they are not rows
+               "Vulkan: compiles of the last 30 s (RDR2.exe, 15:19:00): 1 shader compiled (1 ms)\n")
+        one, many = sp.recorder_rows(log)
+        self.assertEqual((one["api"], one["program"], one["at"]), ("vulkan", "vk_pacing_test.exe", "15:18:54.3"))
+        self.assertEqual(one["slow_frame"], {"ms": 152.1, "submits": 1, "buffers": 1, "submit_ms": 0.06, "acquires": 1,
+                                             "acquire_ms": 0.56, "present_ms": 0.17, "driver_present_ms": 0.13})
+        self.assertEqual((many["slow_frame"]["submits"], many["slow_frame"]["buffers"], many["slow_frame"]["acquires"]),
+                         (2, 117, 2))
+
     def test_a_frame_whose_place_was_taken_has_no_numbers_for_it(self):
         line = self.SLOW.splitlines(True)[2].rstrip("\n") + "; the frame 16 before: not kept\n"
         row, = sp.recorder_rows(line)

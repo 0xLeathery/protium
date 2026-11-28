@@ -16,8 +16,9 @@ written. "Known problems" is a heading of our own, next to Keep a Changelog's.
   pipelines were compiled and how long the game's drawing waited for them, and how busy the
   GPU was. A frame that takes over 50 ms gets a line of its own that says what it waited for:
   an earlier frame, the GPU, a pipeline that was being compiled, or the game itself. This is
-  what tells one cause of a hitch from another. The record Protium keeps of each run has
-  these lines too.
+  what tells one cause of a hitch from another. A Vulkan game's log has a line for each such
+  frame too, with the time it spent in the graphics driver. The record Protium keeps of each
+  run has these lines.
 - While you play without a controller, Protium no longer looks for one 690 times a second,
   which took 1.5% of a processor core for as long as a game ran. It now looks ten times a
   second until one is connected. Like the rest of the controller support, this has not been

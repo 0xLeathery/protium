@@ -9,6 +9,9 @@
  *     loads=0,4,8     heavy blits a frame (the GPU's work), a step of the run for each
  *     secs=10         seconds a step
  *     cpu=0           ms of processor work a frame (a game's own)
+ *     slow=0:0        N:ms: frame N of each step sleeps that many ms before it is drawn, and a line
+ *                     "truth: frame N (HH:MM:SS.mmm): sleep, 150.2 ms" says so (the log's line for a
+ *                     slow frame is held against it)
  *     serial=0        1: wait for each frame's GPU work before the next (its GPU time, unpaced)
  *     recreate=0      N: after the steps, make the swapchain anew N times, `frames` frames on each
  *     frames=1        frames drawn on each swapchain of "recreate"
@@ -76,6 +79,7 @@ static VkDeviceMemory big_memory[2];
 static HWND window;
 
 static int opt_images = 2, opt_fifo = 1, opt_show = 1, opt_secs = 10, opt_cpu, opt_serial, opt_recreate, opt_frames = 1, opt_hold;
+static int opt_slow_frame, opt_slow_ms;
 static int opt_drop, opt_idle = 1;
 static int opt_width = 1280, opt_height = 720, opt_screen;
 static int loads[16], load_count;
@@ -237,6 +241,17 @@ static int draw_frame( int *counter, int load, struct stats *stats )
         start = now();
         while (ms( now() - start ) < opt_cpu) ;
     }
+    if (opt_slow_ms && *counter == opt_slow_frame)
+    {
+        SYSTEMTIME st;
+
+        start = now();
+        Sleep( opt_slow_ms );
+        GetLocalTime( &st );
+        printf( "truth: frame %d (%02u:%02u:%02u.%03u): sleep, %.1f ms\n", *counter, st.wHour, st.wMinute, st.wSecond,
+                st.wMilliseconds, ms( now() - start ) );
+        fflush( stdout );
+    }
 
     start = now();
     res = vkAcquireNextImageKHR( device, swapchain, 2000000000ull, slot->acquired, VK_NULL_HANDLE, &index );
@@ -372,6 +387,7 @@ int main( int argc, char **argv )
         else if (!strncmp( argv[a], "show=", 5 )) opt_show = atoi( v );
         else if (!strncmp( argv[a], "secs=", 5 )) opt_secs = atoi( v );
         else if (!strncmp( argv[a], "cpu=", 4 )) opt_cpu = atoi( v );
+        else if (!strncmp( argv[a], "slow=", 5 )) sscanf( v, "%d:%d", &opt_slow_frame, &opt_slow_ms );
         else if (!strncmp( argv[a], "serial=", 7 )) opt_serial = atoi( v );
         else if (!strncmp( argv[a], "recreate=", 9 )) opt_recreate = atoi( v );
         else if (!strncmp( argv[a], "frames=", 7 )) opt_frames = atoi( v );

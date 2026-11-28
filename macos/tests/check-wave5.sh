@@ -104,6 +104,10 @@
 #      pipeline, a slow frame that waited for an earlier frame whose encoding waited for 1
 #      pipeline. The compile line has the test's 4 shaders and 2 pipelines, and the GPU's line a
 #      share of over 0 and at most 100%
+#  26  a slow Vulkan frame: vk_pacing_test.exe, x86_64, with a window that is never shown, sleeps
+#      150 ms before one frame, and win32u's line for that frame has its time within 15 ms of
+#      the sleep and under 10 ms of it in the driver's submit, acquire and present. Mesa's
+#      headers are needed to build the test (macos/build-mesa.sh leaves them)
 # The build comes first ("build", which takes long and can be left out with CHECK_ITEMS); the test
 # programs are compiled on every run.
 #
@@ -161,7 +165,7 @@ mkdir -p "$EVIDENCE_DIR"
 RESULTS=()
 FAILED=0
 TODO=0
-CHECK_ITEMS=${CHECK_ITEMS:-"build 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25"}
+CHECK_ITEMS=${CHECK_ITEMS:-"build 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26"}
 want() { case " $CHECK_ITEMS " in *" $1 "*) return 0 ;; esac; return 1; }
 pass() { RESULTS+=("PASS  item $1: $2"); echo "PASS  item $1: $2"; }
 fail() { RESULTS+=("FAIL  item $1: $2"); echo "FAIL  item $1: $2"; FAILED=1; }
@@ -678,6 +682,24 @@ EOF
         "ok "*) pass 25 "slow frames: ${verdict#ok } ($log.*)" ;;
         *) fail 25 "slow frames: ${verdict#bad } ($log.*)" ;;
     esac
+fi
+
+if want 26; then
+    log=$EVIDENCE_DIR/item26
+    MESA_SRC=${MESA_SRC:-$BUILD_ROOT/mesa-src}
+    if ! "$MINGW_BIN/x86_64-w64-mingw32-clang" -O2 -Wall -I"$MESA_SRC/include" -o "$T/vk_pacing_test.exe" \
+            "$SCRIPT_DIR/vk_pacing_test.c" -luser32 >"$log.build" 2>&1; then
+        fail 26 "vk_pacing_test.c did not build: $(head -1 "$log.build" | cut -c1-120) ($log.build)"
+    else
+        WINEFSYNC=1 winrun "$log" "$T/vk_pacing_test.exe" mode=fifo show=0 secs=4 loads=2 slow=60:150
+        truth=$(tr -d '\r' <"$log.out" | sed -n 's/^truth: frame [0-9]* (.*): sleep, \([0-9.]*\) ms$/\1/p' | head -1)
+        line=$(grep -a '^Vulkan: slow frame ' "$log.err" | head -1)
+        verdict=$(echo "$line" | perl -ne 'print((abs($1 - '"${truth:-0}"') <= 15 && $2 + $3 + $4 < 10) ? "ok" : "bad")
+            if /: ([\d.]+) ms: \d+ submits? of \d+ command buffers?, ([\d.]+) ms in the driver.s submit, \d+ acquires? ([\d.]+) ms, present ([\d.]+) ms/')
+        [ "$verdict" = ok ] && [ "$(grep -a -c '^Vulkan: slow frame ' "$log.err")" = 1 ] \
+            && pass 26 "a sleep of ${truth} ms: '$(echo "$line" | cut -c1-200)' ($log.*)" \
+            || fail 26 "a sleep of ${truth:-none} ms: '$(echo "$line" | cut -c1-200)' ($log.*)"
+    fi
 fi
 
 if want 11; then
