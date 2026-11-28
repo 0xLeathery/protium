@@ -96,11 +96,19 @@
 #      threads waiting, winedevice.exe looking for controllers 690 times a second; one was found
 #      two days after it had started.) And a plain kill ends each winedevice.exe: SDL's signal
 #      handlers kept it from the one that looks for controllers
+#  25  what a slow frame waited for: frame_cause_test.exe, x86_64, a Direct3D 11 window, does four
+#      things to a frame and says what it did, and DXMT's lines in the log say the same (patches
+#      0013 to 0015): for a sleep of 150 ms, a slow frame whose rest is that within 15 ms; for a
+#      staging texture mapped, one wait for the GPU of the Map's own time within 10%; for an
+#      event query, as many query flushes as GetData was called; for two new shaders and their
+#      pipeline, a slow frame that waited for an earlier frame whose encoding waited for 1
+#      pipeline. The compile line has the test's 4 shaders and 2 pipelines, and the GPU's line a
+#      share of over 0 and at most 100%
 # The build comes first ("build", which takes long and can be left out with CHECK_ITEMS); the test
 # programs are compiled on every run.
 #
-# Items 4, 5 and 9 show windows that take the focus; run them while nobody is using the Mac.
-# They and item 12 need the screen unlocked.
+# Items 4, 5, 9 and 25 show windows that take the focus; run them while nobody is using the Mac.
+# Items 4, 5, 9 and 12 need the screen unlocked.
 #
 # NOT YET CHECKED: AV1 video (Proton's dav1d plugin is not built); OpenGL above 2.1 and
 # Proton's fullscreen hack, whose shader needs GLSL 3.30; the stuck cursor seen once in IRON NEST.
@@ -153,7 +161,7 @@ mkdir -p "$EVIDENCE_DIR"
 RESULTS=()
 FAILED=0
 TODO=0
-CHECK_ITEMS=${CHECK_ITEMS:-"build 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24"}
+CHECK_ITEMS=${CHECK_ITEMS:-"build 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25"}
 want() { case " $CHECK_ITEMS " in *" $1 "*) return 0 ;; esac; return 1; }
 pass() { RESULTS+=("PASS  item $1: $2"); echo "PASS  item $1: $2"; }
 fail() { RESULTS+=("FAIL  item $1: $2"); echo "FAIL  item $1: $2"; FAILED=1; }
@@ -245,14 +253,15 @@ if true; then
     cc x86_64 session_end_test.exe session_end_test.c -lntdll
     cc x86_64 audio_underrun_test.exe audio_underrun_test.c -lole32 -luuid -lksuser
     cc x86_64 server_end_test.exe server_end_test.c
+    cc x86_64 frame_cause_test.exe frame_cause_test.c -ld3d11 -ld3dcompiler -ldxguid -luuid -luser32
     # one second of a single colour with a tone, as H.264/AAC and VP9/Opus
     "$FFMPEG_CLI" -loglevel error -y -f lavfi -i color=c=0x3366cc:s=320x240:r=30:d=1 -f lavfi -i sine=f=440:d=1 \
         -c:v libx264 -profile:v baseline -pix_fmt yuv420p -c:a aac -shortest "$T/h264_aac.mp4" >>"$T/build.log" 2>&1
     "$FFMPEG_CLI" -loglevel error -y -f lavfi -i color=c=0x3366cc:s=320x240:r=30:d=1 -f lavfi -i sine=f=440:d=1 \
         -c:v libvpx-vp9 -pix_fmt yuv420p -c:a libopus -shortest "$T/vp9_opus.webm" >>"$T/build.log" 2>&1
     n=$(ls "$T"/*.exe 2>/dev/null | wc -l | tr -d ' ')
-    [ "$n" -eq 36 ] && [ -s "$T/h264_aac.mp4" ] && [ -s "$T/vp9_opus.webm" ] \
-        && pass programs "36 test programs and 2 video files ($T)" || fail programs "$n of 36 test programs ($T/build.log)"
+    [ "$n" -eq 37 ] && [ -s "$T/h264_aac.mp4" ] && [ -s "$T/vp9_opus.webm" ] \
+        && pass programs "37 test programs and 2 video files ($T)" || fail programs "$n of 37 test programs ($T/build.log)"
 fi
 
 if [ ! -x "$WINE" ]; then
@@ -624,6 +633,51 @@ if want 24; then
     WINEPREFIX=$PREFIX "$SERVER" -k >/dev/null 2>&1
     WINEPREFIX=$PREFIX run_timeout 30 "$SERVER" -w >/dev/null 2>&1
     [ $ok = yes ] && pass 24 "the wineserver's end: $said ($EVIDENCE_DIR/item24-*)" || fail 24 "the wineserver's end: $said ($EVIDENCE_DIR/item24-*)"
+fi
+
+if want 25; then
+    log=$EVIDENCE_DIR/item25
+    # 800 statements in the new pixel shader: its compile is then well over a slow frame's 50 ms
+    winrun "$log" "$T/frame_cause_test.exe" frames=1500 every=250 lines=800
+    verdict=$(/usr/bin/python3 -I - "$log.out" "$log.err" <<'EOF'
+import re, sys
+out, err = (open(p, errors="replace").read().replace("\r", "") for p in sys.argv[1:3])
+truth = {m[1]: m[2] for m in re.finditer(r"^truth: frames? \d+.*?\): (\w+), (.*)$", out, re.M)}
+slow = [m.groupdict() for m in re.finditer(
+    r"DXGI: slow frame \(.*?\): (?P<ms>[\d.]+) ms: (?P<earlier>[\d.]+) ms for an earlier frame, (?P<waits>\d+) waits? for the GPU "
+    r"\((?P<wait_ms>[\d.]+) ms\), (?P<flushes>\d+) query flush(?:es)?, commit [\d.]+ ms, rest (?P<rest>[\d.]+) ms; \d+ new pipelines?, "
+    r"\d+ shaders? compiled(?:; the frame \d+ before: encoding (?P<encoding>[\d.]+) ms \((?P<pipeline_ms>[\d.]+) ms of it for "
+    r"(?P<pipelines>\d+) pipelines?)?", err)]
+said, ok = [], True
+def check(name, good, text):
+    global ok
+    ok = ok and good
+    said.append("%s%s: %s" % ("" if good else "NOT ", name, text))
+sleep = float(re.match(r"([\d.]+) ms", truth.get("sleep", "0 ms"))[1])
+rests = [float(s["rest"]) for s in slow if abs(float(s["rest"]) - sleep) <= 15]
+check("sleep", sleep > 100 and len(rests) == 1, "%.1f ms, rest %s" % (sleep, rests))
+waited = float(re.match(r"waited ([\d.]+) ms", truth.get("map", "waited 0 ms"))[1])
+waits = [float(s["wait_ms"]) for s in slow if s["waits"] == "1"]
+check("map", waited > 0 and len(waits) == 1 and abs(waits[0] - waited) <= 0.1 * waited, "%.1f ms, 1 wait for the GPU %s" % (waited, waits))
+polls = int(re.match(r"(\d+) polls", truth.get("query", "0 polls"))[1])
+flushes = [int(s["flushes"]) for s in slow if s["flushes"] != "0"]
+check("query", polls > 0 and flushes == [polls], "%d polls, %s flushes" % (polls, flushes))
+piped = [s for s in slow if s["pipelines"] == "1"]
+check("shaders", "shaders" in truth and len(piped) == 1 and float(piped[0]["pipeline_ms"]) > 40
+      and float(piped[0]["earlier"]) > 0.8 * float(piped[0]["ms"]),
+      "a frame of %s ms waited %s ms for a frame that waited %s ms for 1 pipeline"
+      % ((piped[0]["ms"], piped[0]["earlier"], piped[0]["pipeline_ms"]) if piped else ("no", "no", "no")))
+m = re.search(r"DXGI: compiles of the last \d+ s \(.*?\): .*; so far (\d+) shaders? compiled, (\d+) from the shader cache, (\d+) pipelines?", err)
+check("compiles", bool(m) and (m[1], m[3]) == ("4", "2"), "%s shaders, %s pipelines" % ((m[1], m[3]) if m else ("no", "no")))
+m = re.search(r"DXGI: the GPU in the last \d+ s \(.*?\): busy [\d.]+ s of [\d.]+ s \((\d+)%\), ([\d.]+) ms a frame", err)
+check("GPU", bool(m) and 0 < int(m[1]) <= 100, "%s%% busy, %s ms a frame" % ((m[1], m[2]) if m else ("no", "no")))
+print(("ok " if ok else "bad ") + "; ".join(said))
+EOF
+)
+    case $verdict in
+        "ok "*) pass 25 "slow frames: ${verdict#ok } ($log.*)" ;;
+        *) fail 25 "slow frames: ${verdict#bad } ($log.*)" ;;
+    esac
 fi
 
 if want 11; then

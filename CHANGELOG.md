@@ -12,6 +12,11 @@ written. "Known problems" is a heading of our own, next to Keep a Changelog's.
 
 ### Changed
 
+- A Direct3D 10 or 11 game's log now also says, every half minute, how many shaders and
+  pipelines were compiled and how long the game's drawing waited for them, and how busy the
+  GPU was. A frame that takes over 50 ms gets a line of its own that says what it waited for:
+  an earlier frame, the GPU, a pipeline that was being compiled, or the game itself. This is
+  what tells one cause of a hitch from another.
 - While you play without a controller, Protium no longer looks for one 690 times a second,
   which took 1.5% of a processor core for as long as a game ran. It now looks ten times a
   second until one is connected. Like the rest of the controller support, this has not been

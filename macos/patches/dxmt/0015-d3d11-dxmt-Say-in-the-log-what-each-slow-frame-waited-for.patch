@@ -1,0 +1,300 @@
+d3d11, dxmt: Say in the log what each slow frame waited for.
+
+The half-minute lines say how many frames were slow and what a frame waited for on average,
+which hides the slow ones: a frame of 160 ms among 3600 of 8 ms moves no average. Each
+frame that takes over 50 ms now gets a line of its own as it is noticed, the first 24 of a
+half minute:
+
+  DXGI: slow frame (frame_cause_test.exe, 15:06:22.5): 119.8 ms: 119.7 ms for an earlier
+  frame, 0 waits for the GPU (0.0 ms), 0 query flushes, commit 0.0 ms, rest 0.0 ms; 1 new
+  pipeline, 1 shader compiled; the frame 4 before: encoding 112.9 ms (112.8 ms of it for 1
+  pipeline, 0.0 ms for a drawable), GPU 1.8 ms
+
+The frame is the time from one Present to the next on the thread that presents. Of it, the
+line has what that thread waited for: an earlier frame (the Present before waits until the
+frame the queue's latency names is done on the GPU, and a swap chain with a latency of its
+own until that one is encoded), the GPU (a staging texture mapped before its copy was done),
+a free command chunk ("commit"), and how often a query was asked for before it had come. The
+rest is the game's own time and DXMT's on that thread, the time between a query's flushes
+among it. Two of these waits happen in the Present before, after the frame's time was taken,
+and are carried to the frame they fall into. Then come the pipelines and shaders that were
+made during the frame, and what the frame that was waited for cost: its time on the encoding
+thread, how much of that was a draw's wait for its pipeline (counted for the frame that is
+being encoded, where patch 0013 counted it for the process) and how much the wait for a
+drawable, and the GPU's time for its command buffers (the finishing thread adds it before it
+says that the frame is done, so it is final when it is read). A queue latency of 15 frames or
+more would have that frame's place taken, and the line says so.
+
+macos/tests/frame_cause_test.c does four things to a frame and says what it did; the lines
+of the same run say the same:
+  a sleep of 150.3 ms                           160.3 ms: rest 151.3 ms
+  2 new shaders and their pipeline              4 frames on, 119.8 ms: 119.7 ms for an earlier
+                                                frame, whose encoding took 112.9 ms, 112.8 ms
+                                                of it for 1 pipeline
+  a staging texture mapped, waited 95.6 ms      104.1 ms: 1 wait for the GPU (95.5 ms)
+  281782 GetData calls in 90.5 ms               100.1 ms: 281782 query flushes, rest 91.1 ms
+
+Costs, measured with that test at 120 frames a second, the DLLs before patch 0013 against
+these (two runs of 20 s each way): 0.08 us more for a command buffer on the finishing thread,
+with 51 command buffers a frame; no difference for a bind, with 2000 binds and draws a frame.
+What the presenting thread does more for a frame (two counters read, a few values kept) is
+below what such runs can tell apart, which is 2.4 us a frame.
+
+LOCAL TO THIS PORT, NOT FOR DXMT. Applied by macos/build-dxmt.sh to
+github.com/athei/dxmt at 01e59e9bde030f105937f249afaac92ada01b4d7, after 0001 to 0014.
+Written with an AI assistant (Claude). DXMT does not accept contributions made or
+co-authored by AI (its CONTRIBUTING.md), so this patch must not be sent to it as a pull
+request.
+---
+diff --git a/src/d3d11/d3d11_context_impl.cpp b/src/d3d11/d3d11_context_impl.cpp
+--- a/src/d3d11/d3d11_context_impl.cpp
++++ b/src/d3d11/d3d11_context_impl.cpp
+@@ -5198,7 +5198,7 @@ public:
+       auto render_encoder = enc.currentRenderEncoder();
+       render_encoder->use_tessellation = 1;
+       MTL_COMPILED_TESSELLATION_MESH_PIPELINE GraphicsPipeline{};
+-      GetPipelineForDraw(pso, &GraphicsPipeline); // may block
++      GetPipelineForDraw(pso, &GraphicsPipeline, enc); // may block
+       enc.tess_num_output_control_point_element = GraphicsPipeline.NumControlPointOutputElement;
+       enc.tess_threads_per_patch = GraphicsPipeline.ThreadsPerPatch;
+       // no pipeline when it failed to compile: winemetal then drops the draws that follow
+@@ -5247,7 +5247,7 @@ public:
+       auto render_encoder = enc.currentRenderEncoder();
+       render_encoder->use_geometry = 1;
+       MTL_COMPILED_GRAPHICS_PIPELINE GraphicsPipeline{};
+-      GetPipelineForDraw(pso, &GraphicsPipeline); // may block
++      GetPipelineForDraw(pso, &GraphicsPipeline, enc); // may block
+       // no pipeline when it failed to compile: winemetal then drops the draws that follow
+       auto &cmd = enc.encodeRenderCommand<wmtcmd_render_setpso>();
+       cmd.type = WMTRenderCommandSetPSO;
+@@ -5312,7 +5312,7 @@ public:
+     device->CreateGraphicsPipeline(&pipelineDesc, &pipeline);
+     EmitST([pso = std::move(pipeline)](ArgumentEncodingContext& enc) {
+       MTL_COMPILED_GRAPHICS_PIPELINE GraphicsPipeline{};
+-      GetPipelineForDraw(pso, &GraphicsPipeline); // may block
++      GetPipelineForDraw(pso, &GraphicsPipeline, enc); // may block
+       // no pipeline when it failed to compile: winemetal then drops the draws that follow
+       auto &cmd = enc.encodeRenderCommand<wmtcmd_render_setpso>();
+       cmd.type = WMTRenderCommandSetPSO;
+@@ -5483,7 +5483,7 @@ public:
+                               CS->reflection().ThreadgroupSize[2]}](
+                ArgumentEncodingContext &enc) {
+       MTL_COMPILED_COMPUTE_PIPELINE ComputePipeline;
+-      GetPipelineForDraw(pso, &ComputePipeline); // may block
++      GetPipelineForDraw(pso, &ComputePipeline, enc); // may block
+       // no pipeline when it failed to compile: winemetal then drops the dispatches that follow
+       auto &cmd = enc.encodeComputeCommand<wmtcmd_compute_setpso>();
+       cmd.type = WMTComputeCommandSetPSO;
+diff --git a/src/d3d11/d3d11_pipeline.hpp b/src/d3d11/d3d11_pipeline.hpp
+--- a/src/d3d11/d3d11_pipeline.hpp
++++ b/src/d3d11/d3d11_pipeline.hpp
+@@ -176,16 +176,23 @@ public:
+ };
+ 
+ // The pipeline for a draw or a dispatch, on the encoding thread, which waits here when it is not
+-// made yet: such a wait is counted with its time (a pipeline that is there costs one test more)
+-template <typename Pipeline, typename Compiled>
++// made yet: such a wait is counted with its time, for the process and for the frame that is being
++// encoded (a pipeline that is there costs one test more)
++template <typename Pipeline, typename Compiled, typename Context>
+ void
+-GetPipelineForDraw(Pipeline *pso, Compiled *compiled) {
++GetPipelineForDraw(Pipeline *pso, Compiled *compiled, Context &enc) {
+   if (pso->GetIsDone()) {
+     pso->GetPipeline(compiled);
+     return;
+   }
+-  CompileTimer timer(compile_counters.draw_waits, compile_counters.draw_wait_ns);
++  auto start = std::chrono::steady_clock::now();
+   pso->GetPipeline(compiled);
++  auto waited = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - start);
++  compile_counters.draw_waits.fetch_add(1, std::memory_order_relaxed);
++  compile_counters.draw_wait_ns.fetch_add(waited.count(), std::memory_order_relaxed);
++  auto &frame = enc.currentFrameStatistics();
++  frame.pipeline_wait_count++;
++  frame.pipeline_wait_interval += waited;
+ }
+ 
+ std::unique_ptr<MTLCompiledGraphicsPipeline>
+diff --git a/src/d3d11/d3d11_swapchain.cpp b/src/d3d11/d3d11_swapchain.cpp
+--- a/src/d3d11/d3d11_swapchain.cpp
++++ b/src/d3d11/d3d11_swapchain.cpp
+@@ -29,6 +29,7 @@
+ #include <cfloat>
+ #include <chrono>
+ #include <cstdio>
++#include <cstring>
+ #include <ctime>
+ #include <format>
+ #include <string>
+@@ -1011,8 +1012,11 @@ public:
+ 
+   SyncFrameState SyncFrame(uint64_t current_frame_id) {
+     if (frame_latency_fence_) {
+-      if (current_frame_id > frame_latency)
++      if (current_frame_id > frame_latency) {
++        auto t0 = frame_clock::now();
+         frame_latency_fence_->wait(current_frame_id - frame_latency);
++        carry_earlier_ms_ = std::chrono::duration<double, std::milli>(frame_clock::now() - t0).count();
++      }
+       return SyncFrameState(current_frame_id, frame_latency_fence_.get());
+     }
+     return SyncFrameState();
+@@ -1111,7 +1115,13 @@ public:
+         this->UpdateStatistics(ctx.queue().statistics, ctx.currentFrameId());
+       });
+     }
+-    device_context_->Commit();
++    {
++      auto before = cmd_queue.CurrentFrameStatistics().commit_interval;
++      device_context_->Commit();
++      carry_commit_ms_ = std::chrono::duration<double, std::milli>(
++                             cmd_queue.CurrentFrameStatistics().commit_interval - before)
++                             .count();
++    }
+ 
+     // after the present command, so that it shows buffer 0 as it was
+     RotateBackBuffers();
+@@ -1408,6 +1418,8 @@ private:
+       window_frames_++;
+       if (ms > 50.0) {
+         frame_slow_++;
++        if (window_slow_count_ < kSlowFrames)
++          SaySlowFrame(ms);
+         if (window_slow_count_ < kSlowFrames && frame_said_ != frame_clock::time_point{})
+           window_slow_[window_slow_count_] = {std::chrono::duration<float>(now - frame_said_).count(), float(ms)};
+         window_slow_count_++;
+@@ -1424,6 +1436,9 @@ private:
+       gpu_said_buffers_ = gpu.command_buffers.load(std::memory_order_relaxed);
+     }
+     frame_last_ = now;
++    frame_pipelines_ = compile_counters.pipelines.load(std::memory_order_relaxed);
++    frame_shaders_ = compile_counters.shaders.load(std::memory_order_relaxed);
++    carry_earlier_ms_ = carry_commit_ms_ = 0;
+     if (now - frame_said_ >= std::chrono::seconds(30)) {
+       frame_said_ = now;
+       const std::string head = Head();
+@@ -1453,7 +1468,7 @@ private:
+   // other logs; read once for the three lines of a half minute. The name is cut at 160 bytes, at
+   // the start of a UTF-8 character, so that no line reaches Wine's limit of 1020 bytes, past which
+   // its debug output raises an exception instead of cutting the line.
+-  static std::string Head() {
++  static std::string Head(bool tenths = false) {
+     static const std::string program = [] {
+       std::string name = env::getExeName();
+       if (name.size() > 160) {
+@@ -1464,14 +1479,71 @@ private:
+       }
+       return name;
+     }();
+-    std::time_t now = std::time(nullptr);
++    auto wall = std::chrono::system_clock::now();
++    std::time_t now = std::chrono::system_clock::to_time_t(wall);
+     std::tm *local = std::localtime(&now);
+-    char clock_text[16];
+-    if (local && std::strftime(clock_text, sizeof(clock_text), "%H:%M:%S", local))
++    char clock_text[20];
++    if (local && std::strftime(clock_text, 16, "%H:%M:%S", local)) {
++      if (tenths) {
++        auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(wall.time_since_epoch()).count();
++        size_t end = strlen(clock_text);
++        clock_text[end] = '.';
++        clock_text[end + 1] = char('0' + (ms / 100) % 10);
++        clock_text[end + 2] = 0;
++      }
+       return " (" + program + ", " + clock_text + ")";
++    }
+     return " (" + program + ")";
+   }
+ 
++  // What a slow frame waited for, said as it is noticed, for the first 24 of a half minute. The
++  // frame is the time from the Present before to this one, on the thread that presents. Of it:
++  // the waits for an earlier frame (that Present's, for the frame the queue's latency makes it
++  // wait for and for the one the swap chain's does), the waits for the GPU and the query flushes
++  // the game made, the waits for a free command chunk; the rest is the game's own time and
++  // DXMT's on this thread. Then what was compiled meanwhile, and what the frame that was waited
++  // for cost on the encoding thread and on the GPU: it is the newest one known to be done.
++  double carry_earlier_ms_ = 0, carry_commit_ms_ = 0;
++  uint64_t frame_pipelines_ = 0, frame_shaders_ = 0;
++
++  void SaySlowFrame(double ms) {
++    auto &queue = device_->GetDXMTDevice().queue();
++    const FrameStatistics &frame = queue.CurrentFrameStatistics();
++    auto to_ms = [](clock::duration d) { return std::chrono::duration<double, std::milli>(d).count(); };
++    double earlier = to_ms(frame.present_latency_interval) + carry_earlier_ms_;
++    double gpu_wait = to_ms(frame.sync_interval), commit = to_ms(frame.commit_interval) + carry_commit_ms_;
++    uint64_t pipelines = compile_counters.pipelines.load(std::memory_order_relaxed) - frame_pipelines_;
++    uint64_t shaders = compile_counters.shaders.load(std::memory_order_relaxed) - frame_shaders_;
++    char text[1000]; /* with "info:  " and the newline, under Wine's 1020 bytes a line */
++    int used = snprintf(
++        text, sizeof(text),
++        "DXGI: slow frame%s: %.1f ms: %.1f ms for an earlier frame, %u %s for the GPU (%.1f ms), %u query %s, "
++        "commit %.1f ms, rest %.1f ms; %llu new %s, %llu %s compiled",
++        Head(true).c_str(), ms, earlier, frame.sync_count, Many(frame.sync_count, "wait", "waits"), gpu_wait,
++        frame.event_stall, Many(frame.event_stall, "flush", "flushes"), commit,
++        std::max(0.0, ms - earlier - gpu_wait - commit), (unsigned long long)pipelines,
++        Many(pipelines, "pipeline", "pipelines"), (unsigned long long)shaders, Many(shaders, "shader", "shaders"));
++    // The Present before waited until the frame "latency" frames before it was done on the GPU:
++    // that frame's numbers are final, unless its place among the kept frames has been taken
++    uint64_t current = queue.CurrentFrameSeq() - 1;
++    uint32_t latency = queue.GetMaxLatency();
++    if (current > latency && used > 0 && used < int(sizeof(text))) {
++      if (latency + 1 < kFrameStatisticsCount) {
++        const FrameStatistics &done = queue.statistics.at(current - latency - 1);
++        snprintf(text + used, sizeof(text) - used,
++                 "; the frame %u before: encoding %.1f ms (%.1f ms of it for %u %s, %.1f ms for a drawable), GPU "
++                 "%.1f ms",
++                 latency + 1, to_ms(done.encode_prepare_interval + done.encode_flush_interval),
++                 to_ms(done.pipeline_wait_interval), done.pipeline_wait_count,
++                 Many(done.pipeline_wait_count, "pipeline", "pipelines"), to_ms(done.drawable_blocking_interval),
++                 to_ms(done.gpu_interval));
++      } else {
++        snprintf(text + used, sizeof(text) - used, "; the frame %u before: not kept", latency + 1);
++      }
++    }
++    Logger::info(text);
++  }
++
+   void SayFrameTimes(const std::string &head) const {
+     if (!frame_count_)
+       return;
+diff --git a/src/dxmt/dxmt_command_queue.cpp b/src/dxmt/dxmt_command_queue.cpp
+--- a/src/dxmt/dxmt_command_queue.cpp
++++ b/src/dxmt/dxmt_command_queue.cpp
+@@ -203,7 +203,9 @@ CommandQueue::WaitForFinishThread() {
+       uint64_t gpu_start = chunk.attached_cmdbuf.gpuStartTime(), gpu_end = chunk.attached_cmdbuf.gpuEndTime();
+       if (gpu_end > gpu_start) {
+         if (gpu_end > gpu_last_end) {
+-          gpu_time.busy_ns.fetch_add(gpu_end - std::max(gpu_start, gpu_last_end), std::memory_order_relaxed);
++          uint64_t busy = gpu_end - std::max(gpu_start, gpu_last_end);
++          gpu_time.busy_ns.fetch_add(busy, std::memory_order_relaxed);
++          statistics.at(chunk.frame_).gpu_interval += std::chrono::nanoseconds(busy);
+           gpu_last_end = gpu_end;
+         }
+         gpu_time.command_buffers.fetch_add(1, std::memory_order_relaxed);
+diff --git a/src/dxmt/dxmt_statistics.hpp b/src/dxmt/dxmt_statistics.hpp
+--- a/src/dxmt/dxmt_statistics.hpp
++++ b/src/dxmt/dxmt_statistics.hpp
+@@ -54,6 +54,12 @@ struct FrameStatistics {
+   clock::duration encode_flush_interval{};
+   clock::duration drawable_blocking_interval{};
+   clock::duration present_latency_interval{};
++  // for the frame recorder's line about a slow frame: the draws of this frame that waited for
++  // their pipeline on the encoding thread, and the time the GPU had this frame's command buffers
++  // (added by the finishing thread, before it says that the frame is done)
++  uint32_t pipeline_wait_count = 0;
++  clock::duration pipeline_wait_interval{};
++  clock::duration gpu_interval{};
+   ScalerInfo last_scaler_info{};
+ 
+   void
+@@ -76,6 +82,9 @@ struct FrameStatistics {
+     encode_flush_interval = {};
+     drawable_blocking_interval = {};
+     present_latency_interval = {};
++    pipeline_wait_count = 0;
++    pipeline_wait_interval = {};
++    gpu_interval = {};
+     last_scaler_info.type = {};
+   };
+ };
