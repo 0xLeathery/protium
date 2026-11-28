@@ -1264,7 +1264,12 @@ def cmd_version_notify():
 # ---------------------------------------------------------------- symbolic links of Mac builds
 
 def depot_links(path):
-    """(file name, link target) of every symbolic link in a depot manifest of Steam's depotcache:
+    """(file name, link target) of every symbolic link in a depot manifest of Steam's depotcache."""
+    return [(name, target) for name, target in depot_files(path) if target]
+
+
+def depot_files(path):
+    """(file name, link target or "") of every file in a depot manifest of Steam's depotcache:
     sections of magic, length and a protobuf message; in the payload section each file is
     field 1, with its name in field 1 and, for a link, the target in field 7."""
     def varint(data, pos):
@@ -1307,8 +1312,7 @@ def depot_links(path):
                 if field != 1:
                     continue
                 parts = dict((n, v) for n, v in fields(entry) if n in (1, 7) and isinstance(v, bytes))
-                if parts.get(7):
-                    links.append((parts.get(1, b"").decode("utf-8"), parts[7].decode("utf-8")))
+                links.append((parts.get(1, b"").decode("utf-8", "replace"), parts.get(7, b"").decode("utf-8", "replace")))
         pos += size
     return links
 
@@ -1399,6 +1403,47 @@ def install_scripts(appid):
     return None, []
 
 
+def app_state(appid):
+    """(library, AppState block) of an installed app, or (None, None)."""
+    for lib in libraries():
+        manifest = os.path.join(lib, "steamapps", "appmanifest_%d.acf" % appid)
+        if os.path.isfile(manifest):
+            with open(manifest, encoding="utf-8", errors="replace") as f:
+                return lib, vdf_block(vdf_parse(f.read()), ["AppState"])
+    return None, None
+
+
+def shared_install_scripts(appid):
+    """[(folder, [script path...])] of the shared depots a game needs (its manifest's SharedDepots:
+    Steam's common redistributables, app 228980: Visual C++ runtimes, DirectX), each depot's
+    installscript.vdf as its manifest in Steam's depotcache names it. Steam on Windows and on
+    Linux runs these in the game's prefix before its first start; Mac Steam does not."""
+    _, state = app_state(appid)
+    out = {}
+    for depot, owner in vdf_block(state or [], ["SharedDepots"]):
+        if not (isinstance(owner, str) and owner.isdigit()):
+            continue
+        lib, owner_state = app_state(int(owner))
+        installdir = next((v for k, v in owner_state or [] if k == "installdir" and isinstance(v, str)), None)
+        gid = next((v for k, v in vdf_block(owner_state or [], ["InstalledDepots", depot]) if k == "manifest"
+                    and isinstance(v, str)), None)
+        if not installdir or not gid:
+            continue
+        root = os.path.realpath(os.path.join(lib, "steamapps", "common", installdir))
+        try:
+            names = depot_files(os.path.join(STEAM_ROOT, "depotcache", "%s_%s.manifest" % (depot, gid)))
+        except (OSError, ValueError, IndexError, struct.error):
+            continue
+        for name, target in names:
+            path = os.path.normpath(os.path.join(root, name.replace("\\", "/")))
+            if not target and name.lower().replace("\\", "/").endswith("/installscript.vdf") \
+                    and path.startswith(root + os.sep) and os.path.isfile(path):
+                out.setdefault(root, [])
+                if path not in out[root]:
+                    out[root].append(path)
+    return sorted(out.items())
+
+
 def windows_path(path):
     """A host path as Wine's Z: drive has it."""
     return "Z:" + path.replace("/", "\\")
@@ -1483,6 +1528,10 @@ def cmd_installscript(appid, dry_run, again, mark_done):
         die("app %d is not installed" % appid)
     steps = install_script_steps(root, scripts)
     steps = [("run", s[1].replace("\\Apps\\0", "\\Apps\\%d" % appid)) + s[2:] if s[0] == "run" else s for s in steps]
+    # the common redistributables first, as Steam runs them: a game's own steps may need them
+    shared = shared_install_scripts(appid)
+    steps = [s for folder, paths in shared for s in install_script_steps(folder, paths)] + steps
+    scripts = [p for _, paths in shared for p in paths] + scripts
     if dry_run:
         for step in steps:
             print("\t".join(str(x) if not isinstance(x, list) else " ".join(x) for x in step))

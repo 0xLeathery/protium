@@ -38,6 +38,13 @@ written. "Known problems" is a heading of our own, next to Keep a Changelog's.
   no log, or the log of the run before under its own name. A game's log now begins with
   Protium's version, the Mac and the macOS version, then what Protium did before the game
   started, and, when it stopped, why.
+- Before a game's first start, Protium now installs the Microsoft Visual C++ runtimes and
+  DirectX parts the game needs from Steam's own copies, as Steam does on Windows and Linux.
+  Without them some games crashed at start: DOOM (2016) did, through its Razer Chroma plugin.
+  The first start of each game after this update takes a minute longer.
+- DOOM (2016) and Wolfenstein II can now start with Vulkan on M1 to M4 Macs, and DOOM reaches
+  its start-up screen. Its OpenGL mode still cannot work on a Mac: set the launch option
+  `+r_renderAPI 1`.
 - Protium keeps a record of every run of a game: how long it ran, how it ended and how fast it
   drew. A run that Steam ended, for example because Steam was quit while the game ran, left no
   record. Now it does.

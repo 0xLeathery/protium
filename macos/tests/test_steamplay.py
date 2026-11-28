@@ -12,6 +12,7 @@ import importlib.util
 import json
 import os
 import shutil
+import struct
 import sys
 import tempfile
 import unittest
@@ -776,6 +777,53 @@ class DiagnoseGames(unittest.TestCase):
         text = sp.scrub_private('/Users/someone/Library L"Z:\\\\Users\\\\someone\\\\Library" Z:\\Users\\someone\\x 76561197960287930',
                                 home="/Users/someone")
         self.assertEqual(text, '~/Library L"Z:~\\\\Library" Z:~\\x <id>')
+
+
+class SharedInstallScripts(unittest.TestCase):
+    """A game's shared depots (Steam's common redistributables, app 228980) give the install
+    scripts that their depot manifests name, from the redistributables' folder."""
+
+    @staticmethod
+    def manifest(names):
+        def varint(n):
+            out = b""
+            while True:
+                out += bytes([(n & 0x7f) | (0x80 if n > 0x7f else 0)])
+                n >>= 7
+                if not n:
+                    return out
+
+        def field(number, data):
+            return varint(number << 3 | 2) + varint(len(data)) + data
+        payload = b"".join(field(1, field(1, n.encode())) for n in names)
+        return struct.pack("<II", 0x71F617D0, len(payload)) + payload
+
+    def test_the_redistributables_scripts_come_first(self):
+        steam = sp.STEAM_ROOT
+        apps = os.path.join(steam, "steamapps")
+        redist = os.path.join(apps, "common", "Steamworks Shared", "_CommonRedist", "vcredist", "2015")
+        os.makedirs(redist, exist_ok=True)
+        os.makedirs(os.path.join(apps, "common", "Game"), exist_ok=True)
+        os.makedirs(os.path.join(steam, "depotcache"), exist_ok=True)
+        with open(os.path.join(redist, "installscript.vdf"), "w") as f:
+            f.write('"installscript"\n{\n\t"Run Process"\n\t{\n\t\t"x64"\n\t\t{\n\t\t\t"hasrunkey"\t\t"HKEY_LOCAL_MACHINE\\\\Software'
+                    '\\\\Valve\\\\Steam\\\\Apps\\\\CommonRedist\\\\vcredist\\\\2015"\n\t\t\t"process 1"\t\t'
+                    '"%INSTALLDIR%\\\\_CommonRedist\\\\vcredist\\\\2015\\\\x64.cmd"\n\t\t}\n\t}\n}\n')
+        with open(os.path.join(steam, "depotcache", "228986_42.manifest"), "wb") as f:
+            f.write(self.manifest(["_CommonRedist\\vcredist\\2015\\x64.cmd", "_CommonRedist\\vcredist\\2015\\installscript.vdf"]))
+        with open(os.path.join(apps, "appmanifest_228980.acf"), "w") as f:
+            f.write('"AppState"\n{\n\t"installdir"\t\t"Steamworks Shared"\n\t"InstalledDepots"\n\t{\n\t\t"228986"\n\t\t{\n'
+                    '\t\t\t"manifest"\t\t"42"\n\t\t}\n\t}\n}\n')
+        with open(os.path.join(apps, "appmanifest_454549.acf"), "w") as f:
+            f.write('"AppState"\n{\n\t"installdir"\t\t"Game"\n\t"SharedDepots"\n\t{\n\t\t"228986"\t\t"228980"\n'
+                    '\t\t"228990"\t\t"228980"\n\t}\n}\n')
+        with mock.patch.object(sp, "libraries", return_value=[steam]):
+            shared = sp.shared_install_scripts(454549)
+            self.assertEqual(shared, [(os.path.realpath(os.path.join(apps, "common", "Steamworks Shared")),
+                                       [os.path.realpath(os.path.join(redist, "installscript.vdf"))])])
+            steps = sp.install_script_steps(*shared[0])
+        self.assertEqual(steps[0][1], "HKEY_LOCAL_MACHINE\\Software\\Valve\\Steam\\Apps\\CommonRedist\\vcredist\\2015")
+        self.assertTrue(steps[0][4].endswith("\\Steamworks Shared\\_CommonRedist\\vcredist\\2015\\x64.cmd"))
 
 
 class RecordEnd(unittest.TestCase):
