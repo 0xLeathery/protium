@@ -87,6 +87,15 @@
 #      stream run dry for a second after its 200 ms buffer, and winecoreaudio's "Audio:" lines say
 #      700 to 1100 ms of silence and at least 50 empty callbacks; a run that never lets it run dry
 #      has no line with a short or empty callback (silent buffers: nothing is heard)
+#  24  the wineserver's end: server_end_test.exe, x86_64, starts "the game" (itself) and ends at
+#      once, as a launcher does. The game runs its 3 seconds more and the session ends by itself:
+#      no process says that the wineserver ended. Then, 5 seconds into a game of a minute, the
+#      wineserver is killed, and in another session told to end (SIGTERM, on which it saves the
+#      registry and goes): each time every process of the session is gone within 3 seconds, the
+#      game and Wine's own services, and the game's last line says why. (They stayed before: the
+#      threads waiting, winedevice.exe looking for controllers 690 times a second; one was found
+#      two days after it had started.) And a plain kill ends each winedevice.exe: SDL's signal
+#      handlers kept it from the one that looks for controllers
 # The build comes first ("build", which takes long and can be left out with CHECK_ITEMS); the test
 # programs are compiled on every run.
 #
@@ -144,7 +153,7 @@ mkdir -p "$EVIDENCE_DIR"
 RESULTS=()
 FAILED=0
 TODO=0
-CHECK_ITEMS=${CHECK_ITEMS:-"build 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23"}
+CHECK_ITEMS=${CHECK_ITEMS:-"build 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24"}
 want() { case " $CHECK_ITEMS " in *" $1 "*) return 0 ;; esac; return 1; }
 pass() { RESULTS+=("PASS  item $1: $2"); echo "PASS  item $1: $2"; }
 fail() { RESULTS+=("FAIL  item $1: $2"); echo "FAIL  item $1: $2"; FAILED=1; }
@@ -235,14 +244,15 @@ if true; then
     cc x86_64 steam_api_test.exe steam_api_test.c
     cc x86_64 session_end_test.exe session_end_test.c -lntdll
     cc x86_64 audio_underrun_test.exe audio_underrun_test.c -lole32 -luuid -lksuser
+    cc x86_64 server_end_test.exe server_end_test.c
     # one second of a single colour with a tone, as H.264/AAC and VP9/Opus
     "$FFMPEG_CLI" -loglevel error -y -f lavfi -i color=c=0x3366cc:s=320x240:r=30:d=1 -f lavfi -i sine=f=440:d=1 \
         -c:v libx264 -profile:v baseline -pix_fmt yuv420p -c:a aac -shortest "$T/h264_aac.mp4" >>"$T/build.log" 2>&1
     "$FFMPEG_CLI" -loglevel error -y -f lavfi -i color=c=0x3366cc:s=320x240:r=30:d=1 -f lavfi -i sine=f=440:d=1 \
         -c:v libvpx-vp9 -pix_fmt yuv420p -c:a libopus -shortest "$T/vp9_opus.webm" >>"$T/build.log" 2>&1
     n=$(ls "$T"/*.exe 2>/dev/null | wc -l | tr -d ' ')
-    [ "$n" -eq 35 ] && [ -s "$T/h264_aac.mp4" ] && [ -s "$T/vp9_opus.webm" ] \
-        && pass programs "35 test programs and 2 video files ($T)" || fail programs "$n of 35 test programs ($T/build.log)"
+    [ "$n" -eq 36 ] && [ -s "$T/h264_aac.mp4" ] && [ -s "$T/vp9_opus.webm" ] \
+        && pass programs "36 test programs and 2 video files ($T)" || fail programs "$n of 36 test programs ($T/build.log)"
 fi
 
 if [ ! -x "$WINE" ]; then
@@ -552,6 +562,69 @@ if want 10; then
     fi
 fi
 fi  # Wine present
+
+if want 24; then
+    # A session's processes are those that write process lines to its log: "pid name" of each
+    session_of() { sed -n 's/^Process: the last [0-9]* s (\([^,]*\), pid \([0-9]*\),.*/\2 \1/p' "$1" | sort -u; }
+    # of the pids given, those that are Wine processes still
+    alive() { local p; for p in "$@"; do ps -o command= -p "$p" 2>/dev/null | grep -q '^[A-Za-z]:\\' && printf '%s ' "$p"; done; }
+    pids_of() { echo "$1" | awk -v n="$2" '$2 == n {print $1}'; }
+    ok=yes; said=""
+    WINEPREFIX=$PREFIX "$SERVER" -k >/dev/null 2>&1
+    WINEPREFIX=$PREFIX run_timeout 30 "$SERVER" -w >/dev/null 2>&1
+
+    # a launcher that ends at once, its game, and the session's own end
+    log=$EVIDENCE_DIR/item24-own-end; rm -f "$log.game"
+    WINEFSYNC=1 WINE_PROCESS_STATS=2 WINEPREFIX=$PREFIX run_timeout "$RUN_TIMEOUT" "$WINE" "$T/server_end_test.exe" 3 "$(winpath "$log.game")" \
+        >"$log.out" 2>"$log.err" </dev/null
+    WINEPREFIX=$PREFIX run_timeout 60 "$SERVER" -w >/dev/null 2>&1
+    game=$(tr -d '\r' <"$log.game" 2>/dev/null)
+    lines=$(grep -a -c 'the wineserver has ended' "$log.err")
+    left=$(alive $(session_of "$log.err" | awk '{print $1}'))
+    case $game in "server end: the game ran 3."*) ;; *) ok=no ;; esac
+    [ "$lines" = 0 ] && [ -z "$left" ] || ok=no
+    said="own end: '${game:-no word from the game}', $lines lines about the wineserver's end, left: ${left:-none};"
+
+    # the wineserver killed, and told to end, 5 s into a game of a minute
+    for signal in KILL TERM; do
+        log=$EVIDENCE_DIR/item24-sig$signal; rm -f "$log.game"
+        WINEFSYNC=1 WINEPREFIX=$PREFIX "$SERVER" -f -p >"$log.server" 2>&1 &
+        server=$!
+        nap 1
+        WINEFSYNC=1 WINE_PROCESS_STATS=2 WINEPREFIX=$PREFIX run_timeout "$RUN_TIMEOUT" "$WINE" "$T/server_end_test.exe" 60 "$(winpath "$log.game")" \
+            >"$log.out" 2>"$log.err" </dev/null
+        nap 5
+        session=$(session_of "$log.err")
+        running=$(alive $(echo "$session" | awk '{print $1}'))
+        game=$(alive $(pids_of "$session" server_end_test.exe))
+        kill -$signal $server
+        wait $server 2>/dev/null
+        nap 3
+        left=$(alive $running)
+        n=$(echo $running | wc -w | tr -d ' ')
+        # the game and at least services.exe, both winedevice.exe and plugplay.exe were there
+        [ -n "$game" ] && [ "$n" -ge 5 ] && [ -z "$left" ] && [ ! -e "$log.game" ] \
+            && grep -a -q "^Process: (server_end_test.exe, pid ${game% }, .*the wineserver has ended" "$log.err" || ok=no
+        said="$said SIG$signal: $n processes, left after 3 s: ${left:-none}, $(grep -a -c 'the wineserver has ended' "$log.err") said why;"
+        # what a failed run leaves is this session's own, and nothing else would end it
+        [ -z "$left" ] || kill -KILL $left 2>/dev/null
+    done
+
+    # a plain kill and the process that looks for controllers
+    log=$EVIDENCE_DIR/item24-plain-kill
+    WINEFSYNC=1 WINE_PROCESS_STATS=2 WINEPREFIX=$PREFIX run_timeout "$RUN_TIMEOUT" "$WINE" "$T/server_end_test.exe" 30 'Z:\dev\null' \
+        >"$log.out" 2>"$log.err" </dev/null
+    nap 5
+    devices=$(alive $(pids_of "$(session_of "$log.err")" winedevice.exe))
+    [ -z "$devices" ] || kill $devices
+    nap 2
+    left=$(alive $devices)
+    [ -n "$devices" ] && [ -z "$left" ] || ok=no
+    said="$said a plain kill of winedevice.exe ($(echo $devices | wc -w | tr -d ' ') of them), left: ${left:-none}"
+    WINEPREFIX=$PREFIX "$SERVER" -k >/dev/null 2>&1
+    WINEPREFIX=$PREFIX run_timeout 30 "$SERVER" -w >/dev/null 2>&1
+    [ $ok = yes ] && pass 24 "the wineserver's end: $said ($EVIDENCE_DIR/item24-*)" || fail 24 "the wineserver's end: $said ($EVIDENCE_DIR/item24-*)"
+fi
 
 if want 11; then
     bad=""; n=0

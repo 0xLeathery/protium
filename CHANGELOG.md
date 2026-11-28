@@ -10,6 +10,20 @@ written. "Known problems" is a heading of our own, next to Keep a Changelog's.
 
 ## [Unreleased]
 
+### Changed
+
+- While you play without a controller, Protium no longer looks for one 690 times a second,
+  which took 1.5% of a processor core for as long as a game ran. It now looks ten times a
+  second until one is connected. Like the rest of the controller support, this has not been
+  tried with a controller yet.
+
+### Fixed
+
+- When a game's session was cut short, for example because Wine's server was killed or
+  crashed, the game's other processes stayed behind until the Mac was restarted, and one of
+  them kept using processor time: we found one two days later. Every process of a game now
+  ends with its session, and the game's log says why.
+
 ## [0.5.0] - 2026-11-28
 
 DOOM (2016) plays, games get the Microsoft runtimes they expect, and a report about a game
