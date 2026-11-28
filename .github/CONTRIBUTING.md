@@ -6,7 +6,8 @@ license requires you to publish your changes anyway.
 
 ## Reporting a game
 
-Open an issue with the *Game report* template: the game, how far it gets, your Mac and macOS
+Update Protium to its newest release first (its window offers the update), then open an issue
+with the *Game report* template: the game, how far it gets, your Mac and macOS
 version, the Protium version, the file Protium's Diagnostics button saves on your Desktop, and the
 `steamplay-run.log` from the game's `steamapps/compatdata/<app id>/` folder (for a game in Steam's
 own library, `~/Library/Application Support/Steam/steamapps/compatdata/<app id>/`).

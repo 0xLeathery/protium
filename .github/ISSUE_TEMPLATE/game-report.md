@@ -4,6 +4,11 @@ about: How a Windows game runs on Protium, or where it stops.
 
 ---
 
+**Please update Protium first.** Open Protium: if it shows an **Update** button, press it (an
+older version without one: download the newest from the
+[releases page](https://github.com/0xLeathery/protium/releases/latest)), then try the game again.
+A report about an older version is often about something fixed since.
+
 - Game and Steam app id:
 - How far it gets (does not start, crashes at ..., menu, plays with problems, plays well):
 - What goes wrong:

@@ -846,6 +846,21 @@ class RecordEnd(unittest.TestCase):
         self.assertEqual(self.end(installer), "crash")      # a log of before 27 Nov has no such line
 
 
+class NewestRelease(unittest.TestCase):
+    """Diagnostics says whether this Protium is the newest release the update check saw."""
+
+    def test_older_and_newest(self):
+        cache = {"asked": 1795824775, "releases": [{"version": "0.4.1"}, {"version": "0.5.0"}]}
+        with mock.patch.object(sp, "json_file", return_value=cache):
+            with mock.patch.object(sp, "protium_version", return_value="0.4.1"):
+                self.assertIn("newest release: 0.5.0", sp.newest_release())
+                self.assertIn("OLDER: please update first", sp.newest_release())
+            with mock.patch.object(sp, "protium_version", return_value="0.5.0"):
+                self.assertTrue(sp.newest_release().endswith("up to date"))
+        with mock.patch.object(sp, "json_file", return_value={}):
+            self.assertIn("not known", sp.newest_release())
+
+
 class RecordAfter(unittest.TestCase):
     """"record --after": a run is recorded once its process has ended, also when its whole process
     group was killed, as Steam does when it quits."""

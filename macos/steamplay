@@ -3733,6 +3733,22 @@ def crash_reports(days=7):
     return "\n".join(out) + "\n" if out else "(none in the last %d days)\n" % days
 
 
+def newest_release():
+    """Whether this Protium is the newest release, by the update check's last answer (it asks
+    nothing itself): a report about an older version may be about something fixed since."""
+    kept = json_file(UPDATE_CHECK, {})
+    releases = [r for r in kept.get("releases", []) if isinstance(r, dict) and r.get("version")]
+    if not releases or not isinstance(kept.get("asked"), (int, float)):
+        return "newest release: not known (the update check has not run)"
+    newest = max(releases, key=lambda r: version_key(r["version"]))["version"]
+    when = time.strftime("%Y-%m-%d", time.localtime(kept["asked"]))
+    mine = protium_version()
+    if not mine:
+        return "newest release: %s (as of %s); this one is from a checkout" % (newest, when)
+    older = version_key(mine) < version_key(newest)
+    return "newest release: %s (as of %s); this one is %s" % (newest, when, "OLDER: please update first" if older else "up to date")
+
+
 def scrub_private(text, home=None):
     """Text without the home folder's path, which is written as ~ (also as a Windows program
     sees it, with backslashes, single or doubled as in Wine's log), or Steam's account numbers
@@ -3762,7 +3778,8 @@ def cmd_diagnose():
     def facts():
         mac = mac_facts()
         build = subprocess.run(["/usr/bin/sw_vers", "-buildVersion"], stdout=subprocess.PIPE, universal_newlines=True).stdout.strip()
-        return "Protium %s\n%s\nmacOS build %s\n" % (protium_version() or "from a checkout", json.dumps(mac), build)
+        return "Protium %s\n%s\n%s\nmacOS build %s\n" % (protium_version() or "from a checkout", newest_release(),
+                                                         json.dumps(mac), build)
 
     def steam():
         root, bundle = switch_state()
