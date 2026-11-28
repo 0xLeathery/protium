@@ -10,12 +10,24 @@ written. "Known problems" is a heading of our own, next to Keep a Changelog's.
 
 ## [Unreleased]
 
+## [0.5.3] - 2026-11-28
+
+Games' intro and cutscene videos in Windows Media format play.
+
 ### Fixed
 
 - Intro and cutscene videos in Windows Media format did not play in games that show them
   with the older Windows video system (DirectShow or the Windows Media reader). Such a game
   waited for its video for ever, with a black window: Rise of Nations: Extended Edition did
   at its start. These videos now play.
+
+### Known problems
+
+- A Vulkan game that changes its resolution many times keeps some memory each time. Restart
+  the game if it has grown slow.
+- The controller support (from 0.4.2) has still not been tried with a controller. If a
+  controller worked before and does not now, add the line `PROTON_NO_SDL=1` to the game's
+  settings file, `~/Library/Application Support/SteamPlay/env.<app id>`, and tell us.
 
 ## [0.5.2] - 2026-11-28
 
@@ -316,7 +328,8 @@ run natively on arm64 with Metal, without Rosetta and without a virtual machine.
 - `steamplay discover` ranks the games in your library by how likely they are to work, and says
   why.
 
-[Unreleased]: https://github.com/0xLeathery/protium/compare/v0.5.2...macos-port
+[Unreleased]: https://github.com/0xLeathery/protium/compare/v0.5.3...macos-port
+[0.5.3]: https://github.com/0xLeathery/protium/compare/v0.5.2...v0.5.3
 [0.5.2]: https://github.com/0xLeathery/protium/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/0xLeathery/protium/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/0xLeathery/protium/compare/v0.4.2...v0.5.0

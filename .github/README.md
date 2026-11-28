@@ -33,6 +33,7 @@ and what its Diagnostics file holds.
 <!-- games: written by "macos/steamplay games" from macos/compat/games.json -->
 | Game | Graphics | Verdict | Notes | Tested |
 |---|---|---|---|---|
+| Call of Duty: Modern Warfare 2 (2009) | Direct3D 9 | Works | Single player plays smoothly | 2026-11-28 |
 | Call of Duty: Modern Warfare Remastered (2017) | Direct3D 11 | Works | Plays at 5120x1440 and 60 fps, mouse look even. The first load of a level takes several minutes while shaders compile | 2026-11-24 |
 | Call of Duty: World at War | Direct3D 9, 32-bit | Works | Plays well; cutscenes can be skipped | 2026-11-24 |
 | IRON NEST: Heavy Turret Simulator | Direct3D 11 and Direct3D 12 | Works | Plays from its Steam library entry, with stats and cloud saves | 2026-11 |
@@ -42,6 +43,7 @@ and what its Diagnostics file holds.
 | DOOM | Vulkan | Plays, with problems | Plays into its missions on Vulkan: set the launch option +r_renderAPI 1 | 2026-11-28 |
 | Red Dead Redemption 2 | Vulkan | Plays, with problems | Reaches gameplay. Its frame rate is limited by CPU time | 2026-11 |
 | GTFO | Direct3D 11 | Starts, not played further | Starts, and its network layer and PlayFab sign-in come up. Matches untested | 2026-11 |
+| Rise of Nations: Extended Edition | Direct3D 11, 32-bit | Starts, not played further | Plays its intro videos and reaches the menu. Matches untested | 2026-11-28 |
 <!-- games end -->
 
 Steam Play itself works on Mac Steam:

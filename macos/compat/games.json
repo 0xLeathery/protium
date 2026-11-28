@@ -72,6 +72,22 @@
    "note": "Plays into its missions on Vulkan: set the launch option +r_renderAPI 1",
    "tested": "2026-11-28",
    "verdict": "plays-with-problems"
+  },
+  {
+   "app": 10180,
+   "graphics": "Direct3D 9",
+   "name": "Call of Duty: Modern Warfare 2 (2009)",
+   "note": "Single player plays smoothly",
+   "tested": "2026-11-28",
+   "verdict": "works"
+  },
+  {
+   "app": 287450,
+   "graphics": "Direct3D 11, 32-bit",
+   "name": "Rise of Nations: Extended Edition",
+   "note": "Plays its intro videos and reaches the menu. Matches untested",
+   "tested": "2026-11-28",
+   "verdict": "menu-only"
   }
  ]
 }
