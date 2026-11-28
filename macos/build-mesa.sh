@@ -19,10 +19,12 @@
 # PATH, so that the driver links system libraries only and nothing that happens to be installed
 # changes what is built.
 #
-# The source is the macos-patched branch of github.com/athei/mesa at a fixed commit, built as
-# it is. Mesa wants commits written with AI labelled as such and takes none at all in some
-# directories (its AGENTS.md); this script never patches the source, and refuses a source tree
-# that differs from the commit.
+# The source is the macos-patched branch of github.com/athei/mesa at a fixed commit, with the
+# patches in macos/patches/mesa applied in the order of their names. They are local to this port
+# and never sent upstream. Mesa wants changes written with AI labelled as such and takes none at
+# all in some directories (its AGENTS.md): a patch without the exact trailer "Generated-by: LLM",
+# or one that touches such a directory, is refused, and so is a source tree that differs from the
+# commit by more than the patches.
 #
 # Environment overrides:
 #   BUILD_ROOT     (default ~/projects/proton-macos-build)
@@ -55,6 +57,13 @@ BLD=$BUILD_ROOT/mesa-build
 TOOLS_BLD=$BLD/tools
 DRIVER_BLD=$BLD/driver
 DRIVER_PREFIX=$BLD/driver-install
+PATCH_DIR=$(cd "$(dirname "$0")" && pwd)/patches/mesa
+shopt -s nullglob
+PATCHES=("$PATCH_DIR"/*.patch)
+shopt -u nullglob
+# the directories Mesa's AGENTS.md closes to changes written with AI
+NO_AI_DIRS="src/asahi src/gallium/drivers/asahi src/gallium/drivers/nouveau src/gallium/drivers/panfrost src/imagination
+    src/intel/compiler/jay src/nouveau src/panfrost src/poly"
 TOOLS="src/compiler/clc/mesa_clc src/compiler/spirv/vtn_bindgen2 src/kosmickrisp/clc/kk_clc"
 DRIVER=libvulkan_kosmickrisp.dylib
 ICD_JSON=kosmickrisp_mesa_icd.aarch64.json
@@ -102,7 +111,18 @@ key="mesa=$MESA_COMMIT options=[$(echo $COMMON_OPTIONS $TOOLS_OPTIONS $DRIVER_OP
 key="$key llvm=$("$LLVM_CONFIG" --version) spirv=[$(PKG_CONFIG_PATH=$brew_prefix/lib/pkgconfig pkg-config --modversion LLVMSPIRVLib SPIRV-Tools | paste -sd ' ' -)]"
 key="$key bison=[$("$BISON" --version | head -1)] flex=[$("$FLEX" --version | head -1)] meson=$MESON_VERSION python=$python_version [$PYTHON_REQUIREMENTS]"
 key="$key cc=[$(/usr/bin/clang --version | head -1)] sdk=$(xcrun --show-sdk-version) macos=$MACOSX_DEPLOYMENT_TARGET"
-if [ -f "$MESA_DIST/lib/$DRIVER" ] && [ -f "$MESA_DIST/share/vulkan/icd.d/$ICD_JSON" ] && [ "$(cat "$MESA_DIST/KEY" 2>/dev/null)" = "$key" ]; then
+# The patches are checked before anything else, and their hash is part of what the staged driver
+# was built from but not of the build trees' key: a changed patch rebuilds only what it touches.
+patch_key=none
+for patch in ${PATCHES[@]+"${PATCHES[@]}"}; do
+    grep -qx 'Generated-by: LLM' "$patch" || die "$(basename "$patch") has no \"Generated-by: LLM\" line, which Mesa's AGENTS.md asks for"
+    for dir in $NO_AI_DIRS; do
+        ! grep -qE "^(\+\+\+|---) [ab]/$dir/" "$patch" || die "$(basename "$patch") changes $dir, which Mesa's AGENTS.md closes to changes written with AI"
+    done
+done
+[ ${#PATCHES[@]} -eq 0 ] || patch_key=$(cat "${PATCHES[@]}" | shasum | cut -c1-12)
+dist_key="$key patches=$patch_key"
+if [ -f "$MESA_DIST/lib/$DRIVER" ] && [ -f "$MESA_DIST/share/vulkan/icd.d/$ICD_JSON" ] && [ "$(cat "$MESA_DIST/KEY" 2>/dev/null)" = "$dist_key" ]; then
     log "Mesa $(cat "$MESA_DIST/DESCRIBE" 2>/dev/null): KosmicKrisp built already in $MESA_DIST"
     exit 0
 fi
@@ -129,7 +149,7 @@ fi
 MESON=$VENV/bin/meson
 
 ########################################################################
-# 2. Source at the fixed commit, unmodified
+# 2. Source at the fixed commit, with our patches
 ########################################################################
 if [ ! -d "$MESA_SRC/.git" ]; then
     log "cloning $MESA_REPO -> $MESA_SRC"
@@ -138,10 +158,28 @@ fi
 git -C "$MESA_SRC" cat-file -e "$MESA_COMMIT^{commit}" 2>/dev/null || git -C "$MESA_SRC" fetch -q origin "$MESA_COMMIT"
 [ "$(git -C "$MESA_SRC" rev-parse HEAD 2>/dev/null)" = "$MESA_COMMIT" ] \
     || git -C "$MESA_SRC" -c advice.detachedHead=false checkout -q --detach "$MESA_COMMIT"
-dirty=$(git -C "$MESA_SRC" status --porcelain --untracked-files=no | head -5)
-[ -z "$dirty" ] || die "$MESA_SRC differs from $MESA_COMMIT; Mesa is built unmodified:
+# A tree that already is the commit with these patches is left alone, so that ninja compiles
+# nothing again. Otherwise the patches of the build before come off first, and what is left is
+# compared with the commit.
+tree_key() { git -C "$MESA_SRC" diff | shasum | cut -c1-12; }
+applied=$MESA_SRC/.git/build-mesa-patches
+if [ "$(cat "$applied" 2>/dev/null)" != "$patch_key $(tree_key)" ]; then
+    if [ -n "$(git -C "$MESA_SRC" status --porcelain --untracked-files=no | head -1)" ]; then
+        for ((i = ${#PATCHES[@]} - 1; i >= 0; i--)); do
+            git -C "$MESA_SRC" apply -R "${PATCHES[i]}" 2>/dev/null || true
+        done
+    fi
+    dirty=$(git -C "$MESA_SRC" status --porcelain --untracked-files=no | head -5)
+    [ -z "$dirty" ] || die "$MESA_SRC differs from $MESA_COMMIT by more than the patches in $PATCH_DIR:
 $dirty"
+    for patch in ${PATCHES[@]+"${PATCHES[@]}"}; do
+        git -C "$MESA_SRC" apply "$patch" || die "$(basename "$patch") does not apply to $MESA_COMMIT"
+        log "applied $(basename "$patch")"
+    done
+    echo "$patch_key $(tree_key)" >"$applied"
+fi
 describe="$(cat "$MESA_SRC/VERSION") $(git -C "$MESA_SRC" rev-parse --short=12 HEAD)"
+[ ${#PATCHES[@]} -eq 0 ] || describe="$describe + ${#PATCHES[@]} local patch(es)"
 log "Mesa $describe"
 
 ########################################################################
@@ -256,7 +294,7 @@ EOF
 grep -qF "\"../../../lib/$DRIVER\"" "$icd" || die "$ICD_JSON does not name ../../../lib/$DRIVER"
 
 echo "$describe" >"$part/DESCRIBE"
-echo "$key" >"$part/KEY"
+echo "$dist_key" >"$part/KEY"
 rm -rf "$MESA_DIST"
 mv "$part" "$MESA_DIST"
 log "done: $MESA_DIST (Mesa $describe)"

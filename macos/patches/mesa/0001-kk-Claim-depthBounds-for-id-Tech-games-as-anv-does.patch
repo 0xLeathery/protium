@@ -1,0 +1,51 @@
+LOCAL TO THIS PORT, NOT FOR MESA. Written with an AI assistant (Mesa's AGENTS.md asks for the
+trailer below); never sent upstream.
+
+From: Protium
+Subject: [PATCH] kk: Claim depthBounds for id Tech games, as anv does
+
+DOOM (2016) and Wolfenstein II: The New Colossus enable depthBounds
+without checking whether the device has it. KosmicKrisp offers it only
+on Apple10 GPUs (M5), so on M1-M4 vkCreateDevice fails with
+VK_ERROR_FEATURE_NOT_PRESENT and the games end at start ("FATAL ERROR:
+vkCreateDevice failed", DOOM's ErrorLog, 2026-11-28, M4 Pro).
+
+Claim the feature for engine "idTech", as anv does
+(anv_physical_device.c), and set Metal's depth test bounds only on a
+GPU that has them, so that on older ones the test is left out.
+
+Generated-by: LLM
+---
+diff --git a/src/kosmickrisp/vulkan/kk_cmd_draw.c b/src/kosmickrisp/vulkan/kk_cmd_draw.c
+index ea53f5c84b3..f8d0e3a1b21 100644
+--- a/src/kosmickrisp/vulkan/kk_cmd_draw.c
++++ b/src/kosmickrisp/vulkan/kk_cmd_draw.c
+@@ -1635,7 +1635,7 @@ kk_flush_dynamic_state(struct kk_cmd_buffer *cmd)
+ 
+    if ((IS_DIRTY(DS_DEPTH_BOUNDS_TEST_ENABLE) ||
+         IS_DIRTY(DS_DEPTH_BOUNDS_TEST_BOUNDS)) &&
+-       pdev->vk.supported_features.depthBounds) {
++       pdev->info.gpu_apple_family >= 10) {
+       /* Metal does not expose a separate flag for enabling the depth bounds
+        * test. Instead, it treats [0, 1] as disabled. */
+       bool bounds_enable = dyn->ds.depth.bounds_test.enable;
+diff --git a/src/kosmickrisp/vulkan/kk_physical_device.c b/src/kosmickrisp/vulkan/kk_physical_device.c
+index 7d2efcad2d4..f061da3f8d2 100644
+--- a/src/kosmickrisp/vulkan/kk_physical_device.c
++++ b/src/kosmickrisp/vulkan/kk_physical_device.c
+@@ -1235,6 +1235,15 @@ kk_enumerate_physical_devices(struct vk_instance *_instance)
+    struct vk_features supported_features;
+    kk_get_device_features(pdev, &supported_extensions, &supported_features);
+ 
++   /* DOOM (2016) and Wolfenstein II enable depthBounds without checking for
++    * it, and vkCreateDevice fails with VK_ERROR_FEATURE_NOT_PRESENT where
++    * Metal has no depth bounds test (before Apple10). They run without the
++    * test, so claim it for their engine and leave the test out, as anv does.
++    */
++   if (instance->vk.app_info.engine_name &&
++       strcmp(instance->vk.app_info.engine_name, "idTech") == 0)
++      supported_features.depthBounds = true;
++
+    struct vk_properties properties;
+    kk_get_device_properties(pdev, instance, &supported_extensions, &properties);
+ 
