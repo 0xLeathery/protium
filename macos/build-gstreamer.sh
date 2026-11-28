@@ -20,6 +20,11 @@
 # AV1 is left to Proton's dav1d plugin from gst-plugins-rs, not built yet: FFmpeg 4.3's wrapper for
 # dav1d does not build against a current dav1d.
 #
+# For the same reason this builds one plugin Proton does not, GStreamer's ASF demuxer (asfdemux of
+# gst-plugins-ugly, LGPL): the Windows Media files a game plays with DirectShow or the Windows
+# Media reader are opened by GStreamer itself, not by winedmo, and without the demuxer such a game
+# waits for its intro video for ever (Rise of Nations: Extended Edition did, with a black window).
+#
 # Homebrew provides glib, libogg, libvorbis, opus, theora, libvpx and mpg123.
 #
 # Environment overrides:
@@ -138,6 +143,8 @@ meson_build gst-plugins-good "$GST_SRC/gstreamer/subprojects/gst-plugins-good" "
 meson_build gst-plugins-bad "$GST_SRC/gstreamer/subprojects/gst-plugins-bad" "${common[@]}" \
     -Dauto_features=disabled -Dvideoparsers=enabled -Dhls=enabled -Dmpegtsdemux=enabled -Daudiobuffersplit=enabled \
     -Dintrospection=disabled
+meson_build gst-plugins-ugly "$GST_SRC/gstreamer/subprojects/gst-plugins-ugly" -Dtests=disabled -Dnls=disabled -Ddoc=disabled \
+    -Dauto_features=disabled -Dasfdemux=enabled
 meson_build gst-libav "$GST_SRC/gstreamer/subprojects/gst-libav" -Dtests=disabled -Ddoc=disabled
 
 echo "$key" >"$GST_DIST/KEY"

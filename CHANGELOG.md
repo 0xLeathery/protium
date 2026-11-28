@@ -10,6 +10,13 @@ written. "Known problems" is a heading of our own, next to Keep a Changelog's.
 
 ## [Unreleased]
 
+### Fixed
+
+- Intro and cutscene videos in Windows Media format did not play in games that show them
+  with the older Windows video system (DirectShow or the Windows Media reader). Such a game
+  waited for its video for ever, with a black window: Rise of Nations: Extended Edition did
+  at its start. These videos now play.
+
 ## [0.5.2] - 2026-11-28
 
 V-Sync works in Vulkan games: the known problem of 0.5.0 and 0.5.1 is fixed.

@@ -108,6 +108,13 @@
 #      150 ms before one frame, and win32u's line for that frame has its time within 15 ms of
 #      the sleep and under 10 ms of it in the driver's submit, acquire and present. Mesa's
 #      headers are needed to build the test (macos/build-mesa.sh leaves them)
+#  27  Windows Media video: wm_video_test.exe, x86_64 and i386, reads one second of WMV2 and
+#      WMA2 in an ASF file with the Windows Media reader (wmvcore, which is winegstreamer on
+#      GStreamer's ASF demuxer and FFmpeg's decoders): all 30 pictures at their full size, the
+#      last one's centre within 6 of #3366cc in each channel, and audio. A game's intro video
+#      that is played with DirectShow or the Windows Media SDK goes this way; before, the
+#      reader never returned from opening the file (Rise of Nations: Extended Edition waited
+#      with a black window)
 # The build comes first ("build", which takes long and can be left out with CHECK_ITEMS); the test
 # programs are compiled on every run.
 #
@@ -165,7 +172,7 @@ mkdir -p "$EVIDENCE_DIR"
 RESULTS=()
 FAILED=0
 TODO=0
-CHECK_ITEMS=${CHECK_ITEMS:-"build 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26"}
+CHECK_ITEMS=${CHECK_ITEMS:-"build 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27"}
 want() { case " $CHECK_ITEMS " in *" $1 "*) return 0 ;; esac; return 1; }
 pass() { RESULTS+=("PASS  item $1: $2"); echo "PASS  item $1: $2"; }
 fail() { RESULTS+=("FAIL  item $1: $2"); echo "FAIL  item $1: $2"; FAILED=1; }
@@ -240,6 +247,7 @@ if true; then
         cc $a sync_test_$a.exe sync_test.c -luser32 -lntdll
         cc $a thread_info_test_$a.exe thread_info_test.c
         cc $a process_stats_test_$a.exe process_stats_test.c -ladvapi32 -lsynchronization
+        cc $a wm_video_test_$a.exe wm_video_test.c -lole32
     done
     cc x86_64 vprot_run_test_x86_64.exe vprot_run_test.c
     cc x86_64 vram_budget_test.exe vram_budget_test.c -ldxgi -ldxguid -luuid
@@ -263,9 +271,13 @@ if true; then
         -c:v libx264 -profile:v baseline -pix_fmt yuv420p -c:a aac -shortest "$T/h264_aac.mp4" >>"$T/build.log" 2>&1
     "$FFMPEG_CLI" -loglevel error -y -f lavfi -i color=c=0x3366cc:s=320x240:r=30:d=1 -f lavfi -i sine=f=440:d=1 \
         -c:v libvpx-vp9 -pix_fmt yuv420p -c:a libopus -shortest "$T/vp9_opus.webm" >>"$T/build.log" 2>&1
-    n=$(ls "$T"/*.exe 2>/dev/null | wc -l | tr -d ' ')
-    [ "$n" -eq 37 ] && [ -s "$T/h264_aac.mp4" ] && [ -s "$T/vp9_opus.webm" ] \
-        && pass programs "37 test programs and 2 video files ($T)" || fail programs "$n of 37 test programs ($T/build.log)"
+    # and one second of Windows Media Video 8 with WMA 2, in ASF
+    "$FFMPEG_CLI" -loglevel error -y -f lavfi -i color=c=0x3366cc:s=320x240:r=30:d=1 -f lavfi -i sine=f=440:d=1 \
+        -c:v wmv2 -c:a wmav2 -shortest "$T/wmv2_wma2.wmv" >>"$T/build.log" 2>&1
+    # vk_pacing_test.exe is item 26's own, built there
+    n=$(ls "$T"/*.exe 2>/dev/null | grep -v -c '/vk_pacing_test\.exe$')
+    [ "$n" -eq 39 ] && [ -s "$T/h264_aac.mp4" ] && [ -s "$T/vp9_opus.webm" ] && [ -s "$T/wmv2_wma2.wmv" ] \
+        && pass programs "39 test programs and 3 video files ($T)" || fail programs "$n of 39 test programs ($T/build.log)"
 fi
 
 if [ ! -x "$WINE" ]; then
@@ -700,6 +712,21 @@ if want 26; then
             && pass 26 "a sleep of ${truth} ms: '$(echo "$line" | cut -c1-200)' ($log.*)" \
             || fail 26 "a sleep of ${truth:-none} ms: '$(echo "$line" | cut -c1-200)' ($log.*)"
     fi
+fi
+
+if want 27; then
+    ok=yes; lines=""
+    for a in x86_64 i686; do
+        log=$EVIDENCE_DIR/item27-$a
+        winrun "$log" "$T/wm_video_test_$a.exe" "$(winpath "$T/wmv2_wma2.wmv")"; s=$?
+        line=$(head -1 "$log.out" | tr -d '\r')
+        good=$(echo "$line" | perl -ne 'print(($1 == 30 && $2 == 230400 && abs(hex($3) - 0x33) <= 6 && abs(hex($4) - 0x66) <= 6
+                                                && abs(hex($5) - 0xcc) <= 6 && $6 > 0) ? "yes" : "no")
+            if /video (\d+) samples \((\d+) bytes at most, centre ([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})\), audio (\d+) samples/')
+        [ $s -eq 0 ] && [ "$good" = yes ] || ok=no
+        lines="$lines $a: '${line:-no line, exit $s}'"
+    done
+    [ $ok = yes ] && pass 27 "Windows Media video:$lines ($EVIDENCE_DIR/item27-*)" || fail 27 "Windows Media video:$lines ($EVIDENCE_DIR/item27-*)"
 fi
 
 if want 11; then
