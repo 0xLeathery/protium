@@ -1,0 +1,165 @@
+dxmt: Say in the log how busy the GPU was.
+
+Whether a slow stretch of a game is the GPU's or the game's own could not be read from the
+log: DXMT timed its waits for the GPU, not the GPU. Metal says for each command buffer when
+the GPU started and when it ended it. The thread that waits for the buffers to complete sees
+them in the order they were committed, and now adds up the union of those times. A swap chain
+says with its other lines, every half minute and when it goes, what share of the time the GPU
+was busy with the device's command buffers, what that is for a frame, and how many command
+buffers a frame had:
+
+  DXGI: the GPU in the last 30 s (frame_cause_test.exe, 14:50:39): busy 30.02 s of 30.02 s
+  (100%), 44.48 ms a frame, 1.0 command buffers a frame
+
+Checked with macos/tests/frame_cause_test.c, whose pixel shader loops a given number of times,
+in a window of 1280x720 behind a locked screen (120 Hz): 0.13 ms a frame (2%) with a loop of
+1; with the GPU as the limit (no display sync), 22.25 ms a frame for a loop of 4096 and 44.48
+ms for one of 8192, each 100% busy and each the frame time the swap chain measures; and 4.0
+command buffers a frame with three Flush() calls in a frame. Paced by the display, a loop of
+64 takes 1.66 ms a frame at 20% busy, about four and a half times what a round of the loop
+takes when the GPU is the limit: the GPU slows down when it has little to do. So "ms a frame"
+is the GPU's time at the speed it chose, not the size of the work.
+
+It costs two more calls into winemetal for a command buffer (GPUStartTime, which had no
+wrapper, and GPUEndTime). The time is that of this device's command buffers alone: what
+other processes do on the GPU is not in it. Counted from the swap chain's first frame.
+
+LOCAL TO THIS PORT, NOT FOR DXMT. Applied by macos/build-dxmt.sh to
+github.com/athei/dxmt at 01e59e9bde030f105937f249afaac92ada01b4d7, after 0001 to 0013.
+Written with an AI assistant (Claude). DXMT does not accept contributions made or
+co-authored by AI (its CONTRIBUTING.md), so this patch must not be sent to it as a pull
+request.
+---
+diff --git a/src/d3d11/d3d11_swapchain.cpp b/src/d3d11/d3d11_swapchain.cpp
+--- a/src/d3d11/d3d11_swapchain.cpp
++++ b/src/d3d11/d3d11_swapchain.cpp
+@@ -300,6 +300,7 @@ public:
+     const std::string head = Head();
+     SayFrameTimes(head);
+     SayCompiles(head);
++    SayGpu(head, frame_clock::now());
+     // First, so that Alt+Enter no longer reaches this swap chain
+     Com<IMTLDXGIFactoryPrivate> factory_private;
+     if (SUCCEEDED(factory_->QueryInterface(IID_PPV_ARGS(&factory_private))))
+@@ -1414,8 +1415,14 @@ private:
+       if (ms > frame_worst_ms_)
+         frame_worst_ms_ = ms;
+     }
+-    if (frame_said_ == frame_clock::time_point{})
++    if (frame_said_ == frame_clock::time_point{}) {
+       frame_said_ = now;
++      // the GPU's line counts from the first frame too, not what was drawn before it
++      auto &gpu = device_->GetDXMTDevice().queue().gpu_time;
++      gpu_said_ = now;
++      gpu_said_busy_ns_ = gpu.busy_ns.load(std::memory_order_relaxed);
++      gpu_said_buffers_ = gpu.command_buffers.load(std::memory_order_relaxed);
++    }
+     frame_last_ = now;
+     if (now - frame_said_ >= std::chrono::seconds(30)) {
+       frame_said_ = now;
+@@ -1424,6 +1431,7 @@ private:
+       SayWindow(head);
+       SayWaits(head);
+       SayCompiles(head);
++      SayGpu(head, now);
+       window_frames_ = 0;
+       window_slow_count_ = 0;
+     }
+@@ -1565,6 +1573,35 @@ private:
+     said.wait_ns = wait_ns;
+   }
+ 
++  // How busy the GPU was with this device's command buffers since the line before, from the
++  // command queue's sums: the share of the time, and what a frame took of it
++  uint64_t gpu_said_busy_ns_ = 0, gpu_said_buffers_ = 0, gpu_said_frames_ = 0;
++  frame_clock::time_point gpu_said_{};
++
++  void SayGpu(const std::string &head, frame_clock::time_point now) {
++    auto &gpu = device_->GetDXMTDevice().queue().gpu_time;
++    uint64_t busy_ns = gpu.busy_ns.load(std::memory_order_relaxed);
++    uint64_t buffers = gpu.command_buffers.load(std::memory_order_relaxed);
++    uint64_t frames = frame_count_ - gpu_said_frames_;
++    if (gpu_said_ == frame_clock::time_point{})
++      return; // no frame yet
++    double seconds = std::chrono::duration<double>(now - gpu_said_).count();
++    double busy = double(busy_ns - gpu_said_busy_ns_) / 1e9;
++    if (frames && seconds > 0) {
++      char text[512];
++      snprintf(text, sizeof(text),
++               "DXGI: the GPU in the last %.0f s%s: busy %.2f s of %.2f s (%.0f%%), %.2f ms a frame, %.1f command "
++               "buffers a frame",
++               seconds, head.c_str(), busy, seconds, 100.0 * busy / seconds, 1000.0 * busy / double(frames),
++               double(buffers - gpu_said_buffers_) / double(frames));
++      Logger::info(text);
++    }
++    gpu_said_ = now;
++    gpu_said_busy_ns_ = busy_ns;
++    gpu_said_buffers_ = buffers;
++    gpu_said_frames_ = frame_count_;
++  }
++
+   void SayWindow(const std::string &head) const {
+     char text[1000]; /* with "info:  " and the newline, under Wine's 1020 bytes a line */
+     int used = snprintf(text, sizeof(text), "DXGI: the last 30 s%s: %llu frames, %llu over 50 ms", head.c_str(),
+diff --git a/src/dxmt/dxmt_command_queue.cpp b/src/dxmt/dxmt_command_queue.cpp
+--- a/src/dxmt/dxmt_command_queue.cpp
++++ b/src/dxmt/dxmt_command_queue.cpp
+@@ -189,6 +189,7 @@ CommandQueue::WaitForFinishThread() {
+   env::setThreadName("dxmt-finish-thread");
+   SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL);
+   uint64_t internal_seq = 1;
++  uint64_t gpu_last_end = 0;
+   while (!stopped.load()) {
+     ready_for_commit.wait(internal_seq, std::memory_order_acquire);
+     if (stopped.load())
+@@ -197,6 +198,17 @@ CommandQueue::WaitForFinishThread() {
+     if (chunk.attached_cmdbuf.status() <= WMTCommandBufferStatusScheduled) {
+       chunk.attached_cmdbuf.waitUntilCompleted();
+     }
++    // the part of this buffer's time on the GPU that no buffer before it has counted
++    {
++      uint64_t gpu_start = chunk.attached_cmdbuf.gpuStartTime(), gpu_end = chunk.attached_cmdbuf.gpuEndTime();
++      if (gpu_end > gpu_start) {
++        if (gpu_end > gpu_last_end) {
++          gpu_time.busy_ns.fetch_add(gpu_end - std::max(gpu_start, gpu_last_end), std::memory_order_relaxed);
++          gpu_last_end = gpu_end;
++        }
++        gpu_time.command_buffers.fetch_add(1, std::memory_order_relaxed);
++      }
++    }
+     if (chunk.attached_cmdbuf.status() == WMTCommandBufferStatusError) {
+       ERR("Device error at frame ", chunk.frame_, ": ", chunk.attached_cmdbuf.error().description().getUTF8String());
+     }
+diff --git a/src/dxmt/dxmt_command_queue.hpp b/src/dxmt/dxmt_command_queue.hpp
+--- a/src/dxmt/dxmt_command_queue.hpp
++++ b/src/dxmt/dxmt_command_queue.hpp
+@@ -202,6 +202,14 @@ public:
+   ResourceInitializer initializer;
+   CounterPool counter_pool;
+ 
++  // How long the GPU was busy with this queue's command buffers, for the frame recorder's line
++  // (d3d11_swapchain.cpp): added up on the finishing thread, which sees them in the order they
++  // were committed, as the union of the times Metal says each was on the GPU
++  struct GpuTime {
++    std::atomic<uint64_t> busy_ns{0}, command_buffers{0};
++  };
++  GpuTime gpu_time;
++
+   CommandQueue(WMT::Device device);
+ 
+   ~CommandQueue();
+diff --git a/src/winemetal/Metal.hpp b/src/winemetal/Metal.hpp
+--- a/src/winemetal/Metal.hpp
++++ b/src/winemetal/Metal.hpp
+@@ -664,6 +664,11 @@ public:
+     return LogContainer{MTLCommandBuffer_logs(handle)};
+   }
+ 
++  uint64_t
++  gpuStartTime() {
++    return MTLCommandBuffer_property(handle, WMTCommandBufferPropertyGPUStartTime);
++  }
++
+   uint64_t
+   gpuEndTime() {
+     return MTLCommandBuffer_property(handle, WMTCommandBufferPropertyGPUEndTime);
