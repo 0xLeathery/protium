@@ -438,6 +438,107 @@ class FrameTimes(unittest.TestCase):
         self.assertEqual((frames["program"], frames["count"]), ("Game.exe", 1500))
 
 
+class FrameCauses(unittest.TestCase):
+    """DXMT's lines about compiles, the GPU and each slow frame (patches 0013 to 0015), as
+    macos/tests/frame_cause_test.c got them on 28 November."""
+    HEAD = "(frame_cause_test.exe, 15:06:%s)"
+    SLOW = ("info:  DXGI: slow frame " + HEAD % "22.5" + ": 119.8 ms: 119.7 ms for an earlier frame, 0 waits for the GPU "
+            "(0.0 ms), 0 query flushes, commit 0.0 ms, rest 0.0 ms; 1 new pipeline, 1 shader compiled; the frame 4 before: "
+            "encoding 112.9 ms (112.8 ms of it for 1 pipeline, 0.0 ms for a drawable), GPU 1.8 ms\n"
+            "info:  DXGI: slow frame " + HEAD % "24.6" + ": 104.1 ms: 7.8 ms for an earlier frame, 1 wait for the GPU "
+            "(95.5 ms), 0 query flushes, commit 0.0 ms, rest 0.8 ms; 0 new pipelines, 0 shaders compiled; the frame 4 "
+            "before: encoding 7.9 ms (0.0 ms of it for 0 pipelines, 7.7 ms for a drawable), GPU 1.7 ms\n"
+            "info:  DXGI: slow frame " + HEAD % "26.8" + ": 100.1 ms: 9.0 ms for an earlier frame, 0 waits for the GPU "
+            "(0.0 ms), 281782 query flushes, commit 0.0 ms, rest 91.1 ms; 0 new pipelines, 0 shaders compiled\n")
+    END = ("info:  DXGI: frame times " + HEAD % "30" + ": 1499 frames in 12 s, median 8.0 ms, 95% 10.0 ms, 99% 15.5 ms, "
+           "worst 160.3 ms, 4 over 50 ms\n"
+           "info:  DXGI: compiles of the last 14 s " + HEAD % "30" + ": 4 shaders compiled (33 ms), 0 from the shader cache "
+           "(0 ms), 2 pipelines (131 ms), 2 draws waited for a pipeline (150.7 ms); so far 4 shaders compiled, 0 from the "
+           "shader cache, 2 pipelines, draws waited 150.7 ms\n"
+           "info:  DXGI: the GPU in the last 13 s " + HEAD % "30" + ": busy 2.94 s of 12.85 s (23%), 1.96 ms a frame, 1.0 "
+           "command buffers a frame\n")
+
+    def test_a_slow_frame_is_a_row_of_its_own_with_what_it_waited_for(self):
+        rows = sp.recorder_rows("0024:trace:loaddll x\n" + self.SLOW)
+        self.assertEqual([(r["at"], r["log_line"], sorted(r)) for r in rows],
+                         [("15:06:22.5", 2, ["api", "at", "log_line", "program", "slow_frame"]),
+                          ("15:06:24.6", 3, ["api", "at", "log_line", "program", "slow_frame"]),
+                          ("15:06:26.8", 4, ["api", "at", "log_line", "program", "slow_frame"])])
+        pipeline, mapped, query = (r["slow_frame"] for r in rows)
+        self.assertEqual((pipeline["ms"], pipeline["earlier_frame_ms"], pipeline["frames_before"], pipeline["encoding_ms"],
+                          pipeline["pipeline_wait_ms"], pipeline["pipeline_waits"], pipeline["gpu_ms"]),
+                         (119.8, 119.7, 4, 112.9, 112.8, 1, 1.8))
+        self.assertEqual((pipeline["new_pipelines"], pipeline["shaders_compiled"]), (1, 1))
+        self.assertEqual((mapped["gpu_waits"], mapped["gpu_wait_ms"], mapped["rest_ms"]), (1, 95.5, 0.8))
+        self.assertEqual((query["query_flushes"], query["rest_ms"]), (281782, 91.1))
+        # a frame near the start has no frame before it that is known to be done
+        self.assertNotIn("frames_before", query)
+
+    def test_a_frame_whose_place_was_taken_has_no_numbers_for_it(self):
+        line = self.SLOW.splitlines(True)[2].rstrip("\n") + "; the frame 16 before: not kept\n"
+        row, = sp.recorder_rows(line)
+        self.assertEqual(row["slow_frame"]["frames_before"], 16)
+        self.assertNotIn("encoding_ms", row["slow_frame"])
+
+    def test_the_compile_and_gpu_lines_join_the_row_of_their_half_minute(self):
+        row, = sp.recorder_rows(self.END)
+        self.assertEqual(sorted(row), ["api", "at", "compiles", "gpu", "log_line", "program", "run"])
+        self.assertEqual(row["compiles"], {"shaders": 4, "shader_ms": 33, "cached": 0, "cached_ms": 0, "pipelines": 2,
+                                           "pipeline_ms": 131, "draw_waits": 2, "draw_wait_ms": 150.7, "total_shaders": 4,
+                                           "total_cached": 0, "total_pipelines": 2, "total_draw_wait_ms": 150.7})
+        self.assertEqual(row["gpu"], {"busy_s": 2.94, "seconds": 12.85, "percent": 23, "ms_a_frame": 1.96,
+                                      "command_buffers": 1.0})
+
+    def test_one_shader_and_one_draw_are_read_as_many_are(self):
+        line = self.END.splitlines(True)[1].replace("4 shaders compiled (33 ms)", "1 shader compiled (33 ms)") \
+            .replace("2 pipelines (131 ms)", "1 pipeline (131 ms)").replace("2 draws waited", "1 draw waited") \
+            .replace("so far 4 shaders compiled", "so far 1 shader compiled").replace("cache, 2 pipelines", "cache, 1 pipeline")
+        row, = sp.recorder_rows(line)
+        self.assertEqual([row["compiles"][k] for k in ("shaders", "pipelines", "draw_waits", "total_shaders", "total_pipelines")],
+                         [1, 1, 1, 1, 1])
+
+    def test_a_compile_line_alone_is_a_row(self):
+        # a swap chain that never presented says no frame times when it goes
+        row, = sp.recorder_rows(self.END.splitlines(True)[1])
+        self.assertEqual(sorted(row), ["api", "at", "compiles", "log_line", "program"])
+
+    def test_a_runs_speed_has_only_what_was_measured(self):
+        rows = sp.recorder_rows(self.SLOW + self.END)
+        frames = sp.frame_times("", rows)
+        self.assertEqual(sp.run_perf(frames, rows), {"frames": 1499, "p99_ms": 15.5, "long_frames": 4,
+                                                     "shaders_compiled": 4, "shader_wait_ms": 150.7})
+        long_run = dict(frames, count=120000, seconds=1000)
+        self.assertEqual(sp.run_perf(long_run, rows)["avg_ms"], 8.3)
+        # a Vulkan game has frame times and no compile line
+        vulkan = dict(frames, api="vulkan", program="RDR2.exe")
+        self.assertEqual(sorted(sp.run_perf(vulkan, rows)), ["frames", "long_frames", "p99_ms"])
+        self.assertIsNone(sp.run_perf(None, rows))
+
+    def test_the_reports_speed_says_what_there_is(self):
+        report = {"game": {"name": "G", "app": 1, "graphics": ["d3d11"]}, "run": {"verdict": "works", "end": "ended", "seconds": 9},
+                  "protium": "0.5.0", "mac": {"model": "Mac16,8", "chip": "Apple M4 Pro", "memory_gb": 24, "macos": "27.2"},
+                  "id": "00", "perf": {"frames": 1499, "p99_ms": 15.5, "long_frames": 4}}
+        self.assertIn("Speed: 1499 frames, 15.5 ms for the slowest in a hundred, 4 longer than 50 ms\n", sp.report_words(report))
+        report["perf"].update(avg_ms=8.3, shaders_compiled=4, shader_wait_ms=150.7)
+        self.assertIn("Speed: 1499 frames, 8.3 ms on average, 15.5 ms for the slowest in a hundred, 4 longer than 50 ms; "
+                      "4 shaders compiled, 151 ms waited for them\n", sp.report_words(report))
+        del report["perf"]
+        self.assertIn("Speed: not measured\n", sp.report_words(report))
+
+    def test_record_keeps_the_speed_with_the_run(self):
+        log = os.path.join(TEMP, "record-causes.log")
+        with open(log, "w") as f:
+            f.write("0024:trace:loaddll x\n" + self.SLOW + self.END)
+        sp.cmd_record(434343, int(time.time()) - 13, log)
+        entry = [r for r in sp.results()[434343] if r.get("by") == "run"][-1]
+        self.assertEqual(entry["perf"], {"frames": 1499, "p99_ms": 15.5, "long_frames": 4, "shaders_compiled": 4,
+                                         "shader_wait_ms": 150.7})
+        with open(os.path.join(sp.HOME_DIR, entry["rows"])) as f:
+            kept = [json.loads(l) for l in f]
+        self.assertEqual([sorted(k for k in r if k in ("slow_frame", "compiles", "gpu", "run")) for r in kept],
+                         [["slow_frame"], ["slow_frame"], ["slow_frame"], ["compiles", "gpu", "run"]])
+
+
 class RecorderRows(unittest.TestCase):
     """The frame recorder's lines, in the three forms they have had."""
     OLD_DXGI = ("info:  DXGI: frame times: 54000 frames in 900 s, median 16.5 ms, 95% 17.0 ms, 99% 33.5 ms, "

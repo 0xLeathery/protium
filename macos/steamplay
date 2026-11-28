@@ -2379,8 +2379,15 @@ def add_result(entry):
 # 0.4.1's DXGI lines have no "(...)" and the Vulkan lines of 26 Nov name the program only. New
 # fields only ever come at the end of a line. A game's setlocale can give DXMT's C runtime a
 # decimal comma, so numbers may have one.
-RECORDER_LINE = re.compile(r"^(?:info:  )?(DXGI|Vulkan): (frame times|the last 30 s|a frame of the last 30 s)"
-                           r"(?: \((.+?)(?:, (\d\d:\d\d:\d\d))?\))?: (.*)$", re.M)
+# DXMT (patches 0013 to 0015) adds, with the three or when a swap chain goes, for as many seconds
+# as have passed since the line before:
+#   DXGI: compiles of the last N s (<program>, HH:MM:SS): shaders, pipelines, draws that waited
+#   DXGI: the GPU in the last N s (<program>, HH:MM:SS): how busy the GPU was
+# and for a frame of over 50 ms, as it is noticed:
+#   DXGI: slow frame (<program>, HH:MM:SS.s): what it waited for
+RECORDER_LINE = re.compile(r"^(?:info:  )?(DXGI|Vulkan): (frame times|the last 30 s|a frame of the last 30 s|"
+                           r"compiles of the last \d+ s|the GPU in the last \d+ s|slow frame)"
+                           r"(?: \((.+?)(?:, (\d\d:\d\d:\d\d(?:\.\d)?))?\))?: (.*)$", re.M)
 _N = r"([\d.,]+)"
 RECORDER_FIELDS = {
     "frame times": (re.compile(r"(\d+) frames in (\d+) s, median %s ms, 95%% %s ms, 99%% %s ms, worst %s ms, "
@@ -2397,6 +2404,25 @@ RECORDER_FIELDS = {
                    r"present %s ms \(the driver's %s ms\)" % ((_N,) * 7)),
         ("submits", "buffers", "submit_ms", "acquires", "acquire_ms", "present_ms", "driver_present_ms")),
 }
+RECORDER_MORE = {
+    "compiles": (
+        re.compile(r"(\d+) shaders? compiled \(%s ms\), (\d+) from the shader cache \(%s ms\), (\d+) pipelines? \(%s ms\), "
+                   r"(\d+) draws? waited for a pipeline \(%s ms\); so far (\d+) shaders? compiled, (\d+) from the shader "
+                   r"cache, (\d+) pipelines?, draws waited %s ms" % ((_N,) * 5)),
+        ("shaders", "shader_ms", "cached", "cached_ms", "pipelines", "pipeline_ms", "draw_waits", "draw_wait_ms",
+         "total_shaders", "total_cached", "total_pipelines", "total_draw_wait_ms")),
+    "gpu": (re.compile(r"busy %s s of %s s \(%s%%\), %s ms a frame, %s command buffers a frame" % ((_N,) * 5)),
+            ("busy_s", "seconds", "percent", "ms_a_frame", "command_buffers")),
+    # the frame that was waited for is there once the queue's latency has passed, and "not kept"
+    # (no numbers) with a latency of 15 frames or more
+    "slow_frame": (
+        re.compile(r"%s ms: %s ms for an earlier frame, (\d+) waits? for the GPU \(%s ms\), (\d+) query flush(?:es)?, "
+                   r"commit %s ms, rest %s ms; (\d+) new pipelines?, (\d+) shaders? compiled"
+                   r"(?:; the frame (\d+) before: (?:not kept|encoding %s ms \(%s ms of it for (\d+) pipelines?, "
+                   r"%s ms for a drawable\), GPU %s ms))?" % ((_N,) * 9)),
+        ("ms", "earlier_frame_ms", "gpu_waits", "gpu_wait_ms", "query_flushes", "commit_ms", "rest_ms", "new_pipelines",
+         "shaders_compiled", "frames_before", "encoding_ms", "pipeline_wait_ms", "pipeline_waits", "drawable_ms", "gpu_ms")),
+}
 SLOW_FRAME = re.compile(r"%s s \(%s ms\)" % (_N, _N))
 RUNS_KEPT = 100     # rows files kept for each game
 
@@ -2410,19 +2436,32 @@ def recorder_rows(log):
     """The frame recorder's lines of a run's log, as one row for each program and half minute:
     {"api": "dxgi"|"vulkan", "program", "at" (HH:MM:SS, or None in older logs), "log_line",
     "run": {count, seconds, median, p95, p99, worst, slow}, "window": {frames, slow, slow_at:
-    [[seconds into the half minute, ms], ...]}, "waits" (DXGI) or "calls" (Vulkan): {...}}. A row
-    lacks what was not written; a swap chain that goes says its "run" alone."""
+    [[seconds into the half minute, ms], ...]}, "waits" (DXGI) or "calls" (Vulkan): {...},
+    "compiles": {shaders, shader_ms, cached, ..., total_shaders, ...} and "gpu": {busy_s, seconds,
+    percent, ms_a_frame, command_buffers} (DXGI)}. A row lacks what was not written; a swap chain
+    that goes says its "run" and, when there is any, "compiles" and "gpu". A frame of over 50 ms
+    is a row of its own, {"api", "program", "at" (HH:MM:SS.s), "log_line", "slow_frame": {ms,
+    earlier_frame_ms, gpu_waits, gpu_wait_ms, query_flushes, commit_ms, rest_ms, new_pipelines,
+    shaders_compiled[, frames_before[, encoding_ms, pipeline_wait_ms, pipeline_waits, drawable_ms,
+    gpu_ms]]}}."""
     rows, open_rows = [], {}
     line, counted = 1, 0
     for m in RECORDER_LINE.finditer(log):
         api, kind, program, at, rest = m.groups()
-        spec = RECORDER_FIELDS.get(kind) or RECORDER_FIELDS[(api, kind)]
+        more = "compiles" if kind.startswith("compiles") else "gpu" if kind.startswith("the GPU") else \
+            "slow_frame" if kind == "slow frame" else None
+        if more and api != "DXGI":
+            continue
+        spec = RECORDER_MORE[more] if more else RECORDER_FIELDS.get(kind) or RECORDER_FIELDS[(api, kind)]
         fields = spec[0].match(rest)
         if not fields:
             continue
-        values = dict(zip(spec[1], (_number(v) for v in fields.groups())))
+        values = {k: _number(v) for k, v in zip(spec[1], fields.groups()) if v is not None}
         line += log.count("\n", counted, m.start())
         counted = m.start()
+        if more == "slow_frame":
+            rows.append({"api": api.lower(), "program": program, "at": at, "log_line": line, "slow_frame": values})
+            continue
         # the three lines of a half minute carry the same time, read once for them: by it a
         # half minute written without its "frame times" line (none when no frame was counted
         # yet) does not join the row of a swap chain that went before
@@ -2434,7 +2473,9 @@ def recorder_rows(log):
             open_rows[key] = row
         if at and not row["at"]:
             row["at"] = at
-        if kind == "frame times":
+        if more:
+            row[more] = values
+        elif kind == "frame times":
             row["run"] = values
         elif kind == "the last 30 s":
             values["slow_at"] = [[_number(s), _number(ms)] for s, ms in SLOW_FRAME.findall(rest[fields.end():])]
@@ -2466,6 +2507,26 @@ def frame_times(log, rows=None):
     if row["program"]:
         out["program"] = row["program"]
     return out
+
+
+def run_perf(frames, rows):
+    """What a report says of a run's speed (report-schema.json's "perf"), from the run's frame
+    times and, for a Direct3D 10 or 11 game, from the last compile line of the game's program:
+    {"frames", "p99_ms", "long_frames"[, "avg_ms"][, "shaders_compiled", "shader_wait_ms"]}, or
+    None without frame times. The lines give a run's length in whole seconds, so the average is
+    left out for a run of under 100 s, where it could be over 1% off; and a Vulkan game's log
+    has no compile line, so it has no shader counts, which is not the same as none compiled."""
+    if not frames or not frames.get("count"):
+        return None
+    perf = {"frames": int(frames["count"]), "p99_ms": float(frames["p99"]), "long_frames": int(frames["slow"])}
+    if frames.get("seconds", 0) >= 100:
+        perf["avg_ms"] = round(frames["seconds"] * 1000.0 / frames["count"], 1)
+    compiles = [r["compiles"] for r in rows
+                if "compiles" in r and r["api"] == frames.get("api") and r["program"] == frames.get("program")]
+    if compiles:
+        perf["shaders_compiled"] = int(compiles[-1]["total_shaders"])
+        perf["shader_wait_ms"] = float(compiles[-1]["total_draw_wait_ms"])
+    return perf
 
 
 def write_rows(appid, start, rows):
@@ -2707,6 +2768,9 @@ def cmd_record(appid, start, logfile):
     frames = frame_times(log, rows)
     if frames:
         entry["frames"] = frames
+    perf = run_perf(frames, rows)
+    if perf:
+        entry["perf"] = perf
     more = process_rows(log)
     process, audio = process_summary(more, frames and frames.get("program")), audio_summary(more)
     if process:
@@ -2871,9 +2935,18 @@ def report_words(report):
              "Mac: %s, %s, %d GB, macOS %s%s" % (mac["model"], mac["chip"], mac["memory_gb"], mac["macos"],
                                               ", display %s" % mac["display"] if mac.get("display") else "")]
     if perf:
-        lines.append("Speed: %s frames, %.1f ms on average, %.1f ms for the slowest in a hundred, %s longer than 50 ms; %s shaders compiled, %.0f ms waited for them"
-                     % (perf.get("frames", "?"), perf.get("avg_ms", 0), perf.get("p99_ms", 0), perf.get("long_frames", "?"),
-                        perf.get("shaders_compiled", "?"), perf.get("shader_wait_ms", 0)))
+        # only what was measured: a short run has no average, a Vulkan game no shader counts
+        parts = ["%s frames" % perf.get("frames", "?")]
+        if "avg_ms" in perf:
+            parts.append("%.1f ms on average" % perf["avg_ms"])
+        if "p99_ms" in perf:
+            parts.append("%.1f ms for the slowest in a hundred" % perf["p99_ms"])
+        if "long_frames" in perf:
+            parts.append("%s longer than 50 ms" % perf["long_frames"])
+        speed = "Speed: " + ", ".join(parts)
+        if "shaders_compiled" in perf:
+            speed += "; %s shaders compiled, %.0f ms waited for them" % (perf["shaders_compiled"], perf.get("shader_wait_ms", 0))
+        lines.append(speed)
     else:
         lines.append("Speed: not measured")
     lines.append("Report number: %s (name it to have this report deleted)" % report["id"])
