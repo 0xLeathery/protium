@@ -438,6 +438,39 @@ class FrameTimes(unittest.TestCase):
         self.assertEqual((frames["program"], frames["count"]), ("Game.exe", 1500))
 
 
+class PreferNative(unittest.TestCase):
+    """"prefer <app> native" is refused for a game whose Mac build this macOS cannot run."""
+    CACHE = {50300: {"name": "Spec Ops: The Line", "type": "game", "oslist": ["windows", "macos"], "osextended": []},
+             203160: {"name": "Tomb Raider", "type": "game", "oslist": ["windows", "macos"], "osextended": ["macos64"]},
+             379720: {"name": "DOOM", "type": "game", "oslist": ["windows"], "osextended": []}}
+
+    def prefer(self, appid, choice):
+        with mock.patch.object(sp, "steam_running", return_value=False), mock.patch.object(sp, "app_cache", return_value=self.CACHE), \
+                mock.patch.object(sp, "cmd_map") as mapped, mock.patch.object(sp, "CHOICES", os.path.join(TEMP, "prefer-choices.json")), \
+                mock.patch("builtins.print"):
+            sp.cmd_prefer(appid, choice)
+            return mapped.call_args[0][0], sp.read_choices()
+
+    def test_a_32_bit_mac_build_cannot_be_chosen(self):
+        with self.assertRaises(SystemExit) as stopped:
+            self.prefer(50300, "native")
+        self.assertIn("only a 32-bit Mac build", str(stopped.exception))
+
+    def test_a_game_without_a_mac_build_cannot_be_chosen(self):
+        with self.assertRaises(SystemExit) as stopped:
+            self.prefer(379720, "native")
+        self.assertIn("has no Mac build", str(stopped.exception))
+
+    def test_a_64_bit_mac_build_can_and_so_can_its_windows_build(self):
+        mapped, choices = self.prefer(203160, "proton")
+        self.assertEqual((mapped, choices), ({203160: sp.PROTON}, {203160: "proton"}))
+        mapped, choices = self.prefer(203160, "native")
+        self.assertEqual((mapped, choices), ({203160: sp.NATIVE}, {203160: "native"}))
+        # the Windows build of a game with a 32-bit Mac build is the rule's own choice and may be stated
+        mapped, choices = self.prefer(50300, "proton")
+        self.assertEqual(choices[50300], "proton")
+
+
 class FrameCauses(unittest.TestCase):
     """DXMT's lines about compiles, the GPU and each slow frame (patches 0013 to 0015), as
     macos/tests/frame_cause_test.c got them on 28 November."""

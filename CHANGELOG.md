@@ -30,6 +30,9 @@ written. "Known problems" is a heading of our own, next to Keep a Changelog's.
   crashed, the game's other processes stayed behind until the Mac was restarted, and one of
   them kept using processor time: we found one two days later. Every process of a game now
   ends with its session, and the game's log says why.
+- `steamplay prefer <app id> native` accepted a game whose only Mac build is 32-bit, which
+  macOS can no longer run, so Steam was told to start a program that cannot start. It now
+  says so and changes nothing.
 
 ## [0.5.0] - 2026-11-28
 

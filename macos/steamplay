@@ -624,6 +624,10 @@ def cmd_prefer(appid, choice):
     if choice != "auto":
         if choice == "native" and "macos" not in cache[appid]["oslist"]:
             die("%s has no Mac build" % cache[appid]["name"])
+        # the rule's own reason against a 32-bit Mac build holds for a choice too: Steam would be
+        # told to run a program this macOS cannot start
+        if choice == "native" and not {"macosapplesilicon", "macos64"} & set(cache[appid]["osextended"]):
+            die("%s has only a 32-bit Mac build, which this macOS cannot run" % cache[appid]["name"])
         choices[appid] = choice
     os.makedirs(os.path.dirname(CHOICES), exist_ok=True)
     with open(CHOICES, "w") as f:
