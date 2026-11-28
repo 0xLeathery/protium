@@ -1,0 +1,58 @@
+LOCAL TO THIS PORT, NOT FOR MESA. Written with an AI assistant (Mesa's AGENTS.md asks for the
+trailer below); never sent upstream.
+
+From: Protium
+Subject: [PATCH] wsi/metal: Keep three drawables when an application asks for two images
+
+The surface reports minImageCount 3, but the swapchain takes the
+application's count as it is, and DOOM (2016) asks for 2: its CAMetalLayer
+then has two drawables, one always on screen. vkAcquireNextImageKHR waits in
+nextDrawable until the frame just presented has been drawn and shown, so
+drawing and showing run one after the other. With FIFO that does not stay at
+a refresh or two of delay: while the game waits the GPU has nothing to do
+and slows down, its frames take longer and miss more refreshes, and it slows
+down more, and looks busy enough all the while.
+
+DOOM in a fight at 2560x1440 on a 120 Hz screen (M4 Pro), FIFO, from the
+driver's own lines (KK_PRESENT_STATS=30), half minutes of two sessions the
+same afternoon:
+
+                          2 drawables       3 drawables
+  frames a second         24 to 26          75 to 102
+  GPU time a frame        33 to 35 ms       9.3 to 11.5 ms
+  GPU busy                84 to 88%         87 to 99%
+  wait in acquire         31 to 38 ms       0.1 to 1.8 ms
+  present to the screen   46 to 48 ms       23 to 27 ms
+
+Before the fight, with two drawables: 60 fps and 9.8 ms of GPU time a frame
+at 59% busy. The two-drawable session stayed at 24 to 26 fps for five half
+minutes on end; the three-drawable one had no such stretch in seven minutes.
+
+Give the layer three drawables in that case. The application's images are
+blit sources bound to whichever drawable comes next, so it still sees the two
+it asked for.
+
+Generated-by: LLM
+---
+diff --git a/src/vulkan/wsi/wsi_common_metal_layer.m b/src/vulkan/wsi/wsi_common_metal_layer.m
+index fe7cafb4999..56600ff875f 100644
+--- a/src/vulkan/wsi/wsi_common_metal_layer.m
++++ b/src/vulkan/wsi/wsi_common_metal_layer.m
+@@ -243,7 +243,16 @@
+       metal_layer.allowsNextDrawableTimeout = YES;
+       metal_layer.framebufferOnly = framebuffer_only;
+ 
+-      metal_layer.maximumDrawableCount = image_count;
++      /* Three drawables whatever the image count. The surface reports a
++       * minimum of 3 images, but an application may ask for fewer all the same
++       * (DOOM 2016 asks for 2), and with 2 drawables one is always on screen:
++       * nextDrawable then cannot return before the frame just presented has
++       * been drawn and shown, so drawing and showing run one after the other
++       * and a FIFO frame takes whole refreshes more than its work (20 fps
++       * where the same scene runs at 90 unsynchronised). The images the
++       * application sees are not the drawables: each acquire binds whichever
++       * drawable nextDrawable returns to the next image. */
++      metal_layer.maximumDrawableCount = image_count < 3 ? 3 : image_count;
+       metal_layer.drawableSize = (CGSize){.width = width, .height = height};
+       metal_layer.opaque = enable_opaque;
+       /* Display sync stays off in every present mode. FIFO presents are

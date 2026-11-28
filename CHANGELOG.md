@@ -10,6 +10,15 @@ written. "Known problems" is a heading of our own, next to Keep a Changelog's.
 
 ## [Unreleased]
 
+### Fixed
+
+- With V-Sync on, a Vulkan game could drop to 20 or 30 frames a second and stay there. DOOM
+  (2016) did in fights: 25 frames a second, where the same fight now runs at 75 to 100 on a
+  120 Hz screen. A game that asks for two picture buffers got exactly two, so it could not
+  start a frame before the last one was on the screen; while it waited the graphics chip
+  slowed down, and then never caught up. Such a game now gets three. V-Sync no longer has to
+  be off.
+
 ## [0.5.1] - 2026-11-28
 
 A tidying release: nothing of a game stays behind when its session is cut short, the log says
