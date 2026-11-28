@@ -3853,8 +3853,9 @@ def cmd_diagnose():
              ("Steam's bootstrap log, last 50 lines", lambda: tail(os.path.join(STEAM_ROOT, "logs", "bootstrap_log.txt"), 50)),
              ("Steam's crash dumps of the last seven days (names only)", dumps),
              ("The logs of the last games Protium ran, their start and their end", lambda: recent_game_logs(cache, steam_runs()))]
-    text = ("Protium diagnostics, %s\nThis file includes the names of your installed games. Your home folder is written as ~ "
-            "and Steam account numbers as <id>. Please read it before you share it.\n"
+    text = ("Protium diagnostics, %s\nThis file includes the names of your installed games and of the disks they are on, "
+            "and the ends of their logs. Your home folder is written as ~ and Steam account numbers as <id>. Please read "
+            "it before you share it. What it holds: https://github.com/0xLeathery/protium/blob/macos-port/.github/PRIVACY.md\n"
             % time.strftime("%Y-%m-%d %H:%M:%S"))
     for title, part in parts:
         try:

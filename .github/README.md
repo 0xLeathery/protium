@@ -25,7 +25,8 @@ Protium asks GitHub once a day whether a newer version is out, tells you in its 
 a short banner over the game when you start one, and can update itself. The request is a plain look at the
 list of releases at `api.github.com`, with nothing about your Mac or your games in it. The
 checkbox "Tell me about new versions" in Protium's window, or `steamplay updates off`, turns it
-off, and then no request is made.
+off, and then no request is made. [PRIVACY.md](PRIVACY.md) lists everything Protium sends and keeps,
+and what its Diagnostics file holds.
 
 ## Status
 

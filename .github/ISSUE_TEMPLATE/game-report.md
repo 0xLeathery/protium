@@ -26,7 +26,8 @@ Please attach two files, by dragging them into this box:
 
 1. **Diagnostics.** Start the game once more so that it goes wrong, quit it, then open Protium
    and press **Diagnostics**. It saves a text file on your Desktop that says how Steam ran the
-   game and how its last runs ended. It names your installed games, so read it first.
+   game and how its last runs ended. It names your installed games, so read it first
+   ([what it holds](https://github.com/0xLeathery/protium/blob/macos-port/.github/PRIVACY.md)).
 2. **The game's log**, `steamplay-run.log`. It is in the folder
    `~/Library/Application Support/Steam/steamapps/compatdata/<app id>/` (in Finder, choose
    Go > Go to Folder and paste that path, with the game's app id), or in
