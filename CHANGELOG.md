@@ -10,6 +10,11 @@ written. "Known problems" is a heading of our own, next to Keep a Changelog's.
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-11-28
+
+A tidying release: nothing of a game stays behind when its session is cut short, the log says
+more about why a frame was slow, and Protium does less in the background while you play.
+
 ### Changed
 
 - A Direct3D 10 or 11 game's log now also says, every half minute, how many shaders and
@@ -33,6 +38,19 @@ written. "Known problems" is a heading of our own, next to Keep a Changelog's.
 - `steamplay prefer <app id> native` accepted a game whose only Mac build is 32-bit, which
   macOS can no longer run, so Steam was told to start a program that cannot start. It now
   says so and changes nothing.
+
+### Known problems
+
+- **Turn V-Sync off in Vulkan games.** With V-Sync on, a Vulkan game can drop to 20 or 30
+  frames a second and stay there, though it runs much faster with V-Sync off: DOOM does in
+  fights (20 with V-Sync, about 90 without). Turn V-Sync off in the game's video settings.
+- A Vulkan game that changes its resolution many times keeps some memory each time. Restart
+  the game if it has grown slow.
+- The controller support (from 0.4.2) has still not been tried with a controller. If a
+  controller worked before and does not now, add the line `PROTON_NO_SDL=1` to the game's
+  settings file, `~/Library/Application Support/SteamPlay/env.<app id>`, and tell us.
+- The new lines in a game's log, and the end of a game's leftover processes, have been tried
+  with test programs, not yet with a game.
 
 ## [0.5.0] - 2026-11-28
 
@@ -268,7 +286,8 @@ run natively on arm64 with Metal, without Rosetta and without a virtual machine.
 - `steamplay discover` ranks the games in your library by how likely they are to work, and says
   why.
 
-[Unreleased]: https://github.com/0xLeathery/protium/compare/v0.5.0...macos-port
+[Unreleased]: https://github.com/0xLeathery/protium/compare/v0.5.1...macos-port
+[0.5.1]: https://github.com/0xLeathery/protium/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/0xLeathery/protium/compare/v0.4.2...v0.5.0
 [0.4.2]: https://github.com/0xLeathery/protium/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/0xLeathery/protium/compare/v0.4.0...v0.4.1

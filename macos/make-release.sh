@@ -282,7 +282,7 @@ Protium $VERSION is built from:
   DXMT                                    https://github.com/athei/dxmt  $(commit "$BUILD_ROOT/dxmt-src")  + macos/patches/dxmt
   vkd3d-proton                            https://github.com/athei/vkd3d-proton  $(commit "$BUILD_ROOT/vkd3d-proton-src")  + macos/patches/vkd3d-proton
   FEX                                     https://github.com/athei/FEX  $(commit "$BUILD_ROOT/fex-src")  + macos/patches/fex
-  Mesa (KosmicKrisp)                      https://github.com/athei/mesa  $(commit "$BUILD_ROOT/mesa-src")
+  Mesa (KosmicKrisp)                      https://github.com/athei/mesa  $(commit "$BUILD_ROOT/mesa-src")  + macos/patches/mesa
   mtld3d                                  https://github.com/athei/mtld3d  v0.15.3 (release)
   GStreamer, ORC, FFmpeg                  Proton's submodules at the commits of this Protium
   CPython                                 https://github.com/astral-sh/python-build-standalone  $PYTHON_BUILD
