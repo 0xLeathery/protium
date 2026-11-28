@@ -1,0 +1,504 @@
+LOCAL TO THIS PORT, NOT FOR MESA. Written with an AI assistant (Mesa's AGENTS.md asks for the
+trailer below); never sent upstream.
+
+From: Protium
+Subject: [PATCH] wsi/metal, kk: Say how presents reached the screen (KK_PRESENT_STATS)
+
+A FIFO game can sit at 20 fps with 38 ms of every frame in
+vkAcquireNextImageKHR (DOOM 2016), and nothing says whether the GPU is slow
+or the compositor holds the drawables. With KK_PRESENT_STATS=<seconds> the
+driver writes one line to stderr every so many seconds of presents:
+
+  MESA: info: KosmicKrisp: presents of the last 30 s (<program>, <HH:MM:SS>):
+  presents, how many were paced and at which rate, shown, not shown, let go
+  by Metal and without a drawable; the time from the present call to
+  presentedTime and how much of it came after the GPU had finished the
+  command buffer that presents the drawable; how many refreshes apart the
+  shown presents were; the wait in acquire and nextDrawable's own time; the
+  GPU's busy time (the union of the command buffers' GPUStartTime to
+  GPUEndTime); the most presents the compositor held at once; swapchains
+  made and destroyed; whether the window was hidden.
+
+A swapchain that is destroyed writes the line of its last seconds, when there
+is at least one second of them. Unset, the statistics cost one atomic read a
+present and a command buffer.
+
+Generated-by: LLM
+---
+diff --git a/src/kosmickrisp/vulkan/kk_queue.c b/src/kosmickrisp/vulkan/kk_queue.c
+index f03dfe89a4d..b5d3906cfa4 100644
+--- a/src/kosmickrisp/vulkan/kk_queue.c
++++ b/src/kosmickrisp/vulkan/kk_queue.c
+@@ -20,6 +20,7 @@
+ #include "kosmickrisp/bridge/vk_to_mtl_map.h"
+ 
+ #include "vk_cmd_queue.h"
++#include "wsi_common_metal_layer.h"
+ 
+ struct kk_commit_data {
+    struct kk_queue *queue;
+@@ -74,6 +75,31 @@ commit_callback(struct mtl_feedback_data *data)
+    struct kk_device *dev = (struct kk_device *)data->user_data;
+    check_device_lost(dev, data);
+ 
++   if (wsi_metal_stats_enabled())
++      wsi_metal_stats_note_gpu(NULL, data->gpu_start, data->gpu_end);
++
++   mtx_lock(&dev->queue.mutex);
++   kk_queue_work_done_locked(&dev->queue);
++   mtx_unlock(&dev->queue.mutex);
++}
++
++/* A command buffer that presents a drawable, while the present statistics
++ * are on: they want to know when the GPU was done with it. */
++struct kk_present_commit {
++   struct kk_device *dev;
++   void *drawable;
++};
++
++static void
++present_commit_callback(struct mtl_feedback_data *data)
++{
++   struct kk_present_commit *commit = data->user_data;
++   struct kk_device *dev = commit->dev;
++
++   check_device_lost(dev, data);
++   wsi_metal_stats_note_gpu(commit->drawable, data->gpu_start, data->gpu_end);
++   vk_free(&dev->vk.alloc, commit);
++
+    mtx_lock(&dev->queue.mutex);
+    kk_queue_work_done_locked(&dev->queue);
+    mtx_unlock(&dev->queue.mutex);
+@@ -88,6 +114,9 @@ rerecord_commit_callback(struct mtl_feedback_data *data)
+ 
+    check_device_lost(dev, data);
+ 
++   if (wsi_metal_stats_enabled())
++      wsi_metal_stats_note_gpu(NULL, data->gpu_start, data->gpu_end);
++
+    /* Completion callbacks are called from multiple threads, so we need to
+     * ensure the access to queue resources is safe. */
+    mtx_lock(&queue->mutex);
+@@ -518,7 +547,18 @@ kk_queue_submit_locked(struct kk_queue *queue, struct vk_queue_submit *submit)
+          mtx_lock(&queue->mutex);
+          queue->work_in_flight++;
+          mtx_unlock(&queue->mutex);
+-         kk_queue_commit(queue, cmd_buffer, commit_callback, dev);
++
++         struct kk_present_commit *present = NULL;
++         if (cmd_buffer->drawable && wsi_metal_stats_enabled())
++            present = vk_alloc(&dev->vk.alloc, sizeof(*present), 8,
++                               VK_SYSTEM_ALLOCATION_SCOPE_DEVICE);
++         if (present) {
++            present->dev = dev;
++            present->drawable = cmd_buffer->drawable;
++            kk_queue_commit(queue, cmd_buffer, present_commit_callback, present);
++         } else {
++            kk_queue_commit(queue, cmd_buffer, commit_callback, dev);
++         }
+       }
+ 
+       cmd_buffer->submitted = true;
+diff --git a/src/vulkan/wsi/wsi_common_metal.c b/src/vulkan/wsi/wsi_common_metal.c
+index 8d13e0fbadd..b7c281493b1 100644
+--- a/src/vulkan/wsi/wsi_common_metal.c
++++ b/src/vulkan/wsi/wsi_common_metal.c
+@@ -9,6 +9,9 @@
+ #include "vk_util.h"
+ 
+ #include "util/cnd_monotonic.h"
++#include "util/os_misc.h"
++#include "util/simple_mtx.h"
++#include "util/u_process.h"
+ #include "util/os_time.h"
+ #include "util/timespec.h"
+ #include "util/u_vector.h"
+@@ -340,6 +343,243 @@ struct wsi_metal_image {
+    CAMetalDrawable *drawable;
+ };
+ 
++/* Present statistics, for finding where a frame's time goes between the
++ * application and the screen. KK_PRESENT_STATS=<seconds> turns them on: after
++ * that many seconds of presents, one line goes to stderr. They are one set
++ * for the process, as a game has one window. Times from Metal (presentedTime,
++ * the GPU's start and end of a command buffer) and from the layer code are
++ * CACurrentMediaTime() seconds. */
++#define WSI_METAL_STATS_GAPS 12
++#define WSI_METAL_STATS_RING 16
++
++static struct {
++   simple_mtx_t mutex;
++   int interval;        /* seconds; 0: off; -1: not read yet */
++   /* What runs across lines: the last shown present, the end of the GPU's
++    * last command buffer, the screen's rate, and the GPU's end of the last
++    * command buffers that present a drawable. */
++   double last_shown, gpu_last_end;
++   uint32_t refresh_rate;
++   struct {
++      void *drawable;
++      double gpu_end;
++   } done[WSI_METAL_STATS_RING];
++   uint32_t done_next;
++
++   /* What a line counts; all of it starts again with the next line. */
++   double start;        /* when this line's time began; 0 before a present */
++   uint32_t presents, paced, hidden;
++   uint32_t shown, unshown, dropped, no_drawable;
++   /* From the present call to presentedTime, and how much of that came
++    * after the GPU had finished the command buffer that presents it. */
++   double to_screen, to_screen_max, after_gpu;
++   uint32_t to_screen_count, after_gpu_count;
++   /* Shown presents by how many refreshes after the one before they were
++    * shown; the last entry is for more. */
++   uint32_t gaps[WSI_METAL_STATS_GAPS + 1];
++   uint32_t acquires, acquire_timeouts, acquire_no_drawable;
++   double acquire_wait, acquire_wait_max;
++   uint32_t fetches, fetch_nil;
++   double fetch_time, fetch_max;
++   /* The union of the command buffers' GPU intervals. A feedback handler
++    * that comes after a later buffer's is counted as late, its time lost. */
++   double gpu_busy;
++   uint32_t gpu_buffers, gpu_late;
++   uint32_t held_most, swapchains_made, swapchains_gone;
++} wsi_metal_stats = {
++   .mutex = SIMPLE_MTX_INITIALIZER,
++   .interval = -1,
++};
++
++bool
++wsi_metal_stats_enabled(void)
++{
++   int interval = p_atomic_read(&wsi_metal_stats.interval);
++   if (interval < 0) {
++      const char *option = os_get_option("KK_PRESENT_STATS");
++      interval = option ? MAX2(atoi(option), 0) : 0;
++      p_atomic_set(&wsi_metal_stats.interval, interval);
++   }
++   return interval > 0;
++}
++
++void
++wsi_metal_stats_note_fetch(double seconds, bool got_drawable)
++{
++   simple_mtx_lock(&wsi_metal_stats.mutex);
++   wsi_metal_stats.fetches++;
++   if (!got_drawable)
++      wsi_metal_stats.fetch_nil++;
++   wsi_metal_stats.fetch_time += seconds;
++   wsi_metal_stats.fetch_max = MAX2(wsi_metal_stats.fetch_max, seconds);
++   simple_mtx_unlock(&wsi_metal_stats.mutex);
++}
++
++void
++wsi_metal_stats_note_gpu(void *drawable, double gpu_start, double gpu_end)
++{
++   if (gpu_end <= 0.0 || gpu_end < gpu_start)
++      return;
++
++   simple_mtx_lock(&wsi_metal_stats.mutex);
++   wsi_metal_stats.gpu_buffers++;
++   if (gpu_end <= wsi_metal_stats.gpu_last_end) {
++      wsi_metal_stats.gpu_late++;
++   } else {
++      wsi_metal_stats.gpu_busy +=
++         gpu_end - MAX2(gpu_start, wsi_metal_stats.gpu_last_end);
++      wsi_metal_stats.gpu_last_end = gpu_end;
++   }
++   if (drawable) {
++      const uint32_t slot = wsi_metal_stats.done_next++ % WSI_METAL_STATS_RING;
++      wsi_metal_stats.done[slot].drawable = drawable;
++      wsi_metal_stats.done[slot].gpu_end = gpu_end;
++   }
++   simple_mtx_unlock(&wsi_metal_stats.mutex);
++}
++
++void
++wsi_metal_stats_note_presented(void *drawable, double queued_time,
++                               double presented_time)
++{
++   if (presented_time <= 0.0)
++      return;
++
++   simple_mtx_lock(&wsi_metal_stats.mutex);
++   const double to_screen = presented_time - queued_time;
++   wsi_metal_stats.to_screen += to_screen;
++   wsi_metal_stats.to_screen_max = MAX2(wsi_metal_stats.to_screen_max, to_screen);
++   wsi_metal_stats.to_screen_count++;
++   for (uint32_t i = 0; i < WSI_METAL_STATS_RING; i++) {
++      if (wsi_metal_stats.done[i].drawable != drawable)
++         continue;
++      if (presented_time >= wsi_metal_stats.done[i].gpu_end) {
++         wsi_metal_stats.after_gpu += presented_time - wsi_metal_stats.done[i].gpu_end;
++         wsi_metal_stats.after_gpu_count++;
++      }
++      wsi_metal_stats.done[i].drawable = NULL;
++      break;
++   }
++   if (wsi_metal_stats.last_shown > 0.0 && wsi_metal_stats.refresh_rate) {
++      const double refreshes = (presented_time - wsi_metal_stats.last_shown) *
++                               wsi_metal_stats.refresh_rate;
++      const uint32_t gap = refreshes < 0.5 ? 0 :
++         MIN2((uint32_t)(refreshes + 0.5), WSI_METAL_STATS_GAPS);
++      wsi_metal_stats.gaps[gap]++;
++   }
++   wsi_metal_stats.last_shown = presented_time;
++   simple_mtx_unlock(&wsi_metal_stats.mutex);
++}
++
++static void
++wsi_metal_stats_note_acquire(uint64_t wait_ns, VkResult result, bool got_drawable)
++{
++   const double wait = wait_ns / 1e9;
++
++   simple_mtx_lock(&wsi_metal_stats.mutex);
++   wsi_metal_stats.acquires++;
++   if (result != VK_SUCCESS)
++      wsi_metal_stats.acquire_timeouts++;
++   else if (!got_drawable)
++      wsi_metal_stats.acquire_no_drawable++;
++   wsi_metal_stats.acquire_wait += wait;
++   wsi_metal_stats.acquire_wait_max = MAX2(wsi_metal_stats.acquire_wait_max, wait);
++   simple_mtx_unlock(&wsi_metal_stats.mutex);
++}
++
++/* A present ended: shown (presented_time above 0), let go unshown (0) or
++ * released by Metal without a word (below 0); or it had no drawable. */
++static void
++wsi_metal_stats_note_end(double presented_time, bool had_drawable)
++{
++   simple_mtx_lock(&wsi_metal_stats.mutex);
++   if (!had_drawable)
++      wsi_metal_stats.no_drawable++;
++   else if (presented_time > 0.0)
++      wsi_metal_stats.shown++;
++   else if (presented_time == 0.0)
++      wsi_metal_stats.unshown++;
++   else
++      wsi_metal_stats.dropped++;
++   simple_mtx_unlock(&wsi_metal_stats.mutex);
++}
++
++static void
++wsi_metal_stats_note_swapchain(bool made)
++{
++   simple_mtx_lock(&wsi_metal_stats.mutex);
++   if (made)
++      wsi_metal_stats.swapchains_made++;
++   else
++      wsi_metal_stats.swapchains_gone++;
++   simple_mtx_unlock(&wsi_metal_stats.mutex);
++}
++
++/* Writes the line of the time since the last one and starts the next, when
++ * that time has reached `least` seconds. Called with the mutex held. */
++static void
++wsi_metal_stats_report_locked(double now, double least)
++{
++   const double seconds = now - wsi_metal_stats.start;
++   if (wsi_metal_stats.start == 0.0 || seconds < least ||
++       !(wsi_metal_stats.presents || wsi_metal_stats.acquires))
++      return;
++
++   char line[1536], at[16] = "";
++   int pos = 0;
++   const time_t wall = time(NULL);
++   struct tm tm;
++   if (localtime_r(&wall, &tm))
++      strftime(at, sizeof(at), "%H:%M:%S", &tm);
++
++#define SAY(...) do { \
++      if (pos < (int)sizeof(line)) \
++         pos += snprintf(line + pos, sizeof(line) - pos, __VA_ARGS__); \
++   } while (0)
++#define MS(sum, count) ((count) ? (sum) * 1e3 / (count) : 0.0)
++
++   SAY("MESA: info: KosmicKrisp: presents of the last %.0f s (%s, %s): %u presents, ",
++       seconds, util_get_process_name(), at, wsi_metal_stats.presents);
++   if (wsi_metal_stats.paced)
++      SAY("%u of them paced at %u Hz, ", wsi_metal_stats.paced, wsi_metal_stats.refresh_rate);
++   else
++      SAY("not paced, ");
++   SAY("%u shown, %u not shown, %u let go by Metal, %u without a drawable; ",
++       wsi_metal_stats.shown, wsi_metal_stats.unshown, wsi_metal_stats.dropped,
++       wsi_metal_stats.no_drawable);
++   SAY("from present to the screen %.1f ms (most %.1f ms), %.1f ms of it after the GPU was done (%u known); ",
++       MS(wsi_metal_stats.to_screen, wsi_metal_stats.to_screen_count),
++       wsi_metal_stats.to_screen_max * 1e3,
++       MS(wsi_metal_stats.after_gpu, wsi_metal_stats.after_gpu_count),
++       wsi_metal_stats.after_gpu_count);
++   SAY("shown refreshes apart:");
++   for (uint32_t i = 0; i <= WSI_METAL_STATS_GAPS; i++) {
++      if (wsi_metal_stats.gaps[i])
++         SAY(" %u%s x %u", i, i == WSI_METAL_STATS_GAPS ? " or more" : "", wsi_metal_stats.gaps[i]);
++   }
++   SAY("; acquire waited %.1f ms (most %.1f ms) in %u, %u timed out, %u got no drawable; ",
++       MS(wsi_metal_stats.acquire_wait, wsi_metal_stats.acquires),
++       wsi_metal_stats.acquire_wait_max * 1e3, wsi_metal_stats.acquires,
++       wsi_metal_stats.acquire_timeouts, wsi_metal_stats.acquire_no_drawable);
++   SAY("nextDrawable took %.1f ms (most %.1f ms) in %u, %u without one; ",
++       MS(wsi_metal_stats.fetch_time, wsi_metal_stats.fetches),
++       wsi_metal_stats.fetch_max * 1e3, wsi_metal_stats.fetches, wsi_metal_stats.fetch_nil);
++   SAY("the GPU was busy %.2f s of %.2f s (%.0f%%) in %u command buffers, %u out of order; ",
++       wsi_metal_stats.gpu_busy, seconds, wsi_metal_stats.gpu_busy * 100.0 / seconds,
++       wsi_metal_stats.gpu_buffers, wsi_metal_stats.gpu_late);
++   SAY("presents the compositor held at once: most %u; swapchains made %u, destroyed %u; window hidden %u",
++       wsi_metal_stats.held_most, wsi_metal_stats.swapchains_made,
++       wsi_metal_stats.swapchains_gone, wsi_metal_stats.hidden);
++#undef SAY
++#undef MS
++   fprintf(stderr, "%s\n", line);
++
++   /* The next line: only what a line counts starts again. */
++   const size_t counted = offsetof(__typeof__(wsi_metal_stats), start);
++   memset((char *)&wsi_metal_stats + counted, 0, sizeof(wsi_metal_stats) - counted);
++   wsi_metal_stats.start = now;
++}
++
+ /* The presents of a layer whose presented handler has not run yet. While a
+  * window is covered by another application's window, the compositor can
+  * hold its presents without running their handlers until it is uncovered,
+@@ -940,6 +1180,10 @@ wsi_metal_swapchain_acquire_next_image(struct wsi_swapchain *wsi_chain,
+    }
+    mtx_unlock(&present_info->mutex);
+ 
++   if (wsi_metal_stats_enabled())
++      wsi_metal_stats_note_acquire(os_time_get_nano() - start, result,
++                                   drawable != NULL);
++
+    if (result != VK_SUCCESS)
+       return result;
+ 
+@@ -1073,6 +1317,9 @@ wsi_metal_present_info_complete(struct wsi_metal_present_info *present_info,
+                                 uint64_t present_id, bool paced,
+                                 double presented_time, bool held)
+ {
++   if (wsi_metal_stats_enabled())
++      wsi_metal_stats_note_end(presented_time, held);
++
+    if (presented_time > 0.0 && !p_atomic_read(&present_info->shown_once))
+       p_atomic_set(&present_info->shown_once, 1);
+ 
+@@ -1164,6 +1411,24 @@ wsi_metal_swapchain_queue_present(struct wsi_swapchain *wsi_chain,
+    if (!wsi_chain->present_wait_enabled)
+       present_id = 0;
+ 
++   if (wsi_metal_stats_enabled()) {
++      const double now = wsi_metal_layer_media_time();
++      simple_mtx_lock(&wsi_metal_stats.mutex);
++      if (wsi_metal_stats.start == 0.0)
++         wsi_metal_stats.start = now;
++      wsi_metal_stats.presents++;
++      if (paced)
++         wsi_metal_stats.paced++;
++      wsi_metal_stats.refresh_rate =
++         p_atomic_read(&chain->present_info->refresh_rate);
++      wsi_metal_stats.hidden = p_atomic_read(&chain->present_info->window_hidden);
++      /* Read without the hold's mutex: a count to look at, no more. */
++      wsi_metal_stats.held_most = MAX2(wsi_metal_stats.held_most,
++                                       chain->present_info->hold->outstanding);
++      wsi_metal_stats_report_locked(now, wsi_metal_stats.interval);
++      simple_mtx_unlock(&wsi_metal_stats.mutex);
++   }
++
+    if (image->drawable) {
+       /* Every present gets a handler: it says whether the present was shown,
+        * and a window whose handlers stop coming shows nothing. */
+@@ -1348,6 +1613,14 @@ wsi_metal_swapchain_destroy(struct wsi_swapchain *wsi_chain,
+    struct wsi_metal_swapchain *chain =
+       (struct wsi_metal_swapchain *)wsi_chain;
+ 
++   if (wsi_metal_stats_enabled()) {
++      wsi_metal_stats_note_swapchain(false);
++      /* What a swapchain's last seconds were is not lost with it. */
++      simple_mtx_lock(&wsi_metal_stats.mutex);
++      wsi_metal_stats_report_locked(wsi_metal_layer_media_time(), 1.0);
++      simple_mtx_unlock(&wsi_metal_stats.mutex);
++   }
++
+    for (uint32_t i = 0; i < chain->base.image_count; i++) {
+       struct wsi_metal_image *image = &chain->images[i];
+       if (image->drawable) {
+@@ -1520,6 +1793,9 @@ wsi_metal_surface_create_swapchain(VkIcdSurfaceBase *icd_surface,
+    if (is_sw_driver)
+       chain->blit_context = wsi_create_metal_layer_blit_context();
+ 
++   if (wsi_metal_stats_enabled())
++      wsi_metal_stats_note_swapchain(true);
++
+    *swapchain_out = &chain->base;
+ 
+    return VK_SUCCESS;
+diff --git a/src/vulkan/wsi/wsi_common_metal_layer.h b/src/vulkan/wsi/wsi_common_metal_layer.h
+index 1365eea1cdf..1db429d0fbc 100644
+--- a/src/vulkan/wsi/wsi_common_metal_layer.h
++++ b/src/vulkan/wsi/wsi_common_metal_layer.h
+@@ -106,4 +106,28 @@ wsi_metal_layer_blit_and_present(struct wsi_metal_layer_blit_context *context,
+ void
+ wsi_metal_layer_present(CAMetalDrawable **drawable_ptr, double min_duration);
+ 
++/* Present statistics (KK_PRESENT_STATS=<seconds>): where a frame's time goes
++ * between the application and the screen. The layer code and the driver's
++ * queue report to them; times are CACurrentMediaTime() seconds. */
++bool
++wsi_metal_stats_enabled(void);
++
++double
++wsi_metal_layer_media_time(void);
++
++/* nextDrawable returned after `seconds`, with a drawable or without. */
++void
++wsi_metal_stats_note_fetch(double seconds, bool got_drawable);
++
++/* The present of `drawable`, made at `queued_time`, was shown at
++ * `presented_time` (0 or less: it was not shown). */
++void
++wsi_metal_stats_note_presented(void *drawable, double queued_time,
++                               double presented_time);
++
++/* The GPU ran a command buffer from `gpu_start` to `gpu_end`; `drawable` is
++ * the one it presents, or NULL. */
++void
++wsi_metal_stats_note_gpu(void *drawable, double gpu_start, double gpu_end);
++
+ #endif // WSI_COMMON_METAL_LAYER_H
+diff --git a/src/vulkan/wsi/wsi_common_metal_layer.m b/src/vulkan/wsi/wsi_common_metal_layer.m
+index fe7cafb4999..d6ad41c5db6 100644
+--- a/src/vulkan/wsi/wsi_common_metal_layer.m
++++ b/src/vulkan/wsi/wsi_common_metal_layer.m
+@@ -387,11 +387,23 @@
+ {
+    CAMetalLayer *layer = [(CAMetalLayer *)metal_layer retain];
+    dispatch_async((dispatch_queue_t)queue, ^{
+-      done(data, wsi_metal_layer_acquire_drawable(layer));
++      const bool stats = wsi_metal_stats_enabled();
++      const double start = stats ? CACurrentMediaTime() : 0.0;
++      CAMetalDrawable *drawable = wsi_metal_layer_acquire_drawable(layer);
++      if (stats)
++         wsi_metal_stats_note_fetch(CACurrentMediaTime() - start,
++                                    drawable != NULL);
++      done(data, drawable);
+       [layer release];
+    });
+ }
+ 
++double
++wsi_metal_layer_media_time(void)
++{
++   return CACurrentMediaTime();
++}
++
+ /* What a presented handler block captures. Metal may release a handler
+  * block without calling it, and then nothing else would tell the swapchain
+  * that the present is over, so the object calls the handler when it is
+@@ -440,7 +452,11 @@ - (void)dealloc
+       token->data = data;
+       token->present_id = present_id;
+       token->paced = paced;
++      const double queued = wsi_metal_stats_enabled() ? CACurrentMediaTime() : 0.0;
+       [drawable addPresentedHandler: ^(id<MTLDrawable> mtlDrwbl) {
++         if (queued > 0.0)
++            wsi_metal_stats_note_presented(mtlDrwbl, queued,
++                                           mtlDrwbl.presentedTime);
+          [token callWithPresentedTime:mtlDrwbl.presentedTime];
+       }];
+       /* The block copy addPresentedHandler: made holds the token now. */
