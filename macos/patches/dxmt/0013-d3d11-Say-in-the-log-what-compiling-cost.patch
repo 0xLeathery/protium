@@ -1,0 +1,319 @@
+d3d11: Say in the log what compiling cost.
+
+A game that hitches the first time it draws something new is waiting for a shader or for a
+pipeline, and nothing said so: DXMT counted none of it. Four things are now counted for the
+process, each with its time: the shaders compiled from Direct3D's bytecode, the shaders read
+from DXMT's shader cache instead, the pipelines Metal made of them (its own call, in the four
+places a pipeline is made), and the draws and dispatches whose pipeline was not there yet when
+the encoding thread came to them, which is where a frame waits. A swap chain says them with
+its other lines, every half minute and when it goes: one line for the process, and only when
+there was something to count.
+
+  DXGI: compiles of the last 15 s (frame_cause_test.exe, 14:44:38): 4 shaders compiled (100
+  ms), 0 from the shader cache (0 ms), 2 pipelines (134 ms), 2 draws waited for a pipeline
+  (186.9 ms); so far 4 shaders compiled, 0 from the shader cache, 2 pipelines, draws waited
+  186.9 ms
+
+That is macos/tests/frame_cause_test.c, which has two shaders of its own and makes two more
+and a pipeline that no run had before. Run again with the same salt, the earlier run's four
+shaders come from the shader cache (1 ms for the four).
+
+The times of the shaders and the pipelines are summed over the threads that compile, so
+they can be more than the clock's; the draws' wait is the encoding thread's own. A pipeline
+that is there costs its draw one test more, a compile two clock reads. The seconds are those
+since the line before, or since d3d11.dll was loaded.
+
+LOCAL TO THIS PORT, NOT FOR DXMT. Applied by macos/build-dxmt.sh to
+github.com/athei/dxmt at 01e59e9bde030f105937f249afaac92ada01b4d7, after 0001 to 0012.
+Written with an AI assistant (Claude). DXMT does not accept contributions made or
+co-authored by AI (its CONTRIBUTING.md), so this patch must not be sent to it as a pull
+request.
+---
+diff --git a/src/d3d11/d3d11_context_impl.cpp b/src/d3d11/d3d11_context_impl.cpp
+--- a/src/d3d11/d3d11_context_impl.cpp
++++ b/src/d3d11/d3d11_context_impl.cpp
+@@ -5198,7 +5198,7 @@ public:
+       auto render_encoder = enc.currentRenderEncoder();
+       render_encoder->use_tessellation = 1;
+       MTL_COMPILED_TESSELLATION_MESH_PIPELINE GraphicsPipeline{};
+-      pso->GetPipeline(&GraphicsPipeline); // may block
++      GetPipelineForDraw(pso, &GraphicsPipeline); // may block
+       enc.tess_num_output_control_point_element = GraphicsPipeline.NumControlPointOutputElement;
+       enc.tess_threads_per_patch = GraphicsPipeline.ThreadsPerPatch;
+       // no pipeline when it failed to compile: winemetal then drops the draws that follow
+@@ -5247,7 +5247,7 @@ public:
+       auto render_encoder = enc.currentRenderEncoder();
+       render_encoder->use_geometry = 1;
+       MTL_COMPILED_GRAPHICS_PIPELINE GraphicsPipeline{};
+-      pso->GetPipeline(&GraphicsPipeline); // may block
++      GetPipelineForDraw(pso, &GraphicsPipeline); // may block
+       // no pipeline when it failed to compile: winemetal then drops the draws that follow
+       auto &cmd = enc.encodeRenderCommand<wmtcmd_render_setpso>();
+       cmd.type = WMTRenderCommandSetPSO;
+@@ -5312,7 +5312,7 @@ public:
+     device->CreateGraphicsPipeline(&pipelineDesc, &pipeline);
+     EmitST([pso = std::move(pipeline)](ArgumentEncodingContext& enc) {
+       MTL_COMPILED_GRAPHICS_PIPELINE GraphicsPipeline{};
+-      pso->GetPipeline(&GraphicsPipeline); // may block
++      GetPipelineForDraw(pso, &GraphicsPipeline); // may block
+       // no pipeline when it failed to compile: winemetal then drops the draws that follow
+       auto &cmd = enc.encodeRenderCommand<wmtcmd_render_setpso>();
+       cmd.type = WMTRenderCommandSetPSO;
+@@ -5483,7 +5483,7 @@ public:
+                               CS->reflection().ThreadgroupSize[2]}](
+                ArgumentEncodingContext &enc) {
+       MTL_COMPILED_COMPUTE_PIPELINE ComputePipeline;
+-      pso->GetPipeline(&ComputePipeline); // may block
++      GetPipelineForDraw(pso, &ComputePipeline); // may block
+       // no pipeline when it failed to compile: winemetal then drops the dispatches that follow
+       auto &cmd = enc.encodeComputeCommand<wmtcmd_compute_setpso>();
+       cmd.type = WMTComputeCommandSetPSO;
+diff --git a/src/d3d11/d3d11_pipeline.cpp b/src/d3d11/d3d11_pipeline.cpp
+--- a/src/d3d11/d3d11_pipeline.cpp
++++ b/src/d3d11/d3d11_pipeline.cpp
+@@ -118,7 +118,10 @@ public:
+     info.immutable_vertex_buffers = (1 << 16) | (1 << 29) | (1 << 30);
+     info.immutable_fragment_buffers = (1 << 29) | (1 << 30);
+ 
+-    state_ = device_->GetMTLDevice().newRenderPipelineState(info, err);
++    {
++      CompileTimer timer(compile_counters.pipelines, compile_counters.pipeline_ns);
++      state_ = device_->GetMTLDevice().newRenderPipelineState(info, err);
++    }
+ 
+     if (state_ == nullptr) {
+       ERR("Failed to create PSO: ", err.description().getUTF8String());
+@@ -195,7 +198,10 @@ public:
+     info.tgsize_is_multiple_of_sgwidth = tgsize_is_multiple_of_sgwidth;
+     info.immutable_buffers = (1 << 29) | (1 << 30);
+ 
+-    state_ = device_->GetMTLDevice().newComputePipelineState(info, err);
++    {
++      CompileTimer timer(compile_counters.pipelines, compile_counters.pipeline_ns);
++      state_ = device_->GetMTLDevice().newComputePipelineState(info, err);
++    }
+ 
+     if (!state_) {
+       ERR("Failed to create compute PSO: ", err.description().getUTF8String());
+diff --git a/src/d3d11/d3d11_pipeline.hpp b/src/d3d11/d3d11_pipeline.hpp
+--- a/src/d3d11/d3d11_pipeline.hpp
++++ b/src/d3d11/d3d11_pipeline.hpp
+@@ -175,6 +175,19 @@ public:
+   virtual void GetPipeline(MTL_COMPILED_TESSELLATION_MESH_PIPELINE *pTessellationPipeline) = 0;
+ };
+ 
++// The pipeline for a draw or a dispatch, on the encoding thread, which waits here when it is not
++// made yet: such a wait is counted with its time (a pipeline that is there costs one test more)
++template <typename Pipeline, typename Compiled>
++void
++GetPipelineForDraw(Pipeline *pso, Compiled *compiled) {
++  if (pso->GetIsDone()) {
++    pso->GetPipeline(compiled);
++    return;
++  }
++  CompileTimer timer(compile_counters.draw_waits, compile_counters.draw_wait_ns);
++  pso->GetPipeline(compiled);
++}
++
+ std::unique_ptr<MTLCompiledGraphicsPipeline>
+ CreateGraphicsPipeline(MTLD3D11Device *pDevice, MTL_GRAPHICS_PIPELINE_DESC *pDesc);
+ 
+diff --git a/src/d3d11/d3d11_pipeline_cache.cpp b/src/d3d11/d3d11_pipeline_cache.cpp
+--- a/src/d3d11/d3d11_pipeline_cache.cpp
++++ b/src/d3d11/d3d11_pipeline_cache.cpp
+@@ -14,6 +14,8 @@
+ 
+ namespace dxmt {
+ 
++CompileCounters compile_counters;
++
+ class MTLD3D11InputLayout final
+     : public MTLD3D11DeviceChild<IMTLD3D11InputLayout> {
+ public:
+diff --git a/src/d3d11/d3d11_pipeline_gs.cpp b/src/d3d11/d3d11_pipeline_gs.cpp
+--- a/src/d3d11/d3d11_pipeline_gs.cpp
++++ b/src/d3d11/d3d11_pipeline_gs.cpp
+@@ -140,7 +140,10 @@ public:
+ 
+     info.raster_sample_count = SampleCount;
+ 
+-    state_mesh_ = device_->GetMTLDevice().newRenderPipelineState(info, err);
++    {
++      CompileTimer timer(compile_counters.pipelines, compile_counters.pipeline_ns);
++      state_mesh_ = device_->GetMTLDevice().newRenderPipelineState(info, err);
++    }
+ 
+     if (state_mesh_ == nullptr) {
+       ERR("Failed to create mesh PSO: ", err.description().getUTF8String());
+diff --git a/src/d3d11/d3d11_pipeline_ts.cpp b/src/d3d11/d3d11_pipeline_ts.cpp
+--- a/src/d3d11/d3d11_pipeline_ts.cpp
++++ b/src/d3d11/d3d11_pipeline_ts.cpp
+@@ -182,6 +182,7 @@ public:
+ 
+     {
+       std::lock_guard<dxmt::mutex> lock(ts_global_mutex);
++      CompileTimer timer(compile_counters.pipelines, compile_counters.pipeline_ns);
+       state_rasterization_ =
+           device_->GetMTLDevice().newRenderPipelineState(info, err);
+     }
+diff --git a/src/d3d11/d3d11_shader.cpp b/src/d3d11/d3d11_shader.cpp
+--- a/src/d3d11/d3d11_shader.cpp
++++ b/src/d3d11/d3d11_shader.cpp
+@@ -48,6 +48,7 @@ public:
+   ThreadpoolWork *
+   RunThreadpoolWork() {
+     auto pool = WMT::MakeAutoreleasePool();
++    CompileTimer timer(compile_counters.cached_shaders, compile_counters.cached_shader_ns);
+     WMT::Reference<WMT::Error> err;
+     WMT::Reference<WMT::DispatchData> lib_data = shader_->find_cached_variant(variant_digest_);
+ 
+@@ -71,6 +72,7 @@ public:
+     }
+ 
+     if (!lib_data) {
++      timer.into(compile_counters.shaders, compile_counters.shader_ns);
+       SM50_COMPILED_BITCODE bitcode;
+       sm50_bitcode_t compile_result = proc(func_name.c_str(), &sm50_common);
+ 
+diff --git a/src/d3d11/d3d11_shader.hpp b/src/d3d11/d3d11_shader.hpp
+--- a/src/d3d11/d3d11_shader.hpp
++++ b/src/d3d11/d3d11_shader.hpp
+@@ -7,6 +7,8 @@
+ #include "d3d11_input_layout.hpp"
+ #include "sha1/sha1_util.hpp"
+ #include "log/log.hpp"
++#include <atomic>
++#include <chrono>
+ #include <variant>
+ 
+ struct MTL_COMPILED_SHADER {
+@@ -191,6 +193,41 @@ using ShaderVariant =
+                  ShaderVariantTessellationDomain, ShaderVariantVertexStreamOutput,
+                  ShaderVariantGeometryVertex, ShaderVariantGeometry>;
+ 
++// What compiling costs, for the frame recorder's line (d3d11_swapchain.cpp): the shaders compiled
++// from Direct3D's bytecode and those read from the shader cache, the pipelines Metal made of
++// them, and the draws that had to wait for their pipeline, each with its time. One set for the
++// process, defined in d3d11_pipeline_cache.cpp: this is d3d11.dll's alone.
++struct CompileCounters {
++  std::atomic<uint64_t> shaders{0}, shader_ns{0}, cached_shaders{0}, cached_shader_ns{0}, pipelines{0},
++      pipeline_ns{0}, draw_waits{0}, draw_wait_ns{0};
++  const std::chrono::steady_clock::time_point since = std::chrono::steady_clock::now();
++};
++extern CompileCounters compile_counters;
++
++// Counts one, and the time from where it is made to where it goes out of scope
++class CompileTimer {
++public:
++  CompileTimer(std::atomic<uint64_t> &count, std::atomic<uint64_t> &ns)
++      : count_(&count), ns_(&ns), start_(std::chrono::steady_clock::now()) {}
++  CompileTimer(const CompileTimer &) = delete;
++  CompileTimer &operator=(const CompileTimer &) = delete;
++  ~CompileTimer() {
++    count_->fetch_add(1, std::memory_order_relaxed);
++    ns_->fetch_add(
++        std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - start_).count(),
++        std::memory_order_relaxed);
++  }
++  // to count as another kind than the one it was made for
++  void into(std::atomic<uint64_t> &count, std::atomic<uint64_t> &ns) {
++    count_ = &count;
++    ns_ = &ns;
++  }
++
++private:
++  std::atomic<uint64_t> *count_, *ns_;
++  std::chrono::steady_clock::time_point start_;
++};
++
+ class ThreadpoolWork {
+ public:
+   virtual ~ThreadpoolWork() {}
+diff --git a/src/d3d11/d3d11_swapchain.cpp b/src/d3d11/d3d11_swapchain.cpp
+--- a/src/d3d11/d3d11_swapchain.cpp
++++ b/src/d3d11/d3d11_swapchain.cpp
+@@ -13,6 +13,7 @@
+ #include "log/log.hpp"
+ #include "d3d11_resource.hpp"
+ #include "d3d11_device.hpp"
++#include "d3d11_shader.hpp"
+ #include "util_cpu_fence.hpp"
+ #include "util_env.hpp"
+ #include "util_string.hpp"
+@@ -296,7 +297,9 @@ public:
+   };
+ 
+   ~MTLD3D11SwapChain() {
+-    SayFrameTimes(Head());
++    const std::string head = Head();
++    SayFrameTimes(head);
++    SayCompiles(head);
+     // First, so that Alt+Enter no longer reaches this swap chain
+     Com<IMTLDXGIFactoryPrivate> factory_private;
+     if (SUCCEEDED(factory_->QueryInterface(IID_PPV_ARGS(&factory_private))))
+@@ -1420,6 +1423,7 @@ private:
+       SayFrameTimes(head);
+       SayWindow(head);
+       SayWaits(head);
++      SayCompiles(head);
+       window_frames_ = 0;
+       window_slow_count_ = 0;
+     }
+@@ -1510,6 +1514,57 @@ private:
+     Logger::info(text);
+   }
+ 
++  // "1 shader" and "2 shaders"
++  static const char *Many(uint64_t count, const char *one, const char *many) { return count == 1 ? one : many; }
++
++  // What compiling cost since the line before: the shaders compiled and those read from the
++  // shader cache, the pipelines Metal made, and the draws that waited for theirs. The counts are
++  // the process's (d3d11_shader.hpp), so this is one line for all its swap chains, written by
++  // the one whose half minute is up or that goes, and only when there was something to count.
++  static void SayCompiles(const std::string &head) {
++    struct Said {
++      dxmt::mutex mutex;
++      frame_clock::time_point when = compile_counters.since;
++      uint64_t shaders = 0, shader_ns = 0, cached = 0, cached_ns = 0, pipelines = 0, pipeline_ns = 0, waits = 0,
++               wait_ns = 0;
++    };
++    static Said said;
++    std::lock_guard<dxmt::mutex> lock(said.mutex);
++    auto now = frame_clock::now();
++    auto read = [](const std::atomic<uint64_t> &counter) { return counter.load(std::memory_order_relaxed); };
++    // a time before its count: a count that is seen has its time in the sum or in the next line's
++    uint64_t shader_ns = read(compile_counters.shader_ns), cached_ns = read(compile_counters.cached_shader_ns),
++             pipeline_ns = read(compile_counters.pipeline_ns), wait_ns = read(compile_counters.draw_wait_ns);
++    uint64_t shaders = read(compile_counters.shaders), cached = read(compile_counters.cached_shaders),
++             pipelines = read(compile_counters.pipelines), waits = read(compile_counters.draw_waits);
++    double seconds = std::chrono::duration<double>(now - said.when).count();
++    said.when = now;
++    if (shaders == said.shaders && cached == said.cached && pipelines == said.pipelines && waits == said.waits)
++      return;
++    char text[640];
++    snprintf(text, sizeof(text),
++             "DXGI: compiles of the last %.0f s%s: %llu %s compiled (%.0f ms), %llu from the shader cache (%.0f ms), "
++             "%llu %s (%.0f ms), %llu %s waited for a pipeline (%.1f ms); so far %llu %s compiled, %llu from the "
++             "shader cache, %llu %s, draws waited %.1f ms",
++             seconds, head.c_str(), (unsigned long long)(shaders - said.shaders),
++             Many(shaders - said.shaders, "shader", "shaders"), (shader_ns - said.shader_ns) / 1e6,
++             (unsigned long long)(cached - said.cached), (cached_ns - said.cached_ns) / 1e6,
++             (unsigned long long)(pipelines - said.pipelines), Many(pipelines - said.pipelines, "pipeline", "pipelines"),
++             (pipeline_ns - said.pipeline_ns) / 1e6, (unsigned long long)(waits - said.waits),
++             Many(waits - said.waits, "draw", "draws"), (wait_ns - said.wait_ns) / 1e6, (unsigned long long)shaders,
++             Many(shaders, "shader", "shaders"), (unsigned long long)cached, (unsigned long long)pipelines,
++             Many(pipelines, "pipeline", "pipelines"), wait_ns / 1e6);
++    Logger::info(text);
++    said.shaders = shaders;
++    said.shader_ns = shader_ns;
++    said.cached = cached;
++    said.cached_ns = cached_ns;
++    said.pipelines = pipelines;
++    said.pipeline_ns = pipeline_ns;
++    said.waits = waits;
++    said.wait_ns = wait_ns;
++  }
++
+   void SayWindow(const std::string &head) const {
+     char text[1000]; /* with "info:  " and the newline, under Wine's 1020 bytes a line */
+     int used = snprintf(text, sizeof(text), "DXGI: the last 30 s%s: %llu frames, %llu over 50 ms", head.c_str(),
