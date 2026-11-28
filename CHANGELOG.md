@@ -10,6 +10,10 @@ written. "Known problems" is a heading of our own, next to Keep a Changelog's.
 
 ## [Unreleased]
 
+## [0.5.2] - 2026-11-28
+
+V-Sync works in Vulkan games: the known problem of 0.5.0 and 0.5.1 is fixed.
+
 ### Fixed
 
 - With V-Sync on, a Vulkan game could drop to 20 or 30 frames a second and stay there. DOOM
@@ -18,6 +22,16 @@ written. "Known problems" is a heading of our own, next to Keep a Changelog's.
   start a frame before the last one was on the screen; while it waited the graphics chip
   slowed down, and then never caught up. Such a game now gets three. V-Sync no longer has to
   be off.
+
+### Known problems
+
+- A Vulkan game that changes its resolution many times keeps some memory each time. Restart
+  the game if it has grown slow.
+- The controller support (from 0.4.2) has still not been tried with a controller. If a
+  controller worked before and does not now, add the line `PROTON_NO_SDL=1` to the game's
+  settings file, `~/Library/Application Support/SteamPlay/env.<app id>`, and tell us.
+- The lines 0.5.1 added to a Direct3D 10 or 11 game's log have been tried with test programs,
+  not yet with such a game.
 
 ## [0.5.1] - 2026-11-28
 
@@ -295,7 +309,8 @@ run natively on arm64 with Metal, without Rosetta and without a virtual machine.
 - `steamplay discover` ranks the games in your library by how likely they are to work, and says
   why.
 
-[Unreleased]: https://github.com/0xLeathery/protium/compare/v0.5.1...macos-port
+[Unreleased]: https://github.com/0xLeathery/protium/compare/v0.5.2...macos-port
+[0.5.2]: https://github.com/0xLeathery/protium/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/0xLeathery/protium/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/0xLeathery/protium/compare/v0.4.2...v0.5.0
 [0.4.2]: https://github.com/0xLeathery/protium/compare/v0.4.1...v0.4.2

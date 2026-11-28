@@ -39,7 +39,7 @@ and what its Diagnostics file holds.
 | Just Die Already | Direct3D 11 | Works | Plays from Steam | 2026-11 |
 | Left 4 Dead | Direct3D 9, 32-bit | Works | Stats and Steam Cloud work | 2026-11 |
 | Call of Duty: WWII | Direct3D 11 | Plays, with problems | Loads a mission, but stutters | 2026-11 |
-| DOOM | Vulkan | Plays, with problems | Plays into its missions on Vulkan: set the launch option +r_renderAPI 1 and turn V-Sync off | 2026-11-28 |
+| DOOM | Vulkan | Plays, with problems | Plays into its missions on Vulkan: set the launch option +r_renderAPI 1 | 2026-11-28 |
 | Red Dead Redemption 2 | Vulkan | Plays, with problems | Reaches gameplay. Its frame rate is limited by CPU time | 2026-11 |
 | GTFO | Direct3D 11 | Starts, not played further | Starts, and its network layer and PlayFab sign-in come up. Matches untested | 2026-11 |
 <!-- games end -->

@@ -69,7 +69,7 @@
    "app": 379720,
    "graphics": "Vulkan",
    "name": "DOOM",
-   "note": "Plays into its missions on Vulkan: set the launch option +r_renderAPI 1 and turn V-Sync off",
+   "note": "Plays into its missions on Vulkan: set the launch option +r_renderAPI 1",
    "tested": "2026-11-28",
    "verdict": "plays-with-problems"
   }
