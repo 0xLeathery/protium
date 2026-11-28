@@ -10,44 +10,72 @@ written. "Known problems" is a heading of our own, next to Keep a Changelog's.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-28
+
+DOOM (2016) plays, games get the Microsoft runtimes they expect, and a report about a game
+can now carry what is needed to fix it. This version also has the controller support of the
+0.4.2 test version.
+
+### Added
+
+- DOOM (2016) plays, through its menus and into its missions, with Vulkan: set the launch
+  option `+r_renderAPI 1` (the game's Properties in Steam, General). Its OpenGL mode cannot
+  work on a Mac. Wolfenstein II: The New Colossus, which has the same engine, can now start
+  with Vulkan on M1 to M4 Macs too; it has not been played here.
+- Before a game's first start, Protium installs the Microsoft Visual C++ runtimes and DirectX
+  parts the game needs from Steam's own copies, as Steam does on Windows and Linux. Without
+  them some games crashed at start: DOOM did, through its Razer Chroma plugin.
+- [PRIVACY.md](https://github.com/0xLeathery/protium/blob/macos-port/.github/PRIVACY.md) lists everything Protium sends over the network, everything
+  it keeps on your Mac, and what the Diagnostics file holds.
+
 ### Changed
 
+- Diagnostics now also covers the games you started last: whether Steam ran a game's own Mac
+  version or its Windows version through Protium, with which launch options, how each run
+  ended, and the start and end of each game's log. It also says whether your Protium is the
+  newest release. One file from the Diagnostics button is now enough for a report about a game.
 - A Vulkan game's log now says every half minute how long its frames took, as a Direct3D 10
   or 11 game's already did. The record of a run keeps the game's own frame times, not those
   of a launcher drawing beside it, as Red Dead Redemption 2's does. These lines now also say
   which program they are about and the time of day.
-- A game's folder now keeps the logs of its last five runs, not only of the one before
-  (`steamplay-run.prev.log` is still the newest of them).
 - A game's log now also says every half minute what each of its processes did: how much
   processor time it used and how long it waited for a free core, its memory, its calls to Wine's
   server and its waits, and, when the game's sound ran dry, for how long. This is what tells
   why a game stuttered.
-- Diagnostics now also covers the games you started last: whether Steam ran a game's own Mac
-  version or its Windows version through Protium, with which launch options, how each run
-  ended, and the start and end of each game's log. One file from the Diagnostics button is
-  now enough for a report about a game.
+- A game's folder now keeps the logs of its last five runs, not only of the one before
+  (`steamplay-run.prev.log` is still the newest of them).
+- The first start of each game after this update takes about a minute longer, once, while the
+  Microsoft runtimes are installed.
 
 ### Fixed
 
+- A game that stopped before it started, for example while Protium set up its first start, left
+  no log, or the log of the run before under its own name. A game's log now begins with
+  Protium's version, the Mac and the macOS version, then what Protium did before the game
+  started, and, when it stopped, why.
+- Protium keeps a record of every run of a game: how long it ran, how it ended and how fast it
+  drew. A run that Steam ended, for example because Steam was quit while the game ran, left no
+  record. Now it does.
+- A full-screen Vulkan game that changes the display mode showed only a black window: its
+  picture was made one pixel large. DOOM did this.
+- A full-screen Vulkan game that minimizes itself when you switch to another app came back
+  off to one side, and used more and more memory until it was quit. DOOM did this.
 - Vulkan games are no longer told that a screen can show HDR when macOS says it can't. On
   such a screen Red Dead Redemption 2 switched its HDR picture on, which macOS has to squeeze
   into normal range.
 - Red Dead Redemption 2's log no longer fills with one line about keyboard layouts, written
   110 times a second, which made up nearly all of it.
-- A game that stopped before it started, for example while Protium set up its first start, left
-  no log, or the log of the run before under its own name. A game's log now begins with
-  Protium's version, the Mac and the macOS version, then what Protium did before the game
-  started, and, when it stopped, why.
-- Before a game's first start, Protium now installs the Microsoft Visual C++ runtimes and
-  DirectX parts the game needs from Steam's own copies, as Steam does on Windows and Linux.
-  Without them some games crashed at start: DOOM (2016) did, through its Razer Chroma plugin.
-  The first start of each game after this update takes a minute longer.
-- DOOM (2016) and Wolfenstein II can now start with Vulkan on M1 to M4 Macs, and DOOM reaches
-  its start-up screen. Its OpenGL mode still cannot work on a Mac: set the launch option
-  `+r_renderAPI 1`.
-- Protium keeps a record of every run of a game: how long it ran, how it ended and how fast it
-  drew. A run that Steam ended, for example because Steam was quit while the game ran, left no
-  record. Now it does.
+
+### Known problems
+
+- **Turn V-Sync off in Vulkan games.** With V-Sync on, a Vulkan game can drop to 20 or 30
+  frames a second and stay there, though it runs much faster with V-Sync off: DOOM does in
+  fights (20 with V-Sync, about 90 without). Turn V-Sync off in the game's video settings.
+- A Vulkan game that changes its resolution many times keeps some memory each time. Restart
+  the game if it has grown slow.
+- The controller support (from 0.4.2) has still not been tried with a controller. If a
+  controller worked before and does not now, add the line `PROTON_NO_SDL=1` to the game's
+  settings file, `~/Library/Application Support/SteamPlay/env.<app id>`, and tell us.
 
 ## [0.4.2] - 2026-11-25
 
@@ -216,7 +244,8 @@ run natively on arm64 with Metal, without Rosetta and without a virtual machine.
 - `steamplay discover` ranks the games in your library by how likely they are to work, and says
   why.
 
-[Unreleased]: https://github.com/0xLeathery/protium/compare/v0.4.2...macos-port
+[Unreleased]: https://github.com/0xLeathery/protium/compare/v0.5.0...macos-port
+[0.5.0]: https://github.com/0xLeathery/protium/compare/v0.4.2...v0.5.0
 [0.4.2]: https://github.com/0xLeathery/protium/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/0xLeathery/protium/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/0xLeathery/protium/compare/v0.3.1...v0.4.0

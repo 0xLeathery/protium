@@ -64,6 +64,14 @@
    "note": "Plays at 5120x1440 and 60 fps, mouse look even. The first load of a level takes several minutes while shaders compile",
    "tested": "2026-11-24",
    "verdict": "works"
+  },
+  {
+   "app": 379720,
+   "graphics": "Vulkan",
+   "name": "DOOM",
+   "note": "Plays into its missions on Vulkan: set the launch option +r_renderAPI 1 and turn V-Sync off",
+   "tested": "2026-11-28",
+   "verdict": "plays-with-problems"
   }
  ]
 }
